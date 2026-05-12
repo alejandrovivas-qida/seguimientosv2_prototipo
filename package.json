@@ -1,0 +1,10 @@
+{
+  "name": "seguimientosv2-prototipo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Widget Qida + scripts de publicación a Vercel Blob",
+  "scripts": {
+    "publish:widget": "node publish.mjs"
+  }
+}

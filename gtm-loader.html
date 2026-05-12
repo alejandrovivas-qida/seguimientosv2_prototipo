@@ -1,0 +1,68 @@
+<!--
+========================================
+QIDA ASSISTANT — GTM LOADER
+========================================
+
+Instrucciones:
+  1. Google Tag Manager → Tags → New Tag
+  2. Tipo: Custom HTML
+  3. Pegar TODO este bloque
+  4. Trigger: All Pages (o el que necesites)
+  5. Save & Publish
+
+Para iterar versiones del widget:
+  - Subís qida-widget.v2.js al blob
+  - Cambiás WIDGET_VERSION = 'v2' abajo
+  - Re-publicás en GTM
+  Versionar por filename evita problemas de caché del CDN.
+-->
+
+<script>
+(function () {
+  // ============ CONFIG ============
+  // URL base del Vercel Blob (sin filename). Reemplazar tras subir el JS.
+  var BLOB_BASE   = 'https://6lrdpudff30zg6ys.public.blob.vercel-storage.com/qida-widget.v1.js';
+  var WIDGET_NAME = 'qida-widget';
+  var WIDGET_VERSION = 'v1';   // bump al subir nueva versión
+  var WIDGET_URL = BLOB_BASE + '/' + WIDGET_NAME + '.' + WIDGET_VERSION + '.js';
+
+  // Config que se pasa al widget en init()
+  var WIDGET_CONFIG = {
+    launcherLabel: 'Asistente'
+    // logoUrl: 'https://.../qida-logo.png'   // opcional: pisa el avatar "Q" inline
+  };
+  // ============ /CONFIG ===========
+
+  if (window.__QIDA_LOADER__) return;
+  window.__QIDA_LOADER__ = true;
+
+  var script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.async = true;
+  script.src = WIDGET_URL;
+  script.crossOrigin = 'anonymous';
+
+  script.onload = function () {
+    if (window.QidaAssistant && typeof window.QidaAssistant.init === 'function') {
+      try {
+        window.QidaAssistant.init(WIDGET_CONFIG);
+      } catch (e) {
+        console.error('[QidaAssistant] init() threw:', e);
+      }
+    } else {
+      console.error('[QidaAssistant] Script loaded but window.QidaAssistant is missing.');
+    }
+  };
+
+  script.onerror = function () {
+    console.error('[QidaAssistant] Failed to load widget from ' + WIDGET_URL);
+  };
+
+  var firstScript = document.getElementsByTagName('script')[0];
+  if (firstScript && firstScript.parentNode) {
+    firstScript.parentNode.insertBefore(script, firstScript);
+  } else {
+    (document.head || document.documentElement).appendChild(script);
+  }
+})();
+</script>
