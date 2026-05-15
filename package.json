@@ -3,8 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Widget Qida + scripts de publicación a Vercel Blob",
+  "description": "Widget Qida Assistant + auto-publish a Vercel Blob",
   "scripts": {
-    "publish:widget": "node publish.mjs"
+    "publish:widget": "node publish.mjs",
+    "publish:watch": "node publish.mjs --watch"
+  },
+  "devDependencies": {
+    "@vercel/blob": "^2.3.3",
+    "dotenv": "^17.4.2"
   }
 }

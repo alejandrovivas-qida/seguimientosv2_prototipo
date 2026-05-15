@@ -3,28 +3,28 @@
 QIDA ASSISTANT — GTM LOADER
 ========================================
 
-Instrucciones:
-  1. Google Tag Manager → Tags → New Tag
+Instrucciones de uso en GTM:
+  1. Google Tag Manager -> Tags -> New Tag
   2. Tipo: Custom HTML
   3. Pegar TODO este bloque
   4. Trigger: All Pages (o el que necesites)
   5. Save & Publish
 
-Para iterar versiones del widget:
-  - Subís qida-widget.v2.js al blob
-  - Cambiás WIDGET_VERSION = 'v2' abajo
-  - Re-publicás en GTM
-  Versionar por filename evita problemas de caché del CDN.
+Para deployar una version nueva del widget:
+  1. Subir qida-widget.vN.js a Vercel Blob desde el dashboard.
+     (Storage -> google-tag-manger -> Browser -> Upload)
+  2. Actualizar WIDGET_URL abajo con la URL nueva.
+  3. Actualizar WIDGET_URL en tempermonkey.js (deben quedar sincronizados).
+  4. Pegar este archivo de nuevo en el Custom HTML tag de GTM y republicar el container.
+
+Versionar por filename (v1 -> v2) evita problemas de cache del CDN
+(Vercel Blob cachea publico por ~1 mes por default).
 -->
 
 <script>
 (function () {
   // ============ CONFIG ============
-  // URL base del Vercel Blob (sin filename). Reemplazar tras subir el JS.
-  var BLOB_BASE   = 'https://6lrdpudff30zg6ys.public.blob.vercel-storage.com/qida-widget.v1.js';
-  var WIDGET_NAME = 'qida-widget';
-  var WIDGET_VERSION = 'v1';   // bump al subir nueva versión
-  var WIDGET_URL = BLOB_BASE + '/' + WIDGET_NAME + '.' + WIDGET_VERSION + '.js';
+  var WIDGET_URL = 'https://6lrdpudff30zg6ys.public.blob.vercel-storage.com/qida-widget.v1.js';
 
   // Config que se pasa al widget en init()
   var WIDGET_CONFIG = {

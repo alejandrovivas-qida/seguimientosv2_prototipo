@@ -1,0 +1,252 @@
+{
+    "jsonrpc": "2.0",
+    "id": 69,
+    "result": {
+        "hasWriteAccess": true,
+        "hasReadAccess": true,
+        "canPostOnReadonly": false,
+        "activities": [
+            {
+                "id": 959063,
+                "res_model_id": [
+                    403,
+                    "Lead/Oportunidad"
+                ],
+                "res_model": "crm.lead",
+                "res_id": 122608,
+                "res_name": "L122608 Ricard Bardají Domínguez",
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "activity_category": "default",
+                "activity_decoration": false,
+                "icon": "fa-tasks",
+                "summary": "URGENT per inici el 22",
+                "note": false,
+                "date_deadline": "2026-05-13",
+                "automated": false,
+                "user_id": [
+                    644,
+                    "Asun Herrera Teixidó"
+                ],
+                "request_partner_id": false,
+                "state": "today",
+                "recommended_activity_type_id": false,
+                "previous_activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "has_recommended_activities": false,
+                "mail_template_ids": [],
+                "chaining_type": "suggest",
+                "can_write": true,
+                "__last_update": "2026-05-12 15:37:43",
+                "display_name": "URGENT per inici el 22",
+                "create_uid": [
+                    644,
+                    "Asun Herrera Teixidó"
+                ],
+                "create_date": "2026-05-12 15:37:43",
+                "write_uid": [
+                    644,
+                    "Asun Herrera Teixidó"
+                ],
+                "write_date": "2026-05-12 15:37:43",
+                "calendar_event_id": false,
+                "active": true,
+                "done": false,
+                "date_done": false,
+                "activity_category_id": false,
+                "initial_plan": "1_initial_plan",
+                "done_desc": "1_not_done",
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            }
+        ],
+        "attachments": [
+            {
+                "checksum": "480b1255cebc957fa8bbf9d13e4e102bcfefd249",
+                "id": 583763,
+                "filename": "image1",
+                "name": "image1",
+                "mimetype": "image/jpeg",
+                "type": "binary",
+                "url": false,
+                "originThread": [
+                    [
+                        "insert",
+                        {
+                            "id": 122608,
+                            "model": "crm.lead"
+                        }
+                    ]
+                ]
+            },
+            {
+                "checksum": "c1731c73e04a70533200b441c07b68c6920ea700",
+                "id": 583762,
+                "filename": "image0",
+                "name": "image0",
+                "mimetype": "image/png",
+                "type": "binary",
+                "url": false,
+                "originThread": [
+                    [
+                        "insert",
+                        {
+                            "id": 122608,
+                            "model": "crm.lead"
+                        }
+                    ]
+                ]
+            },
+            {
+                "checksum": "d295f7dcd2f21136873499eefe86bef71a565619",
+                "id": 583761,
+                "filename": "Pressupost personalitzat.pdf",
+                "name": "Pressupost personalitzat.pdf",
+                "mimetype": "application/pdf",
+                "type": "binary",
+                "url": false,
+                "originThread": [
+                    [
+                        "insert",
+                        {
+                            "id": 122608,
+                            "model": "crm.lead"
+                        }
+                    ]
+                ]
+            }
+        ],
+        "mainAttachment": {
+            "id": 583761
+        },
+        "followers": [
+            {
+                "id": 2308976,
+                "partner_id": 9,
+                "name": "webhook bot",
+                "display_name": "webhook bot",
+                "email": "webhook_bot@qida.es",
+                "is_active": true,
+                "partner": {
+                    "id": 9,
+                    "name": "webhook bot",
+                    "email": "webhook_bot@qida.es",
+                    "active": true,
+                    "im_status": "offline",
+                    "user": {
+                        "id": 7,
+                        "isInternalUser": true
+                    },
+                    "out_of_office_date_end": false
+                }
+            },
+            {
+                "id": 2308980,
+                "partner_id": 187712,
+                "name": "Alba Moya",
+                "display_name": "Alba Moya",
+                "email": "alba.moya@qida.es",
+                "is_active": true,
+                "partner": {
+                    "id": 187712,
+                    "name": "Alba Moya",
+                    "email": "alba.moya@qida.es",
+                    "active": true,
+                    "im_status": "offline",
+                    "user": {
+                        "id": 576,
+                        "isInternalUser": true
+                    },
+                    "out_of_office_date_end": false
+                }
+            },
+            {
+                "id": 2308989,
+                "partner_id": 218637,
+                "name": "Natalia Narro",
+                "display_name": "Natalia Narro",
+                "email": "natalia.narro@qida.es",
+                "is_active": true,
+                "partner": {
+                    "id": 218637,
+                    "name": "Natalia Narro",
+                    "email": "natalia.narro@qida.es",
+                    "active": true,
+                    "im_status": "offline",
+                    "user": {
+                        "id": 638,
+                        "isInternalUser": true
+                    },
+                    "out_of_office_date_end": false
+                }
+            },
+            {
+                "id": 2308998,
+                "partner_id": 222285,
+                "name": "Asun Herrera Teixidó",
+                "display_name": "Asun Herrera Teixidó",
+                "email": "asuncion.herrera@qida.es",
+                "is_active": true,
+                "partner": {
+                    "id": 222285,
+                    "name": "Asun Herrera Teixidó",
+                    "email": "asuncion.herrera@qida.es",
+                    "active": true,
+                    "im_status": "offline",
+                    "user": {
+                        "id": 644,
+                        "isInternalUser": true
+                    },
+                    "out_of_office_date_end": false
+                }
+            },
+            {
+                "id": 2309167,
+                "partner_id": 78217,
+                "name": "Marina Rodríguez",
+                "display_name": "Marina Rodríguez",
+                "email": "marina.rodriguez@qida.es",
+                "is_active": true,
+                "partner": {
+                    "id": 78217,
+                    "name": "Marina Rodríguez",
+                    "email": "marina.rodriguez@qida.es",
+                    "active": true,
+                    "im_status": "offline",
+                    "user": {
+                        "id": 395,
+                        "isInternalUser": true
+                    },
+                    "out_of_office_date_end": false
+                }
+            },
+            {
+                "id": 2309513,
+                "partner_id": 261186,
+                "name": "Ricard Bardají Domínguez",
+                "display_name": "Ricard Bardají Domínguez",
+                "email": "ricardbardaji@gmail.com",
+                "is_active": true,
+                "partner": {
+                    "id": 261186,
+                    "name": "Ricard Bardají Domínguez",
+                    "email": "ricardbardaji@gmail.com",
+                    "active": true,
+                    "im_status": "im_partner",
+                    "user": [
+                        [
+                            "clear"
+                        ]
+                    ],
+                    "out_of_office_date_end": false
+                }
+            }
+        ],
+        "suggestedRecipients": []
+    }
+}

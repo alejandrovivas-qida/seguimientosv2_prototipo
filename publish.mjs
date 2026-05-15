@@ -1,38 +1,37 @@
 /**
- * Sube qida-widget.v1.js al Blob Store público de Vercel.
+ * Publica qida-widget.v1.js al Blob Store publico de Vercel.
  *
- * Requisitos:
- *   1. npm install
- *   2. Crear un archivo .env.local con:
- *        BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxxxxxxxxxxx
- *      (el token lo sacás del dashboard del Blob Store en Vercel)
+ * Modos:
+ *   npm run publish:widget   -> publica una vez y termina
+ *   npm run publish:watch    -> publica una vez y se queda escuchando
+ *                               cambios en el archivo. Cada save -> re-publish.
  *
- * Uso:
- *   npm run publish:widget
+ * Requiere BLOB_READ_WRITE_TOKEN en .env.local.
  */
 
 import { put } from '@vercel/blob';
 import { readFile } from 'node:fs/promises';
+import { watch } from 'node:fs';
+import { resolve, dirname, basename } from 'node:path';
 import { config } from 'dotenv';
 
 config({ path: '.env.local' });
 
-const FILE_PATH = './qida-widget.v1.js';
+const FILE_PATH = resolve('./qida-widget.v1.js');
 const BLOB_PATHNAME = 'qida-widget.v1.js';
+const DEBOUNCE_MS = 300;
 
-async function main() {
+function ts() {
+    return new Date().toLocaleTimeString('es-AR', { hour12: false });
+}
+
+async function publishOnce() {
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
-        console.error('\n[publish] Falta BLOB_READ_WRITE_TOKEN.');
-        console.error('         Creá un archivo .env.local con:');
-        console.error('         BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxxxxxxxxxxx\n');
+        console.error('[publish] Falta BLOB_READ_WRITE_TOKEN en .env.local.');
         process.exit(1);
     }
 
-    console.log('[publish] Leyendo ' + FILE_PATH + '...');
     const content = await readFile(FILE_PATH);
-    console.log('[publish] Tamaño: ' + content.byteLength + ' bytes');
-
-    console.log('[publish] Subiendo a Vercel Blob (' + BLOB_PATHNAME + ')...');
     const blob = await put(BLOB_PATHNAME, content, {
         access: 'public',
         contentType: 'application/javascript; charset=utf-8',
@@ -41,14 +40,49 @@ async function main() {
         cacheControlMaxAge: 60,
     });
 
-    console.log('\n[publish] OK. Widget publicado:');
-    console.log('  URL:      ' + blob.url);
-    console.log('  Pathname: ' + blob.pathname);
-    console.log('\nPegá esta URL en tu loader de GTM.\n');
+    console.log(
+        '[publish] ' + ts() + '  ' + content.byteLength + ' bytes  ->  ' + blob.url
+    );
+}
+
+async function main() {
+    const isWatch = process.argv.includes('--watch');
+
+    await publishOnce();
+
+    if (!isWatch) return;
+
+    console.log('[publish] Watch activo sobre ' + FILE_PATH + '. Ctrl+C para salir.');
+
+    let timer = null;
+    let publishing = false;
+
+    const watcher = watch(dirname(FILE_PATH), { persistent: true });
+
+    watcher.on('change', (_eventType, filename) => {
+        if (!filename) return;
+        if (basename(filename) !== basename(FILE_PATH)) return;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(async () => {
+            if (publishing) return;
+            publishing = true;
+            try {
+                await publishOnce();
+            } catch (err) {
+                console.error('[publish] ' + ts() + '  ERROR  ' + (err && err.message ? err.message : err));
+            } finally {
+                publishing = false;
+            }
+        }, DEBOUNCE_MS);
+    });
+
+    watcher.on('error', (err) => {
+        console.error('[publish] Watcher error:', err);
+        process.exit(1);
+    });
 }
 
 main().catch((err) => {
-    console.error('\n[publish] Error subiendo el widget:');
-    console.error(err);
+    console.error('[publish] Fatal:', err);
     process.exit(1);
 });

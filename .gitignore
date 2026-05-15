@@ -3,5 +3,10 @@ node_modules/
 .env.local
 .env.*.local
 
+.vercel/
+
 .DS_Store
 Thumbs.db
+
+.vercel
+.env*.local
