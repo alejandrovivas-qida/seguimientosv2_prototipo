@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.2.0
+ * QIDA ASSISTANT v1.3.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,15 +9,17 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *
- * Cambios v1.2.0:
- *   - Mini-widget de cobertura (OKR 37% -> 68%)
- *   - Filtros operacionales nuevos (Calientes, Templados, Frios a reactivar,
- *     Pausados, Urgentes, Sin contactar)
- *   - Tabla con sort + columnas nuevas (Tipo de servicio, Urgencia)
- *   - Detail con layout redistribuido (header + 3 paneles)
- *   - Resumen IA editable + Care context + Notas + Actividades + Equipo
- *   - Tab "Adjuntos" en panel derecho (reemplaza Notas)
- *   - Modal "Agendar proximo seguimiento" (reemplaza followup)
+ * Cambios v1.3.0 (Dashboard v2 - P0):
+ *   - Dashboard reorganizado en 4 secciones verticales sobre container centrado:
+ *       1. Cobertura (titulo "cartera activa ventana 15 dias")
+ *       2. Sugerencias del dia (cards con Abrir/Marcar hecho/Posponer)
+ *       3. Actividades agendadas (colapsable, hoy + vencidas)
+ *       4. Tabla colapsada por default con chips refinados (+ Historico)
+ *   - Eliminado search bar grande -> reemplazado por Asistente flotante (3 estados)
+ *   - Asistente Estado 3: panel lateral 30% con resultados de Leads/Conversaciones/Material
+ *   - Reuse del Schedule modal desde "Marcar hecho" (preserva opcion "Cerrar lead sin agendar")
+ *   - Patron Service-like (LeadService/ActivityService/SearchService/CoverageService/SuggestionsService)
+ *     con simulateLatency y TODOs explicitos para los endpoints reales de Odoo.
  *
  * API publica:
  *   QidaAssistant.init(options)
@@ -35,7 +37,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.2.0';
+    var VERSION = '1.3.0';
     var CONFIG = null;
     var QIDA_LOGO_URL = 'https://strapi-upload-files-production.s3.eu-central-1.amazonaws.com/qida_logo_ba5b1d80b5.png?w=1080';
     var FONTS_HREF = 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap';
@@ -53,22 +55,30 @@
     //   serviceType, urgency, prescriptor, careContext, pausaUntil
     // Mocks de iaSummary, attachments, plannedActivities, followers
     // viven en mapas aparte indexados por leadId.
+    // NOTA v1.3: agregamos entryDate (fecha de llamada inicial), nextScheduledFollowUp
+    // (ISO o null) y historico (bool). historico=true significa entryDate > ventana_15d
+    // sin pausa explicita. Sirve para el chip "Historico" y para detectar leads que se
+    // fueron de la ventana operativa sin cerrar.
+    // Mocks construidos asumiendo "hoy" = 2026-05-15. Las fechas son ISO YYYY-MM-DD.
     var MOCK_LEADS = [
-        { id: 'L122581', name: 'Familia Martinez Ruiz',     contact: 'Maria Martinez',           location: 'Madrid',                phone: '+34 666 84 34 18', elderly: 'Padre, 87 anos',   context: 'Movilidad reducida tras caida. Vive solo.',                                  temperature: 'caliente', temperatureReason: 'Pidio presupuesto ayer y respondio hoy con preguntas concretas', temperatureSource: 'IA', daysWithoutTouch: 1,  lastInteraction: 'Hoy 09:45',   interactionCount: 5, stage: 'Por aceptar',            urgent: true,  urgency: 'Muy urgente', serviceType: 'Por horas',     prescriptor: 'ESSIP-MUNDO MAYOR' },
-        { id: 'L122613', name: 'Familia Vidal Pons',        contact: 'Jordi Vidal',              location: 'Barcelona',             phone: '+34 633 12 88 09', elderly: 'Madre, 82 anos',    context: 'Demencia en fase inicial. Conviven dos hermanos.',                            temperature: 'templado', temperatureReason: 'Pidio pensarlo en familia, han pasado 4 dias',                temperatureSource: 'IA', daysWithoutTouch: 4,  lastInteraction: 'Hace 4 dias', interactionCount: 3, stage: 'Por elaborar propuesta', urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'Web organico' },
-        { id: 'L122476', name: 'Familia Baena Sanz',        contact: 'Alejandra Baena',          location: 'Madrid',                phone: '+34 622 45 12 03', elderly: 'Suegra, 90 anos',   context: 'Autonoma pero vive sola. Buscan acompanamiento diurno.',                      temperature: 'caliente', temperatureReason: 'Llamada agendada para manana 11:00',                          temperatureSource: 'IA', daysWithoutTouch: 0,  lastInteraction: 'Hoy 11:20',   interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Urgente',     serviceType: 'Por horas',     prescriptor: 'Recomendacion cliente' },
-        { id: 'L121656', name: 'Familia Parellada Canals',  contact: 'Teresa Parellada',         location: "Sant Sadurni d'Anoia",  phone: '+34 644 78 90 12', elderly: 'Padre, 79 anos',    context: 'Postoperatorio cadera. Necesita ayuda temporal estimada 3-4 meses.',           temperature: 'templado', temperatureReason: 'Familia comparando con otras dos opciones',                   temperatureSource: 'AF', daysWithoutTouch: 6,  lastInteraction: 'Hace 6 dias', interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Hospital Sant Joan de Deu' },
-        { id: 'L121708', name: 'Familia Campos Rivera',     contact: 'David Campos',             location: 'Alcala de Henares',     phone: '+34 611 23 45 67', elderly: 'Madre, 84 anos',    context: 'Caida reciente, alta hospitalaria la semana pasada.',                          temperature: 'frio',     temperatureReason: 'Dijo que llamaria, hace 11 dias sin respuesta',               temperatureSource: 'IA', daysWithoutTouch: 11, lastInteraction: 'Hace 11 dias',interactionCount: 2, stage: 'Por aceptar',            urgent: false, urgency: 'Urgente',     serviceType: 'Interno',       prescriptor: 'Hospital Principe de Asturias' },
-        { id: 'L121547', name: 'Familia Sanchez Tartalo',   contact: 'Maria Jesus Sanchez',      location: 'Madrid',                phone: '+34 655 90 11 22', elderly: 'Madre, 88 anos',    context: 'Alzheimer fase moderada. Hija quiere relevo de fines de semana.',              temperature: 'frio',     temperatureReason: 'No responde desde la propuesta hace 10 dias',                 temperatureSource: 'IA', daysWithoutTouch: 10, lastInteraction: 'Hace 10 dias',interactionCount: 2, stage: 'Por elaborar propuesta', urgent: false, urgency: 'Estandar',    serviceType: 'Fin de semana', prescriptor: 'Web organico' },
-        { id: 'L121749', name: 'Familia Ferreiro Bergino',  contact: 'Maria del Mar Ferreiro',   location: 'Madrid',                phone: '+34 677 88 99 00', elderly: 'Tio, 81 anos',      context: 'Sin familia cercana. Sobrina unica responsable.',                              temperature: 'templado', temperatureReason: 'Esperando que organice visita al domicilio',                  temperatureSource: 'IA', daysWithoutTouch: 2,  lastInteraction: 'Hace 2 dias', interactionCount: 6, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'ESSIP-MUNDO MAYOR' },
-        { id: 'L122131', name: 'Familia Roge Barcelo',      contact: 'Conxi Roge',               location: 'Barcelona',             phone: '+34 688 77 66 55', elderly: 'Marido, 76 anos',   context: 'Parkinson avanzado. Cuidadora actual deja en mayo.',                           temperature: 'caliente', temperatureReason: 'Urgencia operativa: necesita cuidadora antes del 30/05',     temperatureSource: 'AF', daysWithoutTouch: 2,  lastInteraction: 'Hace 2 dias', interactionCount: 7, stage: 'Por aceptar',            urgent: true,  urgency: 'Muy urgente', serviceType: 'Interno',       prescriptor: 'Recomendacion AF anterior' },
-        { id: 'L122055', name: 'Familia Recio del Campo',   contact: 'Jose Maria Recio',         location: 'Collado Villalba',      phone: '+34 699 11 22 33', elderly: 'Madre, 85 anos',    context: 'Indecision sobre interna vs externa.',                                         temperature: 'frio',     temperatureReason: 'No contesta WhatsApp ni llamadas hace 9 dias',                temperatureSource: 'IA', daysWithoutTouch: 9,  lastInteraction: 'Hace 9 dias', interactionCount: 3, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Web organico' },
-        { id: 'L121843', name: 'Familia Avelino Redondo',   contact: 'Avelino Redondo',          location: 'Madrid',                phone: '+34 600 12 34 56', elderly: 'Mujer, 78 anos',    context: 'Recien derivado, sin contacto inicial todavia.',                               temperature: 'pausa',    temperatureReason: 'Pidio no contactar hasta junio (viaje familiar)',             temperatureSource: 'AF', daysWithoutTouch: 0,  lastInteraction: 'Hace 1 dia', interactionCount: 0, stage: 'Por contactar',          urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'ESSIP-MUNDO MAYOR', pausaUntil: '2026-06-05' },
-        { id: 'L122278', name: 'Familia Ruben Garcia',      contact: 'Marina Ruben',             location: 'Madrid',                phone: '+34 622 99 88 77', elderly: 'Padre, 83 anos',    context: 'Diabetes y movilidad limitada. Vive con esposa de 80.',                        temperature: 'templado', temperatureReason: 'Esperando respuesta tras enviarle el presupuesto',            temperatureSource: 'IA', daysWithoutTouch: 5,  lastInteraction: 'Hace 5 dias', interactionCount: 3, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'Hospital La Paz' },
-        { id: 'L121399', name: 'Familia Ortiz Pica',        contact: 'Marta Ortiz',              location: 'Madrid',                phone: '+34 644 55 66 77', elderly: 'Madre, 86 anos',    context: 'Alta hospitalaria reciente. Necesita ayuda al alta inmediata.',                temperature: 'caliente', temperatureReason: 'Urgente: alta hospitalaria manana, sin alguien en casa',     temperatureSource: 'AF', daysWithoutTouch: 0,  lastInteraction: 'Hoy 08:30',   interactionCount: 2, stage: 'Por elaborar propuesta', urgent: true,  urgency: 'Muy urgente', serviceType: 'Interno',       prescriptor: 'Hospital La Paz' },
-        // 2 leads adicionales para enriquecer el bucket "Sin contactar" y "Pausados"
-        { id: 'L122701', name: 'Familia Lopez Iniesta',     contact: 'Carlos Lopez',             location: 'Madrid',                phone: '+34 611 99 00 11', elderly: 'Madre, 81 anos',    context: 'Derivacion reciente desde hospital. Aun sin primer contacto.',                  temperature: 'pausa',    temperatureReason: 'Sin contactar todavia, lead recien asignado',                 temperatureSource: 'IA', daysWithoutTouch: 1,  lastInteraction: 'Hace 1 dia', interactionCount: 0, stage: 'Por contactar',          urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'Hospital Ramon y Cajal' },
-        { id: 'L122845', name: 'Familia Mestres Carrasco',  contact: 'Pilar Mestres',            location: 'Sabadell',              phone: '+34 633 78 22 41', elderly: 'Padre, 89 anos',    context: 'Ya tuvo cuidadora anterior, busca relevo por jubilacion.',                     temperature: 'pausa',    temperatureReason: 'Pausa hasta que vuelva del viaje el 20/05',                   temperatureSource: 'AF', daysWithoutTouch: 3,  lastInteraction: 'Hace 3 dias', interactionCount: 2, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Recomendacion cliente', pausaUntil: '2026-05-20' }
+        { id: 'L122581', name: 'Familia Martinez Ruiz',     contact: 'Maria Martinez',           location: 'Madrid',                phone: '+34 666 84 34 18', elderly: 'Padre, 87 anos',   context: 'Movilidad reducida tras caida. Vive solo.',                                  temperature: 'caliente', temperatureReason: 'Pidio presupuesto ayer y respondio hoy con preguntas concretas', temperatureSource: 'IA', daysWithoutTouch: 1,  lastInteraction: 'Hoy 09:45',   interactionCount: 5, stage: 'Por aceptar',            urgent: true,  urgency: 'Muy urgente', serviceType: 'Por horas',     prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-04', nextScheduledFollowUp: '2026-05-16', historico: false },
+        { id: 'L122613', name: 'Familia Vidal Pons',        contact: 'Jordi Vidal',              location: 'Barcelona',             phone: '+34 633 12 88 09', elderly: 'Madre, 82 anos',    context: 'Demencia en fase inicial. Conviven dos hermanos.',                            temperature: 'templado', temperatureReason: 'Pidio pensarlo en familia, han pasado 4 dias',                temperatureSource: 'IA', daysWithoutTouch: 4,  lastInteraction: 'Hace 4 dias', interactionCount: 3, stage: 'Por elaborar propuesta', urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'Web organico',                 entryDate: '2026-05-06', nextScheduledFollowUp: '2026-05-19', historico: false },
+        { id: 'L122476', name: 'Familia Baena Sanz',        contact: 'Alejandra Baena',          location: 'Madrid',                phone: '+34 622 45 12 03', elderly: 'Suegra, 90 anos',   context: 'Autonoma pero vive sola. Buscan acompanamiento diurno.',                      temperature: 'caliente', temperatureReason: 'Llamada agendada para manana 11:00',                          temperatureSource: 'IA', daysWithoutTouch: 0,  lastInteraction: 'Hoy 11:20',   interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Urgente',     serviceType: 'Por horas',     prescriptor: 'Recomendacion cliente',        entryDate: '2026-05-08', nextScheduledFollowUp: '2026-05-16', historico: false },
+        { id: 'L121656', name: 'Familia Parellada Canals',  contact: 'Teresa Parellada',         location: "Sant Sadurni d'Anoia",  phone: '+34 644 78 90 12', elderly: 'Padre, 79 anos',    context: 'Postoperatorio cadera. Necesita ayuda temporal estimada 3-4 meses.',           temperature: 'templado', temperatureReason: 'Familia comparando con otras dos opciones',                   temperatureSource: 'AF', daysWithoutTouch: 6,  lastInteraction: 'Hace 6 dias', interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Hospital Sant Joan de Deu',    entryDate: '2026-05-05', nextScheduledFollowUp: '2026-05-18', historico: false },
+        { id: 'L121708', name: 'Familia Campos Rivera',     contact: 'David Campos',             location: 'Alcala de Henares',     phone: '+34 611 23 45 67', elderly: 'Madre, 84 anos',    context: 'Caida reciente, alta hospitalaria la semana pasada.',                          temperature: 'frio',     temperatureReason: 'Dijo que llamaria, hace 11 dias sin respuesta',               temperatureSource: 'IA', daysWithoutTouch: 11, lastInteraction: 'Hace 11 dias',interactionCount: 2, stage: 'Por aceptar',            urgent: false, urgency: 'Urgente',     serviceType: 'Interno',       prescriptor: 'Hospital Principe de Asturias',entryDate: '2026-05-02', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L121547', name: 'Familia Sanchez Tartalo',   contact: 'Maria Jesus Sanchez',      location: 'Madrid',                phone: '+34 655 90 11 22', elderly: 'Madre, 88 anos',    context: 'Alzheimer fase moderada. Hija quiere relevo de fines de semana.',              temperature: 'frio',     temperatureReason: 'No responde desde la propuesta hace 10 dias',                 temperatureSource: 'IA', daysWithoutTouch: 10, lastInteraction: 'Hace 10 dias',interactionCount: 2, stage: 'Por elaborar propuesta', urgent: false, urgency: 'Estandar',    serviceType: 'Fin de semana', prescriptor: 'Web organico',                 entryDate: '2026-05-03', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L121749', name: 'Familia Ferreiro Bergino',  contact: 'Maria del Mar Ferreiro',   location: 'Madrid',                phone: '+34 677 88 99 00', elderly: 'Tio, 81 anos',      context: 'Sin familia cercana. Sobrina unica responsable.',                              temperature: 'templado', temperatureReason: 'Esperando que organice visita al domicilio',                  temperatureSource: 'IA', daysWithoutTouch: 2,  lastInteraction: 'Hace 2 dias', interactionCount: 6, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-07', nextScheduledFollowUp: '2026-05-20', historico: false },
+        { id: 'L122131', name: 'Familia Roge Barcelo',      contact: 'Conxi Roge',               location: 'Barcelona',             phone: '+34 688 77 66 55', elderly: 'Marido, 76 anos',   context: 'Parkinson avanzado. Cuidadora actual deja en mayo.',                           temperature: 'caliente', temperatureReason: 'Urgencia operativa: necesita cuidadora antes del 30/05',     temperatureSource: 'AF', daysWithoutTouch: 2,  lastInteraction: 'Hace 2 dias', interactionCount: 7, stage: 'Por aceptar',            urgent: true,  urgency: 'Muy urgente', serviceType: 'Interno',       prescriptor: 'Recomendacion AF anterior',    entryDate: '2026-05-04', nextScheduledFollowUp: '2026-05-15', historico: false },
+        { id: 'L122055', name: 'Familia Recio del Campo',   contact: 'Jose Maria Recio',         location: 'Collado Villalba',      phone: '+34 699 11 22 33', elderly: 'Madre, 85 anos',    context: 'Indecision sobre interna vs externa.',                                         temperature: 'frio',     temperatureReason: 'No contesta WhatsApp ni llamadas hace 9 dias',                temperatureSource: 'IA', daysWithoutTouch: 9,  lastInteraction: 'Hace 9 dias', interactionCount: 3, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Web organico',                 entryDate: '2026-05-05', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L121843', name: 'Familia Avelino Redondo',   contact: 'Avelino Redondo',          location: 'Madrid',                phone: '+34 600 12 34 56', elderly: 'Mujer, 78 anos',    context: 'Recien derivado, sin contacto inicial todavia.',                               temperature: 'pausa',    temperatureReason: 'Pidio no contactar hasta junio (viaje familiar)',             temperatureSource: 'AF', daysWithoutTouch: 0,  lastInteraction: 'Hace 1 dia', interactionCount: 0, stage: 'Por contactar',          urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-10', nextScheduledFollowUp: '2026-06-05', historico: false, pausaUntil: '2026-06-05' },
+        { id: 'L122278', name: 'Familia Ruben Garcia',      contact: 'Marina Ruben',             location: 'Madrid',                phone: '+34 622 99 88 77', elderly: 'Padre, 83 anos',    context: 'Diabetes y movilidad limitada. Vive con esposa de 80.',                        temperature: 'templado', temperatureReason: 'Esperando respuesta tras enviarle el presupuesto',            temperatureSource: 'IA', daysWithoutTouch: 5,  lastInteraction: 'Hace 5 dias', interactionCount: 3, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'Hospital La Paz',              entryDate: '2026-05-06', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L121399', name: 'Familia Ortiz Pica',        contact: 'Marta Ortiz',              location: 'Madrid',                phone: '+34 644 55 66 77', elderly: 'Madre, 86 anos',    context: 'Alta hospitalaria reciente. Necesita ayuda al alta inmediata.',                temperature: 'caliente', temperatureReason: 'Urgente: alta hospitalaria manana, sin alguien en casa',     temperatureSource: 'AF', daysWithoutTouch: 0,  lastInteraction: 'Hoy 08:30',   interactionCount: 2, stage: 'Por elaborar propuesta', urgent: true,  urgency: 'Muy urgente', serviceType: 'Interno',       prescriptor: 'Hospital La Paz',              entryDate: '2026-05-13', nextScheduledFollowUp: '2026-05-15', historico: false },
+        // Pausados sin contactar todavia
+        { id: 'L122701', name: 'Familia Lopez Iniesta',     contact: 'Carlos Lopez',             location: 'Madrid',                phone: '+34 611 99 00 11', elderly: 'Madre, 81 anos',    context: 'Derivacion reciente desde hospital. Aun sin primer contacto.',                  temperature: 'pausa',    temperatureReason: 'Sin contactar todavia, lead recien asignado',                 temperatureSource: 'IA', daysWithoutTouch: 1,  lastInteraction: 'Hace 1 dia', interactionCount: 0, stage: 'Por contactar',          urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'Hospital Ramon y Cajal',       entryDate: '2026-05-12', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L122845', name: 'Familia Mestres Carrasco',  contact: 'Pilar Mestres',            location: 'Sabadell',              phone: '+34 633 78 22 41', elderly: 'Padre, 89 anos',    context: 'Ya tuvo cuidadora anterior, busca relevo por jubilacion.',                     temperature: 'pausa',    temperatureReason: 'Pausa hasta que vuelva del viaje el 20/05',                   temperatureSource: 'AF', daysWithoutTouch: 3,  lastInteraction: 'Hace 3 dias', interactionCount: 2, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Recomendacion cliente',        entryDate: '2026-05-09', nextScheduledFollowUp: '2026-05-20', historico: false, pausaUntil: '2026-05-20' },
+        // ----- Leads HISTORICOS (entryDate > 15 dias sin pausa explicita) -----
+        { id: 'L120912', name: 'Familia Heredia Solis',     contact: 'Adriana Heredia',          location: 'Madrid',                phone: '+34 666 77 88 99', elderly: 'Madre, 84 anos',    context: 'Lead derivado hace casi un mes, sin movimiento.',                              temperature: 'frio',     temperatureReason: 'Sin respuesta hace 18 dias. Quedo fuera de ventana operativa.', temperatureSource: 'IA', daysWithoutTouch: 18, lastInteraction: 'Hace 18 dias',interactionCount: 1, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'Web organico',                 entryDate: '2026-04-22', nextScheduledFollowUp: null,         historico: true },
+        { id: 'L120478', name: 'Familia Bertran Casas',     contact: 'Joana Bertran',            location: 'Barcelona',             phone: '+34 622 11 22 33', elderly: 'Padre, 92 anos',    context: 'Familia indecisa por precio, pidio reflexion larga.',                          temperature: 'frio',     temperatureReason: 'Sin respuesta hace 22 dias tras envio presupuesto.',          temperatureSource: 'IA', daysWithoutTouch: 22, lastInteraction: 'Hace 22 dias',interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Recomendacion cliente',        entryDate: '2026-04-15', nextScheduledFollowUp: null,         historico: true }
     ];
 
     var MOCK_WHATSAPP = {
@@ -158,7 +168,9 @@
         L122278: { caredPerson: 'Padre', caredAge: 83, relationship: 'Padre de Marina', mainCondition: 'Diabetes + movilidad limitada', livesAlone: false },
         L121399: { caredPerson: 'Madre', caredAge: 86, relationship: 'Madre de Marta', mainCondition: 'Alta hospitalaria reciente', livesAlone: true },
         L122701: { caredPerson: 'Madre', caredAge: 81, relationship: 'Madre de Carlos', mainCondition: 'Sin condicion grave reportada', livesAlone: false },
-        L122845: { caredPerson: 'Padre', caredAge: 89, relationship: 'Padre de Pilar', mainCondition: 'Sin condicion grave reportada', livesAlone: false }
+        L122845: { caredPerson: 'Padre', caredAge: 89, relationship: 'Padre de Pilar', mainCondition: 'Sin condicion grave reportada', livesAlone: false },
+        L120912: { caredPerson: 'Madre', caredAge: 84, relationship: 'Madre de Adriana', mainCondition: 'Sin diagnostico reportado', livesAlone: true },
+        L120478: { caredPerson: 'Padre', caredAge: 92, relationship: 'Padre de Joana', mainCondition: 'Demencia avanzada', livesAlone: false }
     };
 
     // Adjuntos (segun shape Odoo: id, name, mimetype, type, date, isMain).
@@ -193,7 +205,11 @@
             { id: 583820, name: 'Presupuesto urgente alta - Ortiz.pdf', mimetype: 'application/pdf', date: 'Hoy 08:00', isMain: true }
         ],
         L122701: [],
-        L122845: []
+        L122845: [],
+        L120912: [],
+        L120478: [
+            { id: 583830, name: 'Presupuesto v1 - Familia Bertran.pdf', mimetype: 'application/pdf', date: 'Hace 24 dias', isMain: true }
+        ]
     };
 
     // Actividades planificadas. Mismo shape que el endpoint Odoo (date_deadline,
@@ -230,6 +246,50 @@
         L121399: [{ name: 'Patricia V.', role: 'AF responsable', email: 'patricia.v@qida.es' }, { name: 'Asun Herrera', role: 'Coordinadora AF', email: 'asuncion.herrera@qida.es' }]
     };
 
+    // ============================================================
+    // MOCKS v1.3 (dashboard v2)
+    // ============================================================
+    // Sugerencias del dia: 5 elementos exactos. Cada uno apunta a un leadId real.
+    // suggestedFollowUpNumber indica si es el 1ro/2do/3ro/4to contacto sugerido
+    // (alineado con el OKR de cobertura del 3er msg).
+    var MOCK_DAILY_SUGGESTIONS = [
+        { id: 'sug-1', leadId: 'L122581', suggestedFollowUpNumber: 4, reason: 'Respondio hoy con dos dudas concretas. Momento ideal para cierre.',   urgent: true,  hint: 'Cierre proximo' },
+        { id: 'sug-2', leadId: 'L121399', suggestedFollowUpNumber: 1, reason: 'Alta hospitalaria manana, urgencia operativa. Falta perfilar.',       urgent: true,  hint: 'Alta hospitalaria' },
+        { id: 'sug-3', leadId: 'L122131', suggestedFollowUpNumber: 4, reason: 'Confirmar fecha de arranque (25/05). Operativo, deadline 30/05.',     urgent: true,  hint: 'Cierre operativo' },
+        { id: 'sug-4', leadId: 'L122613', suggestedFollowUpNumber: 3, reason: 'Hace 4 dias sin respuesta tras presupuesto. Toque 3er msg.',          urgent: false, hint: '3er msg' },
+        { id: 'sug-5', leadId: 'L122278', suggestedFollowUpNumber: 3, reason: 'Hace 5 dias del presupuesto. Toque 3er msg para cobertura.',          urgent: false, hint: '3er msg' }
+    ];
+
+    // Actividades agendadas globales (vencidas + hoy). El render hace dedupe contra MOCK_DAILY_SUGGESTIONS.
+    var MOCK_SCHEDULED_ACTIVITIES = [
+        { id: 'act-1', leadId: 'L122613', deadline: '2026-05-10', summary: 'Followup tras presupuesto familiar',    type: 'Por hacer', assignee: 'Patricia V.', done: false }, // overdue
+        { id: 'act-2', leadId: 'L122131', deadline: '2026-05-12', summary: 'Llamada con seleccion para cierre',     type: 'Llamada',   assignee: 'Patricia V.', done: false }, // overdue
+        { id: 'act-3', leadId: 'L122581', deadline: '2026-05-15', summary: 'Responder dudas fin de semana y arranque', type: 'Por hacer', assignee: 'Patricia V.', done: false }, // today (15-may)
+        { id: 'act-4', leadId: 'L121399', deadline: '2026-05-15', summary: 'Llamar a Marta para captar perfil',     type: 'Llamada',   assignee: 'Patricia V.', done: false }  // today
+    ];
+
+    // Conversaciones (mensajes WhatsApp) con keywords para el SearchService.
+    // Cubre las 3 busquedas tipicas del brief: precio, alta hospitalaria, interno vs externo.
+    var MOCK_CONVERSATION_MATCHES = [
+        { id: 'conv-1', leadId: 'L121656', leadName: 'Familia Parellada Canals', from: 'lead', text: 'Recibido, lo estamos comparando con dos opciones mas. Te digo manana.',                                          time: 'Hace 6 dias',  keywords: ['precio', 'comparar', 'familia', 'dudaban'] },
+        { id: 'conv-2', leadId: 'L122055', leadName: 'Familia Recio del Campo',  from: 'lead', text: 'Estamos dudando entre interna y externa. La interna es mas cara pero quizas mas tranquila.',                       time: 'Hace 12 dias', keywords: ['interno', 'externo', 'interna', 'externa', 'precio'] },
+        { id: 'conv-3', leadId: 'L121708', leadName: 'Familia Campos Rivera',    from: 'lead', text: 'Mi madre tuvo el alta hospitalaria la semana pasada y no podemos cubrir solos.',                                   time: 'Hace 11 dias', keywords: ['alta hospitalaria', 'hospitalaria', 'alta'] },
+        { id: 'conv-4', leadId: 'L121399', leadName: 'Familia Ortiz Pica',       from: 'lead', text: 'Sale del hospital manana, necesitamos cobertura desde el dia 1. Cuesta mucho?',                                    time: 'Hoy 08:30',    keywords: ['alta hospitalaria', 'hospital', 'precio', 'cuesta'] },
+        { id: 'conv-5', leadId: 'L120478', leadName: 'Familia Bertran Casas',    from: 'lead', text: 'El presupuesto se nos va de presupuesto, dudabamos por el precio. Vamos a darle una vuelta en familia.',           time: 'Hace 22 dias', keywords: ['precio', 'dudaban', 'presupuesto', 'familia'] },
+        { id: 'conv-6', leadId: 'L121547', leadName: 'Familia Sanchez Tartalo',  from: 'lead', text: 'Mi madre tiene Alzheimer y la queremos en casa, no nos atrevemos con interna. Externa quizas?',                    time: 'Hace 14 dias', keywords: ['interno', 'externo', 'interna', 'externa'] }
+    ];
+
+    // Material con descripcion + keywords para el SearchService (el render por defecto sigue
+    // usando MOCK_MATERIAL para no romper el panel derecho del detail).
+    var MOCK_MATERIAL_SEARCHABLE = [
+        { id: 'm1', title: 'Guia: Primeros pasos cuando hay alta hospitalaria',                  match: '92%', tag: 'Postoperatorio', keywords: ['alta hospitalaria', 'hospital', 'postoperatorio', 'alta'] },
+        { id: 'm2', title: 'Video: Como elegimos a las cuidadoras (3 min)',                       match: '88%', tag: 'Confianza',      keywords: ['confianza', 'cuidadora', 'eleccion'] },
+        { id: 'm3', title: 'PDF: Diferencias entre interna y externa',                            match: '94%', tag: 'Comparativa',    keywords: ['interno', 'externo', 'interna', 'externa', 'comparativa', 'diferencias'] },
+        { id: 'm4', title: 'PDF: Como hablar de precio sin cerrar la conversacion',               match: '89%', tag: 'Precio',         keywords: ['precio', 'objecion', 'presupuesto', 'precio'] },
+        { id: 'm5', title: 'Caso real: familia que dudaba por precio y termino contratando',      match: '86%', tag: 'Caso real',      keywords: ['precio', 'dudaban', 'caso', 'familia'] },
+        { id: 'm6', title: 'Plantilla: explicar coste interna vs externa con ejemplo',            match: '83%', tag: 'Plantilla',      keywords: ['interno', 'externo', 'precio', 'plantilla'] }
+    ];
+
     var TEMP_CONFIG = {
         caliente: { label: 'Caliente', icon: 'flame',     bg: '#ffedd5', color: '#7c2d12', border: '#fdba74', dot: '#f97316' },
         templado: { label: 'Templado', icon: 'thermo',    bg: '#fffbeb', color: '#78350f', border: '#fcd34d', dot: '#f59e0b' },
@@ -249,12 +309,26 @@
         view: 'dashboard',              // 'dashboard' | 'detail'
         currentLeadId: null,
 
-        // Dashboard filtering / search / sort
-        activeFilter: 'todos',          // 'todos' | 'caliente' | 'templado' | 'frio-reactivar' | 'pausa' | 'urgente' | 'sin-contactar'
+        // Dashboard filtering / sort. searchQuery se mantiene para uso interno
+        // de matchesSearch desde el Asistente flotante; el viejo search bar grande se removio.
+        activeFilter: 'todos',          // 'todos' | 'caliente' | 'templado' | 'frio-reactivar' | 'pausa' | 'urgente' | 'historico'
         coverageBucket: null,           // null | 0 | 1 | 2 | 3 (3 significa "3+")
         searchQuery: '',
-        sortCol: 'dias',                // 'familia' | 'temp' | 'servicio' | 'urgencia' | 'dias' | 'interacciones' | 'etapa'
+        sortCol: 'dias',                // 'familia' | 'temp' | 'servicio' | 'urgencia' | 'dias' | 'interacciones' | 'etapa' | 'proximo'
         sortDir: 'desc',                // 'asc' | 'desc' (default 'dias' desc)
+
+        // Dashboard v1.3: secciones colapsables
+        collapsedTable: true,           // tabla colapsada por default
+        collapsedScheduled: false,      // actividades agendadas expandida por default
+
+        // Asistente flotante (3 estados)
+        assistantState: 'closed',       // 'closed' (pill) | 'expanded' (input) | 'results' (panel lateral)
+        assistantQuery: '',
+        assistantLoading: false,
+        assistantResults: null,         // { leads: [...], conversations: [...], material: [...] } | null
+
+        // Sugerencias del dia
+        postponeOpenFor: null,          // id de sugerencia con dropdown de posponer abierto
 
         // Detail state
         activePanel: 'templates',       // 'templates' | 'material' | 'attachments'
@@ -262,11 +336,13 @@
         editingIaSummary: false,
         addingNote: false,
 
-        // Schedule modal
+        // Schedule modal (reutilizado desde Detail Y desde "Marcar hecho" de sugerencias/actividades)
         showScheduleModal: false,
         scheduleDate: null,             // 'YYYY-MM-DD'
         scheduleNote: '',
         scheduleMarkPause: false,
+        scheduleOrigin: 'detail',       // 'detail' | 'suggestion' | 'activity' (afecta el callback de confirm)
+        scheduleLeadIdOverride: null,   // leadId target cuando origin !== 'detail'
 
         // Toast
         toast: null                     // { msg, ts }
@@ -274,10 +350,13 @@
 
     // Edits "vivos" hechos por la AF (sin persistencia).
     var EDITS = {
-        iaSummaries: {},      // { leadId: { text, editedBy, generatedAt } }
-        temperatures: {},     // { leadId: { temperature, source } }
-        notes: {},            // { leadId: [ { author, date, text } ] } (additions)
-        scheduledActivities: [] // [ { leadId, deadline, note, markPause, ts } ]
+        iaSummaries: {},                // { leadId: { text, editedBy, generatedAt } }
+        temperatures: {},               // { leadId: { temperature, source } }
+        notes: {},                      // { leadId: [ { author, date, text } ] } (additions)
+        scheduledActivities: [],        // [ { leadId, deadline, note, markPause, ts } ]
+        suggestionsDone: {},            // { sugId: true } -> ocultar de la lista
+        suggestionsPostponed: {},       // { sugId: { until: ISO } }
+        activitiesDone: {}              // { actId: true } -> ocultar de la seccion 3
     };
 
     // ============================================================
@@ -323,19 +402,25 @@
     }
 
     // ----- Filtros operacionales -----
+    // "Todos" excluye historicos por default (cartera activa). "Historico" es el opuesto explicito.
+    // Los demas chips operan sobre cartera activa unicamente.
+    function isActive(lead) { return !lead.historico; }
+
     function matchesOperationalFilter(lead, filter) {
         var t = getLeadTemperature(lead);
+        if (filter === 'historico')        return !!lead.historico;
+        if (!isActive(lead))               return false; // los demas chips solo sobre activos
         if (filter === 'caliente')         return t === 'caliente';
         if (filter === 'templado')         return t === 'templado';
         if (filter === 'frio-reactivar')   return t === 'frio' && lead.daysWithoutTouch < 21;
         if (filter === 'pausa')            return t === 'pausa';
         if (filter === 'urgente')          return !!lead.urgent;
-        if (filter === 'sin-contactar')    return getInteractionCount(lead) === 0;
-        return true; // 'todos'
+        return true; // 'todos' sobre cartera activa
     }
 
     function matchesCoverageBucket(lead, bucket) {
         if (bucket == null) return true;
+        if (!isActive(lead)) return false; // cobertura solo sobre cartera activa
         var n = getInteractionCount(lead);
         if (bucket === 3) return n >= 3; // "3+"
         return n === bucket;
@@ -369,6 +454,8 @@
         if (!col) return arr;
         var sign = dir === 'asc' ? 1 : -1;
         var copy = arr.slice();
+        // nextScheduledFollowUp = null se ordena al final independientemente del sign.
+        var BIG = 9999999;
         copy.sort(function (a, b) {
             var av, bv;
             switch (col) {
@@ -379,6 +466,10 @@
                 case 'dias':          av = a.daysWithoutTouch; bv = b.daysWithoutTouch; break;
                 case 'interacciones': av = a.interactionCount; bv = b.interactionCount; break;
                 case 'etapa':         av = a.stage.toLowerCase(); bv = b.stage.toLowerCase(); break;
+                case 'proximo':
+                    av = a.nextScheduledFollowUp ? daysBetween(a.nextScheduledFollowUp) : BIG;
+                    bv = b.nextScheduledFollowUp ? daysBetween(b.nextScheduledFollowUp) : BIG;
+                    break;
                 default:              return 0;
             }
             if (av < bv) return -1 * sign;
@@ -414,10 +505,18 @@
     }
 
     function coveragePct() {
-        var total = MOCK_LEADS.length;
+        // Solo cartera activa (sin historicos), alineado con CoverageService.weeklySync()
+        var total = 0;
+        for (var i = 0; i < MOCK_LEADS.length; i++) if (isActive(MOCK_LEADS[i])) total++;
         if (total === 0) return 0;
         var n3plus = countByCoverage(3);
         return Math.round((n3plus / total) * 100);
+    }
+
+    function activeLeadsCount() {
+        var n = 0;
+        for (var i = 0; i < MOCK_LEADS.length; i++) if (isActive(MOCK_LEADS[i])) n++;
+        return n;
     }
 
     // Para el sub-info de "Pausados con reactivacion esta semana"
@@ -470,6 +569,194 @@
     }
 
     // ============================================================
+    // SOFT HYBRID SERVICE LAYER
+    // ============================================================
+    // Patron service-like sobre los mocks. Decision arquitectonica (15-may):
+    //   - Single-file con bloques marcados. Cero cambio al workflow de deploy.
+    //   - Cada servicio expone dos variantes:
+    //       getSync(): version sincrona usada por las render functions (devuelve mocks ya cargados).
+    //       get():    version asincrona con simulateLatency para flujos nuevos (Asistente flotante).
+    //   - Migrar a multi-file real es decision post-Rollout.
+    //
+    // TODOs explicitos: cuando Pablo Rodrigo (PM Odoo) y Adriana Barro (Tech) cierren los
+    // endpoints reales, reemplazar los cuerpos por fetch() preservando la API publica.
+    //
+    function simulateLatency(min, max) {
+        var ms = Math.floor(min + Math.random() * (max - min));
+        return new Promise(function (resolve) { setTimeout(resolve, ms); });
+    }
+
+    var LeadService = {
+        listSync: function () { return MOCK_LEADS.slice(); },
+        list: function () {
+            // TODO[odoo]: GET /api/me/leads?window=15d
+            return simulateLatency(80, 200).then(function () { return MOCK_LEADS.slice(); });
+        },
+        getSync: function (id) { return getLead(id); },
+        get: function (id) {
+            // TODO[odoo]: GET /api/leads/:id
+            return simulateLatency(60, 140).then(function () { return getLead(id); });
+        },
+        updateTemperature: function (id, temperature) {
+            // TODO[odoo]: PATCH /api/leads/:id { temperature, source: 'AF' }
+            EDITS.temperatures[id] = { temperature: temperature, source: 'AF' };
+            return simulateLatency(60, 140).then(function () { return true; });
+        },
+        close: function (id, reason) {
+            // TODO[odoo]: POST /api/leads/:id/close { reason }
+            return simulateLatency(80, 180).then(function () { return { ok: true, reason: reason }; });
+        }
+    };
+
+    var ActivityService = {
+        listByLeadSync: function (leadId) {
+            var base = (MOCK_PLANNED_ACTIVITIES[leadId] || []).slice();
+            for (var i = 0; i < EDITS.scheduledActivities.length; i++) {
+                var sa = EDITS.scheduledActivities[i];
+                if (sa.leadId === leadId) {
+                    base.push({
+                        id: 'local-' + i,
+                        type: 'Por hacer',
+                        summary: sa.note ? (sa.note.split('\n')[0].slice(0, 60) + (sa.note.length > 60 ? '...' : '')) : 'Proximo seguimiento',
+                        deadline: sa.deadline,
+                        state: activityStateFromDeadline(sa.deadline),
+                        assignee: 'Patricia V.',
+                        done: false
+                    });
+                }
+            }
+            return base;
+        },
+        // Globales (hoy + vencidas) para la seccion 3 del dashboard.
+        listTodayAndOverdueSync: function () {
+            // TODO[odoo]: GET /api/me/activities?state=today,overdue
+            var out = [];
+            for (var i = 0; i < MOCK_SCHEDULED_ACTIVITIES.length; i++) {
+                var a = MOCK_SCHEDULED_ACTIVITIES[i];
+                if (EDITS.activitiesDone[a.id]) continue;
+                out.push(a);
+            }
+            return out;
+        },
+        schedule: function (leadId, deadline, note, markPause) {
+            // TODO[odoo]: POST /api/activities { lead_id, date_deadline, note, type='todo' }
+            EDITS.scheduledActivities.push({
+                leadId: leadId, deadline: deadline, note: note,
+                markPause: markPause, ts: Date.now()
+            });
+            if (markPause) EDITS.temperatures[leadId] = { temperature: 'pausa', source: 'AF' };
+            return simulateLatency(70, 160).then(function () { return true; });
+        },
+        markDone: function (actId) {
+            // TODO[odoo]: PATCH /api/activities/:id { state: 'done' }
+            EDITS.activitiesDone[actId] = true;
+            return simulateLatency(50, 120).then(function () { return true; });
+        }
+    };
+
+    var SuggestionsService = {
+        listSync: function () {
+            // TODO[odoo]: GET /api/me/daily-suggestions
+            // Filtrar las que la AF ya marco hecho / pospuso a futuro.
+            var today = new Date(); today.setHours(0, 0, 0, 0);
+            var out = [];
+            for (var i = 0; i < MOCK_DAILY_SUGGESTIONS.length; i++) {
+                var s = MOCK_DAILY_SUGGESTIONS[i];
+                if (EDITS.suggestionsDone[s.id]) continue;
+                var pp = EDITS.suggestionsPostponed[s.id];
+                if (pp && pp.until) {
+                    var d = new Date(pp.until + 'T00:00:00');
+                    if (d > today) continue;
+                }
+                out.push(s);
+            }
+            return out;
+        },
+        markDone: function (sugId) { EDITS.suggestionsDone[sugId] = true; return simulateLatency(40, 100); },
+        postpone: function (sugId, untilIso) { EDITS.suggestionsPostponed[sugId] = { until: untilIso }; return simulateLatency(40, 100); }
+    };
+
+    var CoverageService = {
+        // Cobertura: distribucion por interactionCount, scoped a "cartera activa ventana 15d".
+        weeklySync: function () {
+            // TODO[odoo]: GET /api/me/coverage?window=15d
+            var active = LeadService.listSync().filter(function (l) { return !l.historico; });
+            var byBucket = { 0: 0, 1: 0, 2: 0, 3: 0 };
+            for (var i = 0; i < active.length; i++) {
+                var n = active[i].interactionCount;
+                if (n >= 3) byBucket[3]++;
+                else if (n === 2) byBucket[2]++;
+                else if (n === 1) byBucket[1]++;
+                else byBucket[0]++;
+            }
+            var total = active.length;
+            var pct = total > 0 ? Math.round((byBucket[3] / total) * 100) : 0;
+            return { byBucket: byBucket, total: total, coveragePct: pct, target: COVERAGE_TARGET };
+        }
+    };
+
+    var SearchService = {
+        // Todo el SearchService corre async. El Asistente flotante (Estado 3) lo consume con loading skeletons.
+        // Mock devuelve matches por substring sobre name/context/temperatureReason/keywords.
+        all: function (q) {
+            // TODO[odoo]: POST /api/search { q } -> { leads, conversations, material }
+            return simulateLatency(220, 480).then(function () {
+                return {
+                    leads: SearchService._leadsSync(q),
+                    conversations: SearchService._conversationsSync(q),
+                    material: SearchService._materialSync(q)
+                };
+            });
+        },
+        _leadsSync: function (q) {
+            if (!q) return [];
+            var lq = q.toLowerCase();
+            var out = [];
+            for (var i = 0; i < MOCK_LEADS.length; i++) {
+                if (matchesSearch(MOCK_LEADS[i], q)) out.push(MOCK_LEADS[i]);
+                if (out.length >= 6) break;
+            }
+            return out;
+        },
+        _conversationsSync: function (q) {
+            if (!q) return [];
+            var lq = q.toLowerCase();
+            var out = [];
+            for (var i = 0; i < MOCK_CONVERSATION_MATCHES.length; i++) {
+                var c = MOCK_CONVERSATION_MATCHES[i];
+                var hit = c.text.toLowerCase().indexOf(lq) !== -1
+                       || c.leadName.toLowerCase().indexOf(lq) !== -1;
+                if (!hit && c.keywords) {
+                    for (var k = 0; k < c.keywords.length; k++) {
+                        if (lq.indexOf(c.keywords[k]) !== -1 || c.keywords[k].indexOf(lq) !== -1) { hit = true; break; }
+                    }
+                }
+                if (hit) out.push(c);
+                if (out.length >= 5) break;
+            }
+            return out;
+        },
+        _materialSync: function (q) {
+            if (!q) return [];
+            var lq = q.toLowerCase();
+            var out = [];
+            for (var i = 0; i < MOCK_MATERIAL_SEARCHABLE.length; i++) {
+                var m = MOCK_MATERIAL_SEARCHABLE[i];
+                var hit = m.title.toLowerCase().indexOf(lq) !== -1
+                       || (m.tag || '').toLowerCase().indexOf(lq) !== -1;
+                if (!hit && m.keywords) {
+                    for (var k = 0; k < m.keywords.length; k++) {
+                        if (lq.indexOf(m.keywords[k]) !== -1 || m.keywords[k].indexOf(lq) !== -1) { hit = true; break; }
+                    }
+                }
+                if (hit) out.push(m);
+                if (out.length >= 5) break;
+            }
+            return out;
+        }
+    };
+
+    // ============================================================
     // SVG ICONS (lucide-style)
     // ============================================================
     var I = {
@@ -500,7 +787,14 @@
         thermo:      '<path d="M12 9a4 4 0 0 0-2 7.5"/><path d="M12 3v2"/><path d="M6.6 18.4l-1.4 1.4"/><path d="M18 2a4 4 0 0 0-4 4v10.5a4 4 0 1 0 4 0z"/>',
         snowflake:   '<line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
         pause:       '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
-        target:      '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'
+        target:      '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+        chevUp:      '<path d="m18 15-6-6-6 6"/>',
+        arrowRight:  '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
+        history:     '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/><path d="M12 7v5l3 1.5"/>',
+        send:        '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+        listOrdered: '<line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
+        briefcase:   '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+        moreHoriz:   '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -814,10 +1108,133 @@
             '.qida-toast{position:absolute;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--s900);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 8px 20px rgba(0,0,0,.25);z-index:6;opacity:0;transition:opacity .2s,transform .2s;display:inline-flex;align-items:center;gap:8px;font-family:"Manrope",system-ui,sans-serif;pointer-events:none;}',
             '.qida-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}',
 
+            /* ============================================================
+               v1.3 DASHBOARD V2: container + sections + assistant + skeletons
+               ============================================================ */
+
+            /* Dashboard container centrado */
+            '.qida-dash-v2{flex:1;overflow-y:auto;background:var(--s50);}',
+            '.qida-dash-container{max-width:1280px;margin:0 auto;padding:32px;display:flex;flex-direction:column;gap:24px;}',
+            '.qida-section{background:#fff;border:1px solid var(--s200);border-radius:10px;}',
+            '.qida-section-h{display:flex;align-items:center;gap:10px;padding:14px 18px;}',
+            '.qida-section-h-title{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:15px;color:var(--s900);display:inline-flex;align-items:center;gap:8px;}',
+            '.qida-section-h-count{font-size:12px;color:var(--s500);font-weight:500;}',
+            '.qida-section-h-actions{margin-left:auto;display:inline-flex;align-items:center;gap:8px;}',
+            '.qida-section-h-toggle{background:transparent;border:0;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:4px 6px;border-radius:6px;font-family:inherit;font-size:12px;}',
+            '.qida-section-h-toggle:hover{background:var(--s100);color:var(--s900);}',
+            '.qida-section-body{padding:0 18px 18px;}',
+
+            /* Sugerencias del dia cards */
+            '.qida-sug-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}',
+            '@media (max-width:900px){.qida-sug-grid{grid-template-columns:1fr;}}',
+            '.qida-sug{position:relative;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;transition:border-color .15s,box-shadow .15s;}',
+            '.qida-sug:hover{border-color:var(--s300);box-shadow:0 2px 8px rgba(0,0,0,.04);}',
+            '.qida-sug.urgent{border-left:3px solid #f97316;}',
+            '.qida-sug-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}',
+            '.qida-sug-lead{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;}',
+            '.qida-sug-name{font-weight:600;font-size:13px;color:var(--s900);line-height:1.3;}',
+            '.qida-sug-meta{font-size:11px;color:var(--s500);display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap;}',
+            '.qida-sug-badges{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;}',
+            '.qida-sug-fu{font-size:10px;background:var(--qg-soft);color:var(--qg);padding:2px 8px;border-radius:999px;font-weight:600;letter-spacing:.02em;display:inline-flex;align-items:center;gap:3px;border:1px solid var(--qg-soft-border);}',
+            '.qida-sug-fu.urgent{background:#fff7ed;color:#9a3412;border-color:#fed7aa;}',
+            '.qida-sug-reason{font-size:12px;color:var(--s700);line-height:1.4;margin:0;}',
+            '.qida-sug-aux{font-size:10px;color:var(--s500);display:inline-flex;align-items:center;gap:4px;font-style:italic;}',
+            '.qida-sug-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:auto;}',
+            '.qida-sug-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;font-size:12px;font-weight:500;border-radius:6px;border:1px solid var(--s200);background:#fff;color:var(--s700);cursor:pointer;font-family:inherit;transition:border-color .15s,background .15s,color .15s;}',
+            '.qida-sug-btn:hover{border-color:var(--s400);color:var(--s900);}',
+            '.qida-sug-btn.primary{background:var(--qg);color:#fff;border-color:var(--qg);}',
+            '.qida-sug-btn.primary:hover{background:var(--qgH);border-color:var(--qgH);color:#fff;}',
+            '.qida-sug-btn.success{background:#ecfdf5;color:#047857;border-color:#a7f3d0;}',
+            '.qida-sug-btn.success:hover{background:#d1fae5;color:#065f46;border-color:#6ee7b7;}',
+
+            /* Posponer dropdown */
+            '.qida-pp-wrap{position:relative;display:inline-block;}',
+            '.qida-pp-menu{position:absolute;right:0;top:calc(100% + 4px);background:#fff;border:1px solid var(--s200);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:30;min-width:180px;padding:6px;}',
+            '.qida-pp-opt{display:block;width:100%;text-align:left;padding:8px 10px;font-size:12px;color:var(--s700);background:transparent;border:0;border-radius:6px;cursor:pointer;font-family:inherit;}',
+            '.qida-pp-opt:hover{background:var(--s100);color:var(--s900);}',
+
+            /* Sugerencias estado vacio */
+            '.qida-sug-empty{padding:24px 18px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;color:var(--s500);}',
+            '.qida-sug-empty-icon{color:var(--qg);}',
+            '.qida-sug-empty-title{font-size:13px;font-weight:600;color:var(--s700);}',
+            '.qida-sug-empty-sub{font-size:11px;color:var(--s500);}',
+
+            /* Scheduled activities cards */
+            '.qida-sched-list{display:flex;flex-direction:column;gap:8px;}',
+            '.qida-sched{display:flex;align-items:center;gap:12px;padding:10px 12px;background:#fff;border:1px solid var(--s200);border-radius:8px;cursor:pointer;transition:border-color .15s,background .15s;}',
+            '.qida-sched:hover{border-color:var(--s300);background:var(--s50);}',
+            '.qida-sched.overdue{border-color:#fecaca;background:var(--red50);}',
+            '.qida-sched.overdue:hover{border-color:#fca5a5;}',
+            '.qida-sched-icon{flex-shrink:0;padding:7px;border-radius:8px;background:var(--s100);color:var(--s700);}',
+            '.qida-sched.overdue .qida-sched-icon{background:#fee2e2;color:var(--red600);}',
+            '.qida-sched.today .qida-sched-icon{background:var(--qg-soft);color:var(--qg);}',
+            '.qida-sched-body{flex:1;min-width:0;}',
+            '.qida-sched-summary{font-size:13px;font-weight:500;color:var(--s900);line-height:1.3;}',
+            '.qida-sched-meta{font-size:11px;color:var(--s500);margin-top:2px;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;}',
+            '.qida-sched.overdue .qida-sched-meta{color:var(--red600);}',
+            '.qida-sched-badge{font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;}',
+            '.qida-sched-badge.overdue{background:#fee2e2;color:#991b1b;}',
+            '.qida-sched-badge.today{background:var(--qg-soft);color:var(--qg);}',
+            '.qida-sched-done{background:transparent;border:1px solid var(--s200);border-radius:6px;padding:5px 9px;font-size:11px;color:var(--s600);cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;flex-shrink:0;}',
+            '.qida-sched-done:hover{border-color:var(--qg);color:var(--qg);}',
+            '.qida-sched-empty{padding:18px;text-align:center;color:var(--s500);font-size:12px;font-style:italic;}',
+
+            /* Tabla colapsable - header full-clickable, body se muestra/oculta */
+            '.qida-table-header-bar{display:flex;align-items:center;gap:10px;padding:14px 18px;cursor:pointer;border-radius:10px;}',
+            '.qida-table-header-bar:hover{background:var(--s50);}',
+            '.qida-table-body{padding:0 18px 18px;}',
+
+            /* Asistente flotante - Estado 1 (pill) */
+            '.qida-asst-pill{position:absolute;bottom:24px;right:24px;display:inline-flex;align-items:center;gap:8px;padding:11px 18px;background:var(--qg);color:#fff;border:0;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:0 8px 24px rgba(14,74,58,.25),0 2px 4px rgba(14,74,58,.1);transition:transform .15s,box-shadow .15s;z-index:4;}',
+            '.qida-asst-pill:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(14,74,58,.3),0 4px 6px rgba(14,74,58,.15);}',
+            '.qida-asst-pill kbd{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.22);border-radius:4px;padding:1px 5px;font-size:10px;font-family:"Manrope",monospace;}',
+
+            /* Asistente flotante - Estado 2 (expanded input) */
+            '.qida-asst-exp-bg{position:absolute;inset:0;background:rgba(28,25,23,.15);z-index:4;display:flex;align-items:flex-end;justify-content:flex-end;padding:24px;}',
+            '.qida-asst-exp{background:#fff;border:1px solid var(--s200);border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.18);width:520px;max-width:100%;padding:14px 16px;display:flex;flex-direction:column;gap:10px;}',
+            '.qida-asst-exp-title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;}',
+            '.qida-asst-exp-row{display:flex;align-items:center;gap:8px;}',
+            '.qida-asst-input{flex:1;padding:10px 12px;font-family:inherit;font-size:14px;color:var(--s900);background:var(--s50);border:1px solid var(--s200);border-radius:8px;outline:none;transition:border-color .15s,background .15s;}',
+            '.qida-asst-input:focus{border-color:var(--qg);background:#fff;}',
+            '.qida-asst-send{padding:10px 12px;background:var(--qg);color:#fff;border:0;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}',
+            '.qida-asst-send:hover{background:var(--qgH);}',
+            '.qida-asst-send:disabled{opacity:.4;cursor:not-allowed;}',
+            '.qida-asst-hints{display:flex;flex-wrap:wrap;gap:6px;padding-top:4px;}',
+            '.qida-asst-hint{font-size:11px;color:var(--s600);background:var(--s100);padding:4px 10px;border-radius:999px;cursor:pointer;border:0;font-family:inherit;transition:background .15s;}',
+            '.qida-asst-hint:hover{background:var(--s200);color:var(--s900);}',
+
+            /* Asistente flotante - Estado 3 (panel lateral) */
+            '.qida-asst-panel{display:flex;flex-direction:column;width:30%;min-width:340px;max-width:480px;border-left:1px solid var(--s200);background:#fff;flex-shrink:0;}',
+            '.qida-asst-panel-head{padding:14px 16px;border-bottom:1px solid var(--s200);display:flex;align-items:center;gap:8px;}',
+            '.qida-asst-panel-q{flex:1;font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:14px;color:var(--s900);line-height:1.3;}',
+            '.qida-asst-panel-close{background:transparent;border:0;padding:6px;border-radius:6px;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}',
+            '.qida-asst-panel-close:hover{background:var(--s100);color:var(--s900);}',
+            '.qida-asst-panel-body{flex:1;overflow-y:auto;padding:14px 16px;background:var(--s50);}',
+            '.qida-asst-bloque{margin-bottom:18px;}',
+            '.qida-asst-bloque-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}',
+            '.qida-asst-bloque-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--s700);display:inline-flex;align-items:center;gap:6px;}',
+            '.qida-asst-bloque-count{font-size:10px;color:var(--s500);}',
+            '.qida-asst-result{background:#fff;border:1px solid var(--s200);border-radius:8px;padding:10px 12px;margin-bottom:6px;cursor:pointer;transition:border-color .15s;}',
+            '.qida-asst-result:hover{border-color:var(--qg);}',
+            '.qida-asst-result-name{font-size:12px;font-weight:600;color:var(--s900);line-height:1.3;}',
+            '.qida-asst-result-meta{font-size:10px;color:var(--s500);margin-top:2px;display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;}',
+            '.qida-asst-result-text{font-size:12px;color:var(--s700);line-height:1.4;margin-top:4px;}',
+            '.qida-asst-result-actions{display:flex;gap:6px;margin-top:6px;}',
+            '.qida-asst-empty{padding:14px;background:#fff;border:1px dashed var(--s200);border-radius:8px;text-align:center;font-size:11px;color:var(--s500);font-style:italic;}',
+
+            /* Skeleton loaders */
+            '.qida-skel{background:linear-gradient(90deg,#e7e5e4 0%,#f5f5f4 50%,#e7e5e4 100%);background-size:200% 100%;border-radius:6px;animation:qida-skel 1.2s infinite linear;}',
+            '@keyframes qida-skel{0%{background-position:200% 0;}100%{background-position:-200% 0;}}',
+            '.qida-skel-line{height:10px;margin-bottom:6px;}',
+            '.qida-skel-card{padding:10px 12px;background:#fff;border:1px solid var(--s200);border-radius:8px;margin-bottom:6px;}',
+
+            /* Cobertura tooltip refinado */
+            '.qida-cov-hint{font-size:10px;color:var(--s500);margin-top:4px;font-style:italic;}',
+
             /* Responsive */
-            '@media (max-width:1100px){.qida-pane-wa{width:280px;}.qida-pane-right{width:280px;}}',
-            '@media (max-width:900px){.qida-pane-wa{width:240px;}.qida-pane-right{display:none;}}',
-            '@media (max-width:760px){.qida-pane-wa{display:none;}.qida-search input{padding-right:38px;}.qida-search-hint{display:none;}.qida-care-grid{grid-template-columns:1fr;}}'
+            '@media (max-width:1100px){.qida-pane-wa{width:280px;}.qida-pane-right{width:280px;}.qida-asst-panel{width:34%;}}',
+            '@media (max-width:900px){.qida-pane-wa{width:240px;}.qida-pane-right{display:none;}.qida-asst-panel{width:100%;position:absolute;inset:0;z-index:5;}}',
+            '@media (max-width:760px){.qida-pane-wa{display:none;}.qida-search input{padding-right:38px;}.qida-search-hint{display:none;}.qida-care-grid{grid-template-columns:1fr;}.qida-dash-container{padding:16px;gap:16px;}.qida-asst-exp{width:100%;}}'
         ].join('');
 
         var style = document.createElement('style');
@@ -873,7 +1290,7 @@
     // ============================================================
     function renderCoverage() {
         var pct = coveragePct();
-        var tooltip = 'El objetivo del proyecto es llevar la cobertura del 3er mensaje del 37% al ' + COVERAGE_TARGET + '%.';
+        var tooltip = 'El objetivo del proyecto es llevar la cobertura del 3er mensaje del 37% al ' + COVERAGE_TARGET + '%. Scope: cartera activa (entryDate < 15 dias o pausa explicita).';
 
         function chip(bucket, labelMain, labelSub, extraRight) {
             var n = countByCoverage(bucket);
@@ -889,7 +1306,7 @@
 
         return '<div class="qida-coverage" title="' + esc(tooltip) + '">'
             + '<div class="qida-coverage-head">'
-                + '<span class="qida-coverage-title">' + icon('target', 12) + 'Tu cobertura &mdash; esta semana</span>'
+                + '<span class="qida-coverage-title">' + icon('target', 12) + 'Tu cobertura &mdash; cartera activa (ventana 15 dias)</span>'
                 + '<span class="qida-coverage-target">Meta del 3er msg: <strong>' + COVERAGE_TARGET + '%</strong></span>'
             + '</div>'
             + '<div class="qida-coverage-row">'
@@ -898,21 +1315,37 @@
                 + chip(2, '2 contactos',   '2 mensajes', '')
                 + chip(3, '3+ contactos',  'Cobertura completa', '<span class="qida-cov-pct">' + pct + '%</span>')
             + '</div>'
+            + '<div class="qida-cov-hint">El objetivo del proyecto es llevar la cobertura del 3er mensaje del 37% al ' + COVERAGE_TARGET + '%.</div>'
         + '</div>';
     }
 
     // ============================================================
-    // RENDER: dashboard table
+    // RENDER: dashboard table (modulo)
     // ============================================================
+    // TODO v1.4: estados especiales en filas
+    // - Acento lateral rojo para leads con urgent=true
+    // - Badge "Reactiva en X dias" para pausados con pausaUntil < 7d
+    // - Badge "Cierra ventana en X dias" para leads con entryDate > 12d
+    // (Postergado a P1 segun decision del 15-may. Implementar en renderLeadsRows
+    // junto con styles `.qida-row-urgent`, `.qida-row-react-badge`, `.qida-row-window-badge`.)
+
     function renderLeadsRows() {
         var leads = getFilteredLeads();
         if (leads.length === 0) {
-            return '<tr><td colspan="8" class="qida-empty">No hay leads que coincidan con este filtro o busqueda.</td></tr>';
+            return '<tr><td colspan="9" class="qida-empty">No hay leads que coincidan con este filtro o busqueda.</td></tr>';
         }
         var html = '';
         for (var i = 0; i < leads.length; i++) {
             var l = leads[i];
             var t = getLeadTemperature(l);
+            var nextLabel = l.nextScheduledFollowUp ? formatDateEs(l.nextScheduledFollowUp) : '&mdash;';
+            var nextDiff = l.nextScheduledFollowUp ? daysBetween(l.nextScheduledFollowUp) : null;
+            var nextCls = '';
+            var nextHint = '';
+            if (nextDiff != null) {
+                if (nextDiff < 0) { nextCls = ' style="color:var(--red600);font-weight:500;"'; nextHint = ' <span style="font-size:10px;opacity:.75;">(vencido)</span>'; }
+                else if (nextDiff === 0) { nextCls = ' style="color:var(--qg);font-weight:600;"'; nextHint = ' <span style="font-size:10px;">(hoy)</span>'; }
+            }
             html += '<tr data-action="select-lead" data-id="' + esc(l.id) + '">'
                 + '<td><div><div class="qida-lead-name">' + esc(l.name) + '</div>'
                 + '<div class="qida-lead-meta"><span style="display:inline-flex;align-items:center;gap:2px;">' + icon('mapPin', 9) + esc(l.location) + '</span>'
@@ -923,6 +1356,7 @@
                 + '<td>' + renderUrg(l.urgency) + '</td>'
                 + '<td>' + renderDays(l.daysWithoutTouch, t) + '</td>'
                 + '<td><span style="font-size:12px;color:var(--s700);">' + l.interactionCount + '</span></td>'
+                + '<td><span style="font-size:12px;color:var(--s700);"' + nextCls + '>' + nextLabel + nextHint + '</span></td>'
                 + '<td><span class="qida-stage">' + esc(l.stage) + '</span></td>'
                 + '</tr>';
         }
@@ -930,46 +1364,246 @@
     }
 
     // ============================================================
-    // RENDER: dashboard
+    // RENDER: dashboard v2 (4 secciones)
     // ============================================================
     function renderDashboard() {
-        var totalLeads = MOCK_LEADS.length;
-        var nCaliente = countByOperational('caliente');
-        var nTemplado = countByOperational('templado');
-        var nFrio = countByOperational('frio-reactivar');
-        var nPausa = countByOperational('pausa');
-        var nUrgente = countByOperational('urgente');
-        var nSinContactar = countByOperational('sin-contactar');
+        return '<div class="qida-dash-flex" style="display:flex;flex:1;min-height:0;overflow:hidden;">'
+            + '<div class="qida-dash-v2">'
+                + '<div class="qida-dash-container">'
+                    + renderCoverageSection()
+                    + renderDailySuggestionsSection()
+                    + renderScheduledSection()
+                    + renderTableSection()
+                + '</div>'
+            + '</div>'
+            + (state.assistantState === 'results' ? renderAssistantPanel() : '')
+        + '</div>';
+    }
+
+    function renderCoverageSection() {
+        // El widget de cobertura ya tiene su propio chrome visual (gradient header), envuelvo en seccion plana.
+        return '<section class="qida-section" style="overflow:hidden;">' + renderCoverage() + '</section>';
+    }
+
+    // ============================================================
+    // RENDER: sugerencias del dia (seccion 2)
+    // ============================================================
+    function renderDailySuggestionsSection() {
+        var all = SuggestionsService.listSync();
+        var visible = all.slice(0, 5);
+        var hidden = all.length - visible.length;
+        var totalLabel = all.length === 0 ? '0' : all.length;
+
+        var body;
+        if (all.length === 0) {
+            body = '<div class="qida-sug-empty">'
+                + '<span class="qida-sug-empty-icon">' + icon('check', 24) + '</span>'
+                + '<span class="qida-sug-empty-title">Sin sugerencias para hoy</span>'
+                + '<span class="qida-sug-empty-sub">Aprovecha para retomar los Frios a reactivar de la tabla.</span>'
+            + '</div>';
+        } else {
+            var cards = '';
+            for (var i = 0; i < visible.length; i++) cards += renderSuggestionCard(visible[i]);
+            body = '<div class="qida-sug-grid">' + cards + '</div>'
+                + (hidden > 0
+                    ? '<div style="margin-top:10px;text-align:right;">'
+                        + '<button class="qida-link-btn" data-action="suggestion-show-all">Ver todas (' + all.length + ') ' + icon('arrowRight', 11) + '</button>'
+                    + '</div>'
+                    : '');
+        }
+
+        return '<section class="qida-section">'
+            + '<div class="qida-section-h">'
+                + '<span class="qida-section-h-title">' + icon('sparkles', 14) + ' Sugerencias del dia</span>'
+                + '<span class="qida-section-h-count">' + totalLabel + ' lead' + (all.length === 1 ? '' : 's') + ' que necesitan tu atencion hoy</span>'
+            + '</div>'
+            + '<div class="qida-section-body">' + body + '</div>'
+        + '</section>';
+    }
+
+    function renderSuggestionCard(sug) {
+        var lead = getLead(sug.leadId);
+        if (!lead) return '';
+        var temp = getLeadTemperature(lead);
+        var fuLabel = sug.suggestedFollowUpNumber === 1 ? '1er msg'
+                    : sug.suggestedFollowUpNumber === 2 ? '2do msg'
+                    : sug.suggestedFollowUpNumber === 3 ? '3er msg'
+                    : sug.suggestedFollowUpNumber + 'o msg';
+
+        // Si la sugerencia tiene un nextScheduledFollowUp ya creado, indicar.
+        var hasScheduled = false;
+        for (var i = 0; i < EDITS.scheduledActivities.length; i++) {
+            if (EDITS.scheduledActivities[i].leadId === lead.id) { hasScheduled = true; break; }
+        }
+        if (!hasScheduled && lead.nextScheduledFollowUp) {
+            var diff = daysBetween(lead.nextScheduledFollowUp);
+            if (diff >= 0) hasScheduled = true;
+        }
+
+        var ppOpen = (state.postponeOpenFor === sug.id);
+
+        return '<div class="qida-sug' + (sug.urgent ? ' urgent' : '') + '">'
+            + '<div class="qida-sug-top">'
+                + '<div class="qida-sug-lead">'
+                    + '<span class="qida-sug-name">' + esc(lead.name) + '</span>'
+                    + '<span class="qida-sug-meta">' + renderTempBadge(temp, getLeadTemperatureSource(lead), true)
+                        + '<span>&middot;</span><span>' + esc(lead.location) + '</span>'
+                        + '<span>&middot;</span><span>' + esc(lead.elderly) + '</span>'
+                    + '</span>'
+                + '</div>'
+                + '<div class="qida-sug-badges">'
+                    + '<span class="qida-sug-fu' + (sug.urgent ? ' urgent' : '') + '">' + icon('sparkles', 9) + ' ' + esc(fuLabel) + '</span>'
+                + '</div>'
+            + '</div>'
+            + '<p class="qida-sug-reason">' + esc(sug.reason) + '</p>'
+            + (hasScheduled
+                ? '<span class="qida-sug-aux">' + icon('calendar', 10) + ' + actividad agendada</span>'
+                : '')
+            + '<div class="qida-sug-actions">'
+                + '<button class="qida-sug-btn primary" data-action="suggestion-open" data-id="' + esc(sug.leadId) + '">' + icon('arrowRight', 11) + ' Abrir</button>'
+                + '<button class="qida-sug-btn success" data-action="suggestion-done" data-id="' + esc(sug.id) + '" data-lead="' + esc(sug.leadId) + '">' + icon('check', 11) + ' Marcar hecho</button>'
+                + '<div class="qida-pp-wrap">'
+                    + '<button class="qida-sug-btn" data-action="suggestion-postpone-toggle" data-id="' + esc(sug.id) + '">' + icon('clock', 11) + ' Posponer ' + icon('chevDown', 10) + '</button>'
+                    + (ppOpen
+                        ? '<div class="qida-pp-menu">'
+                            + '<button class="qida-pp-opt" data-action="suggestion-postpone" data-id="' + esc(sug.id) + '" data-days="1">Manana</button>'
+                            + '<button class="qida-pp-opt" data-action="suggestion-postpone" data-id="' + esc(sug.id) + '" data-days="7">En 7 dias</button>'
+                            + '<button class="qida-pp-opt" data-action="suggestion-postpone" data-id="' + esc(sug.id) + '" data-days="14">En 14 dias</button>'
+                            + '<button class="qida-pp-opt" data-action="suggestion-postpone-custom" data-id="' + esc(sug.id) + '">Custom...</button>'
+                          + '</div>'
+                        : '')
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    // ============================================================
+    // RENDER: actividades agendadas (seccion 3)
+    // ============================================================
+    function renderScheduledSection() {
+        // Dedupe contra sugerencias del dia (no mostrar actividades cuyo leadId ya esta sugerido)
+        var sugLeadIds = {};
+        var sugs = SuggestionsService.listSync();
+        for (var i = 0; i < sugs.length; i++) sugLeadIds[sugs[i].leadId] = true;
+
+        var all = ActivityService.listTodayAndOverdueSync();
+        var deduped = [];
+        for (var j = 0; j < all.length; j++) {
+            if (sugLeadIds[all[j].leadId]) continue;
+            deduped.push(all[j]);
+        }
+        var n = deduped.length;
+        var collapsed = state.collapsedScheduled;
+
+        var body;
+        if (collapsed) {
+            body = '';
+        } else if (n === 0) {
+            body = '<div class="qida-sched-empty">Sin actividades agendadas para hoy ni vencidas.</div>';
+        } else {
+            // ordenar: vencidas primero (mas vencidas arriba), luego hoy
+            deduped.sort(function (a, b) {
+                var da = daysBetween(a.deadline);
+                var db = daysBetween(b.deadline);
+                return da - db;
+            });
+            var cards = '';
+            for (var k = 0; k < deduped.length; k++) cards += renderScheduledCard(deduped[k]);
+            body = '<div class="qida-sched-list">' + cards + '</div>';
+        }
+
+        return '<section class="qida-section">'
+            + '<div class="qida-section-h">'
+                + '<span class="qida-section-h-title">' + icon('calendar', 14) + ' Actividades agendadas</span>'
+                + '<span class="qida-section-h-count">' + n + ' para hoy o vencidas</span>'
+                + '<div class="qida-section-h-actions">'
+                    + '<button class="qida-section-h-toggle" data-action="toggle-scheduled">'
+                        + (collapsed ? icon('chevDown', 12) + ' Expandir' : icon('chevUp', 12) + ' Colapsar')
+                    + '</button>'
+                + '</div>'
+            + '</div>'
+            + (collapsed ? '' : '<div class="qida-section-body">' + body + '</div>')
+        + '</section>';
+    }
+
+    function renderScheduledCard(act) {
+        var lead = getLead(act.leadId);
+        var diff = daysBetween(act.deadline);
+        var isOverdue = diff < 0;
+        var isToday = diff === 0;
+        var cls = 'qida-sched' + (isOverdue ? ' overdue' : (isToday ? ' today' : ''));
+        var badgeHtml = '';
+        if (isOverdue) badgeHtml = '<span class="qida-sched-badge overdue">Vencida hace ' + Math.abs(diff) + ' dia' + (Math.abs(diff) === 1 ? '' : 's') + '</span>';
+        else if (isToday) badgeHtml = '<span class="qida-sched-badge today">Hoy</span>';
+
+        var iconName = act.type === 'Llamada' ? 'phone' : (act.type === 'Recordatorio' ? 'clock' : 'check');
+
+        return '<div class="' + cls + '" data-action="scheduled-open" data-id="' + esc(act.leadId) + '">'
+            + '<div class="qida-sched-icon">' + icon(iconName, 14) + '</div>'
+            + '<div class="qida-sched-body">'
+                + '<div class="qida-sched-summary">' + esc(act.summary) + '</div>'
+                + '<div class="qida-sched-meta">'
+                    + (lead ? '<strong>' + esc(lead.name) + '</strong>' : esc(act.leadId))
+                    + '<span>&middot;</span><span>' + icon('calendar', 10) + ' ' + esc(formatDateEs(act.deadline)) + '</span>'
+                    + '<span>&middot;</span><span>' + esc(act.assignee) + '</span>'
+                + '</div>'
+            + '</div>'
+            + badgeHtml
+            + '<button class="qida-sched-done" data-action="scheduled-done" data-id="' + esc(act.id) + '" data-lead="' + esc(act.leadId) + '" data-stop="1">'
+                + icon('check', 11) + ' Marcar hecho'
+            + '</button>'
+        + '</div>';
+    }
+
+    // ============================================================
+    // RENDER: tabla colapsable (seccion 4)
+    // ============================================================
+    function renderTableSection() {
+        var nCaliente   = countByOperational('caliente');
+        var nTemplado   = countByOperational('templado');
+        var nFrio       = countByOperational('frio-reactivar');
+        var nPausa      = countByOperational('pausa');
+        var nUrgente    = countByOperational('urgente');
+        var nHistorico  = countByOperational('historico');
+        var nTodos      = countByOperational('todos');
         var nPausaReact = pausaReactivacionEstaSemana();
-        var filtered = getFilteredLeads();
+        var filtered   = getFilteredLeads();
+        var collapsed  = state.collapsedTable;
 
         function chip(id, label, count, extra) {
             var cls = 'qida-chip' + (state.activeFilter === id ? ' active' : '');
-            return '<button class="' + cls + '" data-action="set-filter" data-id="' + id + '">'
+            return '<button class="' + cls + '" data-action="set-filter" data-id="' + id + '" data-stop="1">'
                 + esc(label) + '<span class="qida-chip-count">' + count + '</span>'
                 + (extra ? '<span class="qida-chip-extra">' + extra + '</span>' : '')
             + '</button>';
         }
 
-        return '<div class="qida-dash">'
-            + renderCoverage()
-            + '<div class="qida-dash-top">'
-                + '<div class="qida-search">'
-                    + '<span class="qida-search-icon">' + icon('search', 16) + '</span>'
-                    + '<input type="text" data-input="search" value="' + esc(state.searchQuery) + '" placeholder=\'Buscar en tus leads &mdash; p.ej. "familias con dudas de precio" o "alta hospitalaria"\' />'
-                    + '<span class="qida-search-hint">' + icon('sparkles', 10) + ' Busqueda inteligente</span>'
-                + '</div>'
-                + '<div class="qida-chips">'
-                    + chip('todos', 'Todos', totalLeads)
+        var header = '<div class="qida-table-header-bar" data-action="toggle-table">'
+            + '<span class="qida-section-h-title">' + icon('listOrdered', 14) + ' Toda tu cartera</span>'
+            + '<span class="qida-section-h-count">' + filtered.length + ' de ' + nTodos + ' activos</span>'
+            + '<div class="qida-section-h-actions">'
+                + '<button class="qida-section-h-toggle" data-action="toggle-table" data-stop="1">'
+                    + (collapsed ? icon('chevDown', 12) + ' Expandir' : icon('chevUp', 12) + ' Colapsar')
+                + '</button>'
+            + '</div>'
+        + '</div>';
+
+        if (collapsed) {
+            return '<section class="qida-section">' + header + '</section>';
+        }
+
+        return '<section class="qida-section">'
+            + header
+            + '<div class="qida-table-body">'
+                + '<div class="qida-chips" style="margin-bottom:12px;">'
+                    + chip('todos', 'Todos', nTodos)
                     + chip('caliente', 'Calientes', nCaliente)
                     + chip('templado', 'Templados', nTemplado)
                     + chip('frio-reactivar', 'Frios a reactivar', nFrio)
                     + chip('pausa', 'Pausados', nPausa, nPausaReact > 0 ? '(' + nPausaReact + ' reactivan esta semana)' : '')
                     + chip('urgente', 'Urgentes', nUrgente)
-                    + chip('sin-contactar', 'Sin contactar', nSinContactar)
+                    + chip('historico', 'Historico', nHistorico)
                 + '</div>'
-            + '</div>'
-            + '<div class="qida-dash-body">'
                 + '<div class="qida-table-wrap">'
                     + '<table class="qida-table">'
                         + '<thead><tr>'
@@ -980,17 +1614,127 @@
                             + renderSortHeader('urgencia',      'Urgencia')
                             + renderSortHeader('dias',          'Sin tocar')
                             + renderSortHeader('interacciones', 'Interacc.')
+                            + renderSortHeader('proximo',       'Proximo seg.')
                             + renderSortHeader('etapa',         'Etapa')
                         + '</tr></thead>'
                         + '<tbody id="qida-leads-tbody">' + renderLeadsRows() + '</tbody>'
                     + '</table>'
                 + '</div>'
                 + '<div class="qida-dash-footer">'
-                    + '<span id="qida-leads-count">' + filtered.length + ' de ' + totalLeads + ' leads</span>'
+                    + '<span id="qida-leads-count">' + filtered.length + ' de ' + nTodos + ' leads</span>'
                     + '<span>Actualizado hace 2 min &middot; sincronizado con Odoo</span>'
                 + '</div>'
             + '</div>'
+        + '</section>';
+    }
+
+    // ============================================================
+    // RENDER: Asistente flotante (3 estados)
+    // ============================================================
+    // Estado 1 (closed): pill bottom-right "Pregunta cualquier cosa..."
+    // Estado 2 (expanded): input expandido con sugerencias
+    // Estado 3 (results): panel lateral 30% con Leads / Conversaciones / Material
+    function renderAssistantPill() {
+        return '<button class="qida-asst-pill" data-action="assistant-open">'
+            + icon('sparkles', 14) + ' Pregunta cualquier cosa... <kbd>/</kbd>'
+        + '</button>';
+    }
+
+    function renderAssistantExpanded() {
+        var q = state.assistantQuery;
+        return '<div class="qida-asst-exp-bg" data-action="assistant-close-bg">'
+            + '<div class="qida-asst-exp" data-stop="1">'
+                + '<div class="qida-asst-exp-title">' + icon('sparkles', 12) + ' Asistente</div>'
+                + '<div class="qida-asst-exp-row">'
+                    + '<input class="qida-asst-input" type="text" data-input="assistant-q" id="qida-asst-input" value="' + esc(q) + '" placeholder=\'Buscar leads, conversaciones o material &mdash; p.ej. "familias que dudaban del precio"\' />'
+                    + '<button class="qida-asst-send" data-action="assistant-submit"' + (q.trim() ? '' : ' disabled') + '>' + icon('send', 14) + '</button>'
+                + '</div>'
+                + '<div class="qida-asst-hints">'
+                    + '<button class="qida-asst-hint" data-action="assistant-hint" data-q="familias que dudaban del precio">familias que dudaban del precio</button>'
+                    + '<button class="qida-asst-hint" data-action="assistant-hint" data-q="alta hospitalaria">alta hospitalaria</button>'
+                    + '<button class="qida-asst-hint" data-action="assistant-hint" data-q="interno vs externo">interno vs externo</button>'
+                + '</div>'
+            + '</div>'
         + '</div>';
+    }
+
+    function renderAssistantPanel() {
+        var q = state.assistantQuery;
+        var results = state.assistantResults;
+        var loading = state.assistantLoading;
+
+        function skel(n) {
+            var s = '';
+            for (var i = 0; i < n; i++) {
+                s += '<div class="qida-skel-card">'
+                    + '<div class="qida-skel qida-skel-line" style="width:70%;"></div>'
+                    + '<div class="qida-skel qida-skel-line" style="width:90%;"></div>'
+                    + '<div class="qida-skel qida-skel-line" style="width:40%;"></div>'
+                + '</div>';
+            }
+            return s;
+        }
+
+        function bloque(title, ico, items, render, totalKey) {
+            var count = (results && results[totalKey]) ? results[totalKey].length : 0;
+            return '<div class="qida-asst-bloque">'
+                + '<div class="qida-asst-bloque-h">'
+                    + '<span class="qida-asst-bloque-title">' + icon(ico, 11) + ' ' + esc(title) + '</span>'
+                    + '<span class="qida-asst-bloque-count">' + (loading ? '' : count + ' resultado' + (count === 1 ? '' : 's')) + '</span>'
+                + '</div>'
+                + (loading
+                    ? skel(2)
+                    : (items.length === 0
+                        ? '<div class="qida-asst-empty">Sin resultados para "' + esc(q) + '" en ' + esc(title.toLowerCase()) + '.</div>'
+                        : items.map(render).join('')
+                    )
+                )
+            + '</div>';
+        }
+
+        var body = '';
+        if (loading) {
+            body = bloque('Leads', 'users', [], function () {}, 'leads')
+                 + bloque('Conversaciones', 'msg', [], function () {}, 'conversations')
+                 + bloque('Material', 'book', [], function () {}, 'material');
+        } else if (!results || (results.leads.length === 0 && results.conversations.length === 0 && results.material.length === 0)) {
+            body = '<div class="qida-asst-empty">Sin resultados para "' + esc(q) + '". Probá con otra busqueda.</div>';
+        } else {
+            body = bloque('Leads', 'users', results.leads, function (l) {
+                return '<div class="qida-asst-result" data-action="assistant-open-lead" data-id="' + esc(l.id) + '">'
+                    + '<div class="qida-asst-result-name">' + esc(l.name) + '</div>'
+                    + '<div class="qida-asst-result-meta">' + renderTempBadge(getLeadTemperature(l), getLeadTemperatureSource(l), true)
+                        + '<span>&middot;</span><span>' + esc(l.location) + '</span>'
+                        + '<span>&middot;</span><span>' + esc(l.serviceType || '-') + '</span>'
+                    + '</div>'
+                + '</div>';
+            }, 'leads');
+
+            body += bloque('Conversaciones (WhatsApp)', 'msg', results.conversations, function (c) {
+                return '<div class="qida-asst-result" data-action="assistant-open-lead" data-id="' + esc(c.leadId) + '">'
+                    + '<div class="qida-asst-result-name">' + esc(c.leadName) + '</div>'
+                    + '<div class="qida-asst-result-meta">' + esc(c.from === 'lead' ? 'Lead' : 'AF') + ' &middot; ' + esc(c.time) + '</div>'
+                    + '<div class="qida-asst-result-text">"' + esc(c.text) + '"</div>'
+                + '</div>';
+            }, 'conversations');
+
+            body += bloque('Material', 'book', results.material, function (m) {
+                return '<div class="qida-asst-result" data-action="assistant-open-material" data-id="' + esc(m.id) + '">'
+                    + '<div class="qida-asst-result-name">' + esc(m.title) + '</div>'
+                    + '<div class="qida-asst-result-meta">' + esc(m.tag) + ' &middot; match ' + esc(m.match) + '</div>'
+                + '</div>';
+            }, 'material');
+        }
+
+        return '<aside class="qida-asst-panel">'
+            + '<div class="qida-asst-panel-head">'
+                + icon('sparkles', 13)
+                + '<span class="qida-asst-panel-q">' + esc(q || 'Busqueda asistida') + '</span>'
+                + '<button class="qida-asst-panel-close" data-action="assistant-edit" aria-label="Editar busqueda">' + icon('edit', 13) + '</button>'
+                + '<button class="qida-asst-panel-close" data-action="assistant-close" aria-label="Cerrar">' + icon('x', 14) + '</button>'
+            + '</div>'
+            + '<div class="qida-asst-panel-body">' + body + '</div>'
+        + '</aside>';
     }
 
     // ============================================================
@@ -1441,6 +2185,7 @@
         if (!content) return;
         content.innerHTML = renderContent();
         syncScheduleModal();
+        syncAssistantFloating();
         syncToast();
     }
 
@@ -1448,7 +2193,34 @@
         var tbody = document.getElementById('qida-leads-tbody');
         if (tbody) tbody.innerHTML = renderLeadsRows();
         var count = document.getElementById('qida-leads-count');
-        if (count) count.textContent = getFilteredLeads().length + ' de ' + MOCK_LEADS.length + ' leads';
+        if (count) count.textContent = getFilteredLeads().length + ' de ' + countByOperational('todos') + ' leads';
+    }
+
+    // Pill (estado 1) y expanded (estado 2) flotan en el shell, no en el content scrollable.
+    // El panel lateral (estado 3) sale dentro de renderDashboard porque shrinkea el content.
+    function syncAssistantFloating() {
+        var shell = document.getElementById('qida-shell');
+        if (!shell) return;
+        var existing = document.getElementById('qida-asst-floating');
+        if (existing) existing.parentNode.removeChild(existing);
+        // Solo flotamos en el dashboard, no en el detail.
+        if (state.view !== 'dashboard') return;
+        if (state.assistantState === 'closed') {
+            var pill = document.createElement('div');
+            pill.id = 'qida-asst-floating';
+            pill.innerHTML = renderAssistantPill();
+            shell.appendChild(pill);
+        } else if (state.assistantState === 'expanded') {
+            var exp = document.createElement('div');
+            exp.id = 'qida-asst-floating';
+            exp.innerHTML = renderAssistantExpanded();
+            shell.appendChild(exp);
+            // Auto-focus input cuando aparece
+            setTimeout(function () {
+                var inp = document.getElementById('qida-asst-input');
+                if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+            }, 30);
+        }
     }
 
     function syncScheduleModal() {
@@ -1511,7 +2283,22 @@
 
     function handleClick(e) {
         var target = findActionTarget(e.target);
-        if (!target) return;
+
+        // Auto-cerrar dropdown de posponer si clickeo fuera de el o sus opciones.
+        if (state.postponeOpenFor) {
+            var keepOpen = false;
+            if (target) {
+                var a = target.getAttribute('data-action');
+                if (a === 'suggestion-postpone-toggle' || a === 'suggestion-postpone' || a === 'suggestion-postpone-custom') keepOpen = true;
+            }
+            if (!keepOpen) state.postponeOpenFor = null;
+        }
+
+        if (!target) {
+            // Si cerramos el dropdown, re-render para reflejarlo.
+            if (state.postponeOpenFor === null) rerenderContent();
+            return;
+        }
         var action = target.getAttribute('data-action');
         var id = target.getAttribute('data-id');
 
@@ -1539,6 +2326,80 @@
                 handleSetSort(id);
                 return;
 
+            // --- v1.3: secciones colapsables ---
+            case 'toggle-table':
+                setState({ collapsedTable: !state.collapsedTable });
+                return;
+            case 'toggle-scheduled':
+                setState({ collapsedScheduled: !state.collapsedScheduled });
+                return;
+
+            // --- v1.3: sugerencias del dia ---
+            case 'suggestion-open':
+                setState({ view: 'detail', currentLeadId: id, activePanel: 'templates', editingTemp: false, editingIaSummary: false, addingNote: false });
+                return;
+            case 'suggestion-done':
+                openScheduleFromSuggestion(id, target.getAttribute('data-lead'));
+                return;
+            case 'suggestion-postpone-toggle':
+                setState({ postponeOpenFor: (state.postponeOpenFor === id ? null : id) });
+                return;
+            case 'suggestion-postpone':
+                var days = parseInt(target.getAttribute('data-days'), 10) || 1;
+                SuggestionsService.postpone(id, addDaysISO(days));
+                state.postponeOpenFor = null;
+                rerenderContent();
+                showToast('Sugerencia pospuesta ' + days + ' dia' + (days === 1 ? '' : 's'));
+                return;
+            case 'suggestion-postpone-custom':
+                // P1: abrir un date picker dedicado. Por ahora, posponer 30 dias.
+                SuggestionsService.postpone(id, addDaysISO(30));
+                state.postponeOpenFor = null;
+                rerenderContent();
+                showToast('Sugerencia pospuesta 30 dias (custom date picker en P1)');
+                return;
+            case 'suggestion-show-all':
+                showToast('Ver todas: pendiente para P1');
+                return;
+
+            // --- v1.3: actividades agendadas ---
+            case 'scheduled-open':
+                setState({ view: 'detail', currentLeadId: id, activePanel: 'templates', editingTemp: false, editingIaSummary: false, addingNote: false });
+                return;
+            case 'scheduled-done':
+                openScheduleFromActivity(id, target.getAttribute('data-lead'));
+                return;
+
+            // --- v1.3: asistente flotante ---
+            case 'assistant-open':
+                setState({ assistantState: 'expanded' });
+                return;
+            case 'assistant-close-bg':
+                if (e.target === target) setState({ assistantState: 'closed', assistantQuery: state.assistantState === 'results' ? state.assistantQuery : '', assistantResults: null });
+                return;
+            case 'assistant-close':
+                setState({ assistantState: 'closed', assistantQuery: '', assistantResults: null, assistantLoading: false });
+                return;
+            case 'assistant-edit':
+                setState({ assistantState: 'expanded' });
+                return;
+            case 'assistant-hint':
+                state.assistantQuery = target.getAttribute('data-q') || '';
+                runAssistantSearch();
+                return;
+            case 'assistant-submit':
+                // Leemos del input si esta en expanded
+                var inp = document.getElementById('qida-asst-input');
+                if (inp) state.assistantQuery = inp.value;
+                runAssistantSearch();
+                return;
+            case 'assistant-open-lead':
+                setState({ view: 'detail', currentLeadId: id, activePanel: 'templates', assistantState: 'closed', assistantResults: null, assistantQuery: '', editingTemp: false, editingIaSummary: false, addingNote: false });
+                return;
+            case 'assistant-open-material':
+                showToast('Abriendo material "' + id + '" (mock)');
+                return;
+
             case 'set-panel':         setState({ activePanel: id }); return;
             case 'toggle-edit-temp':  setState({ editingTemp: !state.editingTemp }); return;
             case 'set-temp':
@@ -1560,7 +2421,6 @@
                 return;
             case 'regen-ia-summary':
                 showToast('Regenerando resumen IA... (mock)');
-                // En mock no cambia nada; en P1 reemplazaria por una llamada real.
                 return;
 
             case 'start-add-note':    setState({ addingNote: true }); return;
@@ -1584,26 +2444,19 @@
                 return;
 
             case 'open-schedule':
-                var lead = getLead(state.currentLeadId);
-                var defaultIso = addDaysISO(7);
-                setState({
-                    showScheduleModal: true,
-                    scheduleDate: defaultIso,
-                    scheduleNote: lead ? buildScheduleNote(lead) : '',
-                    scheduleMarkPause: false
-                });
+                openScheduleFromDetail();
                 return;
             case 'schedule-cancel':
-                setState({ showScheduleModal: false, scheduleDate: null, scheduleNote: '', scheduleMarkPause: false });
+                closeScheduleModal();
                 return;
             case 'schedule-bg':
-                if (e.target === target) setState({ showScheduleModal: false, scheduleDate: null, scheduleNote: '', scheduleMarkPause: false });
+                if (e.target === target) closeScheduleModal();
                 return;
             case 'schedule-shortcut':
-                var days = parseInt(id, 10);
-                var iso = addDaysISO(days);
-                state.scheduleDate = iso;
-                state.scheduleMarkPause = (days > 21);
+                var days2 = parseInt(id, 10);
+                var iso2 = addDaysISO(days2);
+                state.scheduleDate = iso2;
+                state.scheduleMarkPause = (days2 > 21);
                 rerenderContent();
                 return;
             case 'schedule-confirm':
@@ -1613,6 +2466,81 @@
                 handleScheduleCloseApply();
                 return;
         }
+    }
+
+    function openScheduleFromDetail() {
+        var lead = getLead(state.currentLeadId);
+        var defaultIso = addDaysISO(7);
+        setState({
+            showScheduleModal: true,
+            scheduleDate: defaultIso,
+            scheduleNote: lead ? buildScheduleNote(lead) : '',
+            scheduleMarkPause: false,
+            scheduleOrigin: 'detail',
+            scheduleLeadIdOverride: null
+        });
+    }
+
+    // Reuse del Schedule modal desde "Marcar hecho" de Sugerencias del dia.
+    // Mantiene la opcion "Cerrar lead sin agendar" (Perdido / Convertido / Sin interes / Otro)
+    // segun ajuste del 15-may.
+    function openScheduleFromSuggestion(sugId, leadId) {
+        var lead = getLead(leadId);
+        var defaultIso = addDaysISO(7);
+        setState({
+            showScheduleModal: true,
+            scheduleDate: defaultIso,
+            scheduleNote: lead ? buildScheduleNote(lead) : '',
+            scheduleMarkPause: false,
+            scheduleOrigin: 'suggestion',
+            scheduleLeadIdOverride: leadId,
+            // Truco: guardo el sugId en el note buffer? mejor en una propiedad ad-hoc.
+            postponeOpenFor: null
+        });
+        state.__pendingSuggestionDoneId = sugId;
+    }
+
+    function openScheduleFromActivity(actId, leadId) {
+        var lead = getLead(leadId);
+        var defaultIso = addDaysISO(7);
+        setState({
+            showScheduleModal: true,
+            scheduleDate: defaultIso,
+            scheduleNote: lead ? buildScheduleNote(lead) : '',
+            scheduleMarkPause: false,
+            scheduleOrigin: 'activity',
+            scheduleLeadIdOverride: leadId
+        });
+        state.__pendingActivityDoneId = actId;
+    }
+
+    function closeScheduleModal() {
+        state.__pendingSuggestionDoneId = null;
+        state.__pendingActivityDoneId = null;
+        setState({
+            showScheduleModal: false,
+            scheduleDate: null,
+            scheduleNote: '',
+            scheduleMarkPause: false,
+            scheduleOrigin: 'detail',
+            scheduleLeadIdOverride: null
+        });
+    }
+
+    function runAssistantSearch() {
+        var q = (state.assistantQuery || '').trim();
+        if (!q) {
+            showToast('Escribi una busqueda primero');
+            return;
+        }
+        setState({ assistantState: 'results', assistantLoading: true, assistantResults: null });
+        SearchService.all(q).then(function (results) {
+            // Solo aplicar si el usuario sigue en results y la query no cambio
+            if (state.assistantState !== 'results') return;
+            state.assistantLoading = false;
+            state.assistantResults = results;
+            rerenderContent();
+        });
     }
 
     function handleSetSort(col) {
@@ -1631,23 +2559,22 @@
             showToast('Eligi una fecha antes de confirmar.');
             return;
         }
-        var lead = getLead(state.currentLeadId);
-        if (!lead) return;
+        var leadId = state.scheduleLeadIdOverride || state.currentLeadId;
+        var lead = getLead(leadId);
+        if (!lead) { showToast('Lead no encontrado.'); return; }
 
-        EDITS.scheduledActivities.push({
-            leadId: lead.id,
-            deadline: state.scheduleDate,
-            note: state.scheduleNote,
-            markPause: state.scheduleMarkPause,
-            ts: Date.now()
-        });
+        ActivityService.schedule(lead.id, state.scheduleDate, state.scheduleNote, state.scheduleMarkPause);
 
-        if (state.scheduleMarkPause) {
-            EDITS.temperatures[lead.id] = { temperature: 'pausa', source: 'AF' };
+        // Si vinimos de Sugerencias del dia o de Actividades agendadas, marcamos hecho.
+        if (state.scheduleOrigin === 'suggestion' && state.__pendingSuggestionDoneId) {
+            SuggestionsService.markDone(state.__pendingSuggestionDoneId);
+        }
+        if (state.scheduleOrigin === 'activity' && state.__pendingActivityDoneId) {
+            ActivityService.markDone(state.__pendingActivityDoneId);
         }
 
         showToast('Seguimiento agendado para ' + formatDateEs(state.scheduleDate));
-        setState({ showScheduleModal: false, scheduleDate: null, scheduleNote: '', scheduleMarkPause: false });
+        closeScheduleModal();
     }
 
     function handleScheduleCloseApply() {
@@ -1657,8 +2584,23 @@
             return;
         }
         var labels = { 'perdido': 'Perdido', 'convertido': 'Convertido', 'sin-interes': 'Sin interes', 'otro': 'Otro' };
+        var leadId = state.scheduleLeadIdOverride || state.currentLeadId;
+        LeadService.close(leadId, sel.value);
+
+        // Marcar sugerencia/actividad como hecha si aplica.
+        if (state.scheduleOrigin === 'suggestion' && state.__pendingSuggestionDoneId) {
+            SuggestionsService.markDone(state.__pendingSuggestionDoneId);
+        }
+        if (state.scheduleOrigin === 'activity' && state.__pendingActivityDoneId) {
+            ActivityService.markDone(state.__pendingActivityDoneId);
+        }
+
         showToast('Lead marcado como ' + (labels[sel.value] || sel.value) + ' (mock)');
-        setState({ showScheduleModal: false, scheduleDate: null, scheduleNote: '', scheduleMarkPause: false, view: 'dashboard', currentLeadId: null });
+
+        // Si veniamos del detail, volver al dashboard. Si veniamos del dashboard (sugerencias/actividades), mantener vista.
+        var goingBack = (state.scheduleOrigin === 'detail');
+        closeScheduleModal();
+        if (goingBack) setState({ view: 'dashboard', currentLeadId: null });
     }
 
     function handleInput(e) {
@@ -1666,21 +2608,28 @@
         if (!node || !node.getAttribute) return;
         var input = node.getAttribute('data-input');
         if (input === 'search') {
+            // search bar grande eliminado, pero por compatibilidad se mantiene la branch.
             state.searchQuery = node.value;
             rerenderTable();
+        } else if (input === 'assistant-q') {
+            state.assistantQuery = node.value;
+            // No re-render completo: solo togglear disabled del send button.
+            var sendBtn = document.querySelector('.qida-asst-send');
+            if (sendBtn) {
+                if (node.value.trim()) sendBtn.removeAttribute('disabled');
+                else sendBtn.setAttribute('disabled', '');
+            }
         } else if (input === 'schedule-date') {
             state.scheduleDate = node.value || null;
             // Si la fecha custom dispara > 21 dias, auto-tildar Pausa
             var diff = daysBetween(node.value);
             state.scheduleMarkPause = (diff > 21);
-            // Re-render para que pause toggle refleje
             rerenderContent();
         } else if (input === 'schedule-note') {
             state.scheduleNote = node.value;
         } else if (input === 'schedule-mark-pause') {
             state.scheduleMarkPause = !!node.checked;
         }
-        // ia-summary-edit y new-note los leemos del DOM al guardar; no necesitan sync.
     }
 
     // ============================================================
@@ -1743,15 +2692,47 @@
         }
     }
 
-    // ESC: schedule modal first, then main modal
+    // Keyboard global: prioridad schedule modal -> assistant -> main modal.
+    // "/" abre el asistente cuando el modal esta abierto y el dashboard activo.
+    // "Enter" dentro del input del asistente dispara la busqueda.
     document.addEventListener('keydown', function (e) {
-        if (e.key !== 'Escape' && e.keyCode !== 27) return;
         var overlay = document.querySelector('.qida-overlay.active');
         if (!overlay) return;
-        if (state.showScheduleModal) {
-            setState({ showScheduleModal: false, scheduleDate: null, scheduleNote: '', scheduleMarkPause: false });
-        } else {
-            closeModal();
+
+        var isEsc   = (e.key === 'Escape' || e.keyCode === 27);
+        var isSlash = (e.key === '/' || e.keyCode === 191);
+        var isEnter = (e.key === 'Enter' || e.keyCode === 13);
+
+        if (isEsc) {
+            if (state.showScheduleModal) {
+                closeScheduleModal();
+            } else if (state.assistantState === 'results') {
+                setState({ assistantState: 'closed', assistantQuery: '', assistantResults: null });
+            } else if (state.assistantState === 'expanded') {
+                setState({ assistantState: 'closed', assistantQuery: '' });
+            } else {
+                closeModal();
+            }
+            return;
+        }
+
+        if (isSlash && state.view === 'dashboard' && state.assistantState === 'closed' && !state.showScheduleModal) {
+            // Solo si el foco no esta en un input/textarea/etc (para no robar "/" de search en otros campos)
+            var tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+            if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') {
+                e.preventDefault();
+                setState({ assistantState: 'expanded' });
+            }
+            return;
+        }
+
+        if (isEnter) {
+            var inp = document.getElementById('qida-asst-input');
+            if (inp && document.activeElement === inp) {
+                e.preventDefault();
+                state.assistantQuery = inp.value;
+                runAssistantSearch();
+            }
         }
     });
 
@@ -1767,7 +2748,7 @@
     function closeModal() {
         var overlay = document.querySelector('.qida-overlay');
         if (overlay) overlay.className = 'qida-overlay';
-        // Reset transient state. Mantengo filter/sort/coverage/search por si vuelven al modal.
+        // Reset transient state. Mantengo filter/sort/coverage por si vuelven al modal.
         state.view = 'dashboard';
         state.currentLeadId = null;
         state.editingTemp = false;
@@ -1777,6 +2758,15 @@
         state.scheduleDate = null;
         state.scheduleNote = '';
         state.scheduleMarkPause = false;
+        state.scheduleOrigin = 'detail';
+        state.scheduleLeadIdOverride = null;
+        state.__pendingSuggestionDoneId = null;
+        state.__pendingActivityDoneId = null;
+        state.assistantState = 'closed';
+        state.assistantQuery = '';
+        state.assistantResults = null;
+        state.assistantLoading = false;
+        state.postponeOpenFor = null;
         rerenderContent();
         log('closeModal()');
     }
