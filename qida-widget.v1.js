@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.3.0
+ * QIDA ASSISTANT v1.5.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,17 +9,44 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *
- * Cambios v1.3.0 (Dashboard v2 - P0):
- *   - Dashboard reorganizado en 4 secciones verticales sobre container centrado:
- *       1. Cobertura (titulo "cartera activa ventana 15 dias")
- *       2. Sugerencias del dia (cards con Abrir/Marcar hecho/Posponer)
- *       3. Actividades agendadas (colapsable, hoy + vencidas)
- *       4. Tabla colapsada por default con chips refinados (+ Historico)
- *   - Eliminado search bar grande -> reemplazado por Asistente flotante (3 estados)
- *   - Asistente Estado 3: panel lateral 30% con resultados de Leads/Conversaciones/Material
- *   - Reuse del Schedule modal desde "Marcar hecho" (preserva opcion "Cerrar lead sin agendar")
- *   - Patron Service-like (LeadService/ActivityService/SearchService/CoverageService/SuggestionsService)
- *     con simulateLatency y TODOs explicitos para los endpoints reales de Odoo.
+ * Cambios v1.4.0 (iteracion layout AF-like, modelo Odoo Activities):
+ *   - Asistente pasa del bottom-right flotante al header del modal (inline).
+ *     3 estados preservados (closed -> pill / expanded -> input / results -> panel lateral 30%).
+ *     En estado "results" la pill se vuelve chip compacto "Sparkles + query truncada + X".
+ *   - Cobertura compactada (menos padding/margen) sin perder legibilidad.
+ *   - Container del dashboard mas ancho: max-width 1480px, padding 20px, gap 16px.
+ *   - Las 3 secciones anteriores (Sugerencias del dia / Actividades agendadas / Tabla) se
+ *     CONSOLIDAN en una unica tabla unificada estilo Odoo Activities con:
+ *       Toolbar -> izquierda: boton "Filtros" toggleable + segment chips.
+ *                  derecha: chips de tipo excluyentes (Sugerencias/Actividades/Leads).
+ *       Tabla: filas tipo sugerencia (fondo verde sutil) / actividad vencida (fondo rojo sutil) /
+ *              actividad hoy (sin fondo) / lead (sin fondo). Hover muestra acciones contextuales
+ *              en filas tipo sugerencia y actividad. Filas tipo lead: click abre detail, sin acciones extra.
+ *       Microcopy "+ actividad" en filas tipo sugerencia cuando el lead tambien tiene actividad
+ *       agendada (preservacion del indicador inline de v1.3.0).
+ *   - Copy: "Sin tocar" -> "Sin contacto" en toda la UI.
+ *   - Nuevo metodo en el service layer: ActivityService.getUnifiedFeedSync(filters) con buildUnifiedFeed
+ *     interno (dedupe + filtro tipo + filtro segmento + sort compuesto inteligente).
+ *   - Servicios y mocks de v1.3.0 intactos (LeadService/ActivityService/SearchService/Coverage/
+ *     Suggestions). Solo se agrega un metodo.
+ *
+ * Cambios v1.5.0 (refinamientos UX, sin re-arquitectura):
+ *   - Eliminadas las acciones contextuales en hover de filas tipo Sugerencia y Actividad
+ *     (Marcar hecho + Posponer). Ahora TODAS las filas se comportan igual: click abre el
+ *     detail del lead, sin atajos. Justificacion: forzar el flujo correcto (ver detalle ->
+ *     accion real) para no "limpiar" sugerencias sin seguimiento real.
+ *   - Columna "Familia" enriquecida con dos lineas: linea 1 = "<Contacto> · <Ubicacion>"
+ *     (medium/principal), linea 2 = "<Relacion> <NombrePaciente>, <Edad> anos" (secundario).
+ *   - Mocks: eliminado lead.elderly. Agregados lead.relation, lead.age, lead.caredPersonName
+ *     con nombres realistas espanoles/catalanes. MOCK_CARE_CONTEXT pierde caredPerson y
+ *     caredAge (info migrada al lead).
+ *   - Header de columna "Proximo seg." renombrado a "Vence" (vocabulario Odoo Activities).
+ *     Sort key se mantiene como "proximo" para no romper state.sortCol.
+ *   - Columna "Por que" mas ancha (min 280 / max 320) para reducir truncado agresivo.
+ *     "Tipo" y "Etapa" con max-width + ellipsis como red de seguridad ante contenido extremo.
+ *   - openScheduleFromSuggestion / openScheduleFromActivity preservadas vivas con TODO v1.6+:
+ *     se reconectaran desde el detail del lead como "marcar hecha sin agendar" en proxima
+ *     iteracion. Por ahora son dead-code intencional, no se invocan desde ningun handler.
  *
  * API publica:
  *   QidaAssistant.init(options)
@@ -27,6 +54,69 @@
  *   QidaAssistant.closeModal()
  *   QidaAssistant.showScreen(screenId)
  *   QidaAssistant.version
+ *
+ * ============================================================
+ * DEFAULTS QUE TOME EN v1.4.0 (no especificados explicitamente):
+ * ============================================================
+ *   1. Container del dashboard: max-width 1480px, padding lateral 20px,
+ *      gap entre secciones 16px (reducido desde 24px en v1.3.0).
+ *   2. Asistente en header: la pill conserva el estilo verde corporativo
+ *      con Sparkles + texto + "/" kbd. Se reubica del bottom-right del overlay
+ *      al header arriba a la derecha, antes de "Esc para cerrar" + "X".
+ *   3. Boton "Filtros": ghost button con icono funnel/slidersHorizontal.
+ *      Cuando hay segmento activo, muestra count "(1)".
+ *   4. Chips de tipo (derecha): estilo pill con count. Activo en verde primary.
+ *      Default: 'suggestions'.
+ *   5. Filas estilo Odoo: altura compacta 44-48px, borders sutiles, hover sutil.
+ *   6. Click vs acciones contextuales: click en cualquier celda no-accion abre
+ *      detail. Botones de accion son ghost al hover, al final de la fila,
+ *      con event.stopPropagation() para no propagar.
+ *   7. Estado default de la toolbar: chip 'Sugerencias del dia' activo,
+ *      filtros embudo cerrados.
+ *   8. Persistencia: dentro de la sesion del modal, se mantiene el chip activo y el
+ *      estado de filtros desplegados. Al cerrar y reabrir, vuelve a defaults.
+ *   9. Schedule modal reuse: sin cambios. La opcion "Cerrar lead sin agendar"
+ *      sigue disponible cuando se invoca desde "Marcar hecho" de sugerencias/actividades.
+ *  10. Animaciones: ninguna nueva. Cambio instantaneo al cambiar filtro.
+ *  11. state.activeTypeChip: 'suggestions' | 'activities' | 'leads'. Default 'suggestions'.
+ *  12. state.activeSegmentFilter: null | 'caliente' | 'templado' | 'frio-reactivar' |
+ *      'pausa' | 'urgente' | 'historico'. Default null (todos los segmentos).
+ *  13. state.filtersExpanded: bool. Default false.
+ *  14. Por que en filas tipo Actividad: act.summary (lo agendado concretamente).
+ *      Sugerencias usan sug.reason. Leads usan lead.temperatureReason.
+ *  15. Hover en filas tipo Lead: ninguna accion contextual. La fila entera abre detail.
+ *  16. Indicador "+ actividad" en filas tipo Sugerencia: cuando el dedupe oculta una
+ *      actividad del mismo lead, la fila de sugerencia muestra un sub-tag sutil junto
+ *      al badge "Sugerencia [ordinal]" con icono calendar + texto "+ actividad".
+ *
+ * ============================================================
+ * DEFAULTS QUE TOME EN v1.5.0 (no especificados explicitamente):
+ * ============================================================
+ *   1. Opcion A pura para los mocks: descompongo lead.elderly en lead.relation (string),
+ *      lead.age (number) y agrego lead.caredPersonName (string). El campo elderly se
+ *      ELIMINA del lead. Tocan solo 3 puntos del render -> refactor minimo.
+ *   2. Reutilizo el campo lead.contact existente (ej "Maria Martinez", "Jordi Vidal") como
+ *      "nombre del contacto que llamo". NO creo lead.contactName para no inflar el diff;
+ *      el campo se trata como contactName en toda la UI.
+ *   3. MOCK_CARE_CONTEXT pierde caredPerson y caredAge en los 16 registros (info migrada al
+ *      lead). Mantiene relationship, mainCondition, livesAlone que son info propia.
+ *   4. Ancho "Por que": max-width 260px -> 320px (~+23% sobre el cap) + min-width 280px.
+ *      Recortes en columnas adyacentes con max-width + ellipsis como red de seguridad:
+ *      "Tipo" 180px (cubre "Sugerencia 4o msg" + sub-tag "+ actividad"), "Etapa" 140px.
+ *   5. "Proximo seg." -> "Vence" solo en el header de la tabla. data-id="proximo" intacto
+ *      para no romper state.sortCol.
+ *   6. La tabla unificada pasa de 9 a 8 columnas (eliminada la columna de acciones).
+ *   7. openScheduleFromSuggestion / openScheduleFromActivity preservadas con comentario
+ *      TODO v1.6+ pero sin invocador en v1.5.0. La rama del Schedule modal que las consume
+ *      (state.scheduleOrigin === 'suggestion'/'activity') tambien queda viva por la misma
+ *      razon.
+ *   8. postponeOpenFor eliminado del state, del closeModal y del bloque "auto-cerrar
+ *      dropdown" de handleClick (solo lo usaba el hover de la fila tipo sugerencia).
+ *   9. caredPersonName usa nombres realistas espanoles/catalanes segun la ubicacion del
+ *      lead (Barcelona/Sabadell/Sant Sadurni -> nombres catalanes; resto Madrid/castellano).
+ *  10. Gap conocido: queda sin cubrir "marcar hecha sin agendar" cuando la AF hizo el
+ *      seguimiento por via externa (llamada celular, presencial). Se resuelve en v1.6+ con
+ *      banner en el detail del lead.
  */
 (function (window, document) {
     'use strict';
@@ -37,7 +127,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.3.0';
+    var VERSION = '1.5.0';
     var CONFIG = null;
     var QIDA_LOGO_URL = 'https://strapi-upload-files-production.s3.eu-central-1.amazonaws.com/qida_logo_ba5b1d80b5.png?w=1080';
     var FONTS_HREF = 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap';
@@ -61,24 +151,24 @@
     // fueron de la ventana operativa sin cerrar.
     // Mocks construidos asumiendo "hoy" = 2026-05-15. Las fechas son ISO YYYY-MM-DD.
     var MOCK_LEADS = [
-        { id: 'L122581', name: 'Familia Martinez Ruiz',     contact: 'Maria Martinez',           location: 'Madrid',                phone: '+34 666 84 34 18', elderly: 'Padre, 87 anos',   context: 'Movilidad reducida tras caida. Vive solo.',                                  temperature: 'caliente', temperatureReason: 'Pidio presupuesto ayer y respondio hoy con preguntas concretas', temperatureSource: 'IA', daysWithoutTouch: 1,  lastInteraction: 'Hoy 09:45',   interactionCount: 5, stage: 'Por aceptar',            urgent: true,  urgency: 'Muy urgente', serviceType: 'Por horas',     prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-04', nextScheduledFollowUp: '2026-05-16', historico: false },
-        { id: 'L122613', name: 'Familia Vidal Pons',        contact: 'Jordi Vidal',              location: 'Barcelona',             phone: '+34 633 12 88 09', elderly: 'Madre, 82 anos',    context: 'Demencia en fase inicial. Conviven dos hermanos.',                            temperature: 'templado', temperatureReason: 'Pidio pensarlo en familia, han pasado 4 dias',                temperatureSource: 'IA', daysWithoutTouch: 4,  lastInteraction: 'Hace 4 dias', interactionCount: 3, stage: 'Por elaborar propuesta', urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'Web organico',                 entryDate: '2026-05-06', nextScheduledFollowUp: '2026-05-19', historico: false },
-        { id: 'L122476', name: 'Familia Baena Sanz',        contact: 'Alejandra Baena',          location: 'Madrid',                phone: '+34 622 45 12 03', elderly: 'Suegra, 90 anos',   context: 'Autonoma pero vive sola. Buscan acompanamiento diurno.',                      temperature: 'caliente', temperatureReason: 'Llamada agendada para manana 11:00',                          temperatureSource: 'IA', daysWithoutTouch: 0,  lastInteraction: 'Hoy 11:20',   interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Urgente',     serviceType: 'Por horas',     prescriptor: 'Recomendacion cliente',        entryDate: '2026-05-08', nextScheduledFollowUp: '2026-05-16', historico: false },
-        { id: 'L121656', name: 'Familia Parellada Canals',  contact: 'Teresa Parellada',         location: "Sant Sadurni d'Anoia",  phone: '+34 644 78 90 12', elderly: 'Padre, 79 anos',    context: 'Postoperatorio cadera. Necesita ayuda temporal estimada 3-4 meses.',           temperature: 'templado', temperatureReason: 'Familia comparando con otras dos opciones',                   temperatureSource: 'AF', daysWithoutTouch: 6,  lastInteraction: 'Hace 6 dias', interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Hospital Sant Joan de Deu',    entryDate: '2026-05-05', nextScheduledFollowUp: '2026-05-18', historico: false },
-        { id: 'L121708', name: 'Familia Campos Rivera',     contact: 'David Campos',             location: 'Alcala de Henares',     phone: '+34 611 23 45 67', elderly: 'Madre, 84 anos',    context: 'Caida reciente, alta hospitalaria la semana pasada.',                          temperature: 'frio',     temperatureReason: 'Dijo que llamaria, hace 11 dias sin respuesta',               temperatureSource: 'IA', daysWithoutTouch: 11, lastInteraction: 'Hace 11 dias',interactionCount: 2, stage: 'Por aceptar',            urgent: false, urgency: 'Urgente',     serviceType: 'Interno',       prescriptor: 'Hospital Principe de Asturias',entryDate: '2026-05-02', nextScheduledFollowUp: null,         historico: false },
-        { id: 'L121547', name: 'Familia Sanchez Tartalo',   contact: 'Maria Jesus Sanchez',      location: 'Madrid',                phone: '+34 655 90 11 22', elderly: 'Madre, 88 anos',    context: 'Alzheimer fase moderada. Hija quiere relevo de fines de semana.',              temperature: 'frio',     temperatureReason: 'No responde desde la propuesta hace 10 dias',                 temperatureSource: 'IA', daysWithoutTouch: 10, lastInteraction: 'Hace 10 dias',interactionCount: 2, stage: 'Por elaborar propuesta', urgent: false, urgency: 'Estandar',    serviceType: 'Fin de semana', prescriptor: 'Web organico',                 entryDate: '2026-05-03', nextScheduledFollowUp: null,         historico: false },
-        { id: 'L121749', name: 'Familia Ferreiro Bergino',  contact: 'Maria del Mar Ferreiro',   location: 'Madrid',                phone: '+34 677 88 99 00', elderly: 'Tio, 81 anos',      context: 'Sin familia cercana. Sobrina unica responsable.',                              temperature: 'templado', temperatureReason: 'Esperando que organice visita al domicilio',                  temperatureSource: 'IA', daysWithoutTouch: 2,  lastInteraction: 'Hace 2 dias', interactionCount: 6, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-07', nextScheduledFollowUp: '2026-05-20', historico: false },
-        { id: 'L122131', name: 'Familia Roge Barcelo',      contact: 'Conxi Roge',               location: 'Barcelona',             phone: '+34 688 77 66 55', elderly: 'Marido, 76 anos',   context: 'Parkinson avanzado. Cuidadora actual deja en mayo.',                           temperature: 'caliente', temperatureReason: 'Urgencia operativa: necesita cuidadora antes del 30/05',     temperatureSource: 'AF', daysWithoutTouch: 2,  lastInteraction: 'Hace 2 dias', interactionCount: 7, stage: 'Por aceptar',            urgent: true,  urgency: 'Muy urgente', serviceType: 'Interno',       prescriptor: 'Recomendacion AF anterior',    entryDate: '2026-05-04', nextScheduledFollowUp: '2026-05-15', historico: false },
-        { id: 'L122055', name: 'Familia Recio del Campo',   contact: 'Jose Maria Recio',         location: 'Collado Villalba',      phone: '+34 699 11 22 33', elderly: 'Madre, 85 anos',    context: 'Indecision sobre interna vs externa.',                                         temperature: 'frio',     temperatureReason: 'No contesta WhatsApp ni llamadas hace 9 dias',                temperatureSource: 'IA', daysWithoutTouch: 9,  lastInteraction: 'Hace 9 dias', interactionCount: 3, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Web organico',                 entryDate: '2026-05-05', nextScheduledFollowUp: null,         historico: false },
-        { id: 'L121843', name: 'Familia Avelino Redondo',   contact: 'Avelino Redondo',          location: 'Madrid',                phone: '+34 600 12 34 56', elderly: 'Mujer, 78 anos',    context: 'Recien derivado, sin contacto inicial todavia.',                               temperature: 'pausa',    temperatureReason: 'Pidio no contactar hasta junio (viaje familiar)',             temperatureSource: 'AF', daysWithoutTouch: 0,  lastInteraction: 'Hace 1 dia', interactionCount: 0, stage: 'Por contactar',          urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-10', nextScheduledFollowUp: '2026-06-05', historico: false, pausaUntil: '2026-06-05' },
-        { id: 'L122278', name: 'Familia Ruben Garcia',      contact: 'Marina Ruben',             location: 'Madrid',                phone: '+34 622 99 88 77', elderly: 'Padre, 83 anos',    context: 'Diabetes y movilidad limitada. Vive con esposa de 80.',                        temperature: 'templado', temperatureReason: 'Esperando respuesta tras enviarle el presupuesto',            temperatureSource: 'IA', daysWithoutTouch: 5,  lastInteraction: 'Hace 5 dias', interactionCount: 3, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'Hospital La Paz',              entryDate: '2026-05-06', nextScheduledFollowUp: null,         historico: false },
-        { id: 'L121399', name: 'Familia Ortiz Pica',        contact: 'Marta Ortiz',              location: 'Madrid',                phone: '+34 644 55 66 77', elderly: 'Madre, 86 anos',    context: 'Alta hospitalaria reciente. Necesita ayuda al alta inmediata.',                temperature: 'caliente', temperatureReason: 'Urgente: alta hospitalaria manana, sin alguien en casa',     temperatureSource: 'AF', daysWithoutTouch: 0,  lastInteraction: 'Hoy 08:30',   interactionCount: 2, stage: 'Por elaborar propuesta', urgent: true,  urgency: 'Muy urgente', serviceType: 'Interno',       prescriptor: 'Hospital La Paz',              entryDate: '2026-05-13', nextScheduledFollowUp: '2026-05-15', historico: false },
+        { id: 'L122581', name: 'Familia Martinez Ruiz',     contact: 'Maria Martinez',           location: 'Madrid',                phone: '+34 666 84 34 18', relation: 'Padre',   age: 87, caredPersonName: 'Juan Antonio', context: 'Movilidad reducida tras caida. Vive solo.',                                  temperature: 'caliente', temperatureReason: 'Pidio presupuesto ayer y respondio hoy con preguntas concretas', temperatureSource: 'IA', daysWithoutTouch: 1,  lastInteraction: 'Hoy 09:45',   interactionCount: 5, stage: 'Por aceptar',            urgent: true,  urgency: 'Muy urgente', serviceType: 'Por horas',     prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-04', nextScheduledFollowUp: '2026-05-16', historico: false },
+        { id: 'L122613', name: 'Familia Vidal Pons',        contact: 'Jordi Vidal',              location: 'Barcelona',             phone: '+34 633 12 88 09', relation: 'Madre',   age: 82, caredPersonName: 'Carmen',       context: 'Demencia en fase inicial. Conviven dos hermanos.',                            temperature: 'templado', temperatureReason: 'Pidio pensarlo en familia, han pasado 4 dias',                temperatureSource: 'IA', daysWithoutTouch: 4,  lastInteraction: 'Hace 4 dias', interactionCount: 3, stage: 'Por elaborar propuesta', urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'Web organico',                 entryDate: '2026-05-06', nextScheduledFollowUp: '2026-05-19', historico: false },
+        { id: 'L122476', name: 'Familia Baena Sanz',        contact: 'Alejandra Baena',          location: 'Madrid',                phone: '+34 622 45 12 03', relation: 'Suegra',  age: 90, caredPersonName: 'Antonia',      context: 'Autonoma pero vive sola. Buscan acompanamiento diurno.',                      temperature: 'caliente', temperatureReason: 'Llamada agendada para manana 11:00',                          temperatureSource: 'IA', daysWithoutTouch: 0,  lastInteraction: 'Hoy 11:20',   interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Urgente',     serviceType: 'Por horas',     prescriptor: 'Recomendacion cliente',        entryDate: '2026-05-08', nextScheduledFollowUp: '2026-05-16', historico: false },
+        { id: 'L121656', name: 'Familia Parellada Canals',  contact: 'Teresa Parellada',         location: "Sant Sadurni d'Anoia",  phone: '+34 644 78 90 12', relation: 'Padre',   age: 79, caredPersonName: 'Joan',         context: 'Postoperatorio cadera. Necesita ayuda temporal estimada 3-4 meses.',           temperature: 'templado', temperatureReason: 'Familia comparando con otras dos opciones',                   temperatureSource: 'AF', daysWithoutTouch: 6,  lastInteraction: 'Hace 6 dias', interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Hospital Sant Joan de Deu',    entryDate: '2026-05-05', nextScheduledFollowUp: '2026-05-18', historico: false },
+        { id: 'L121708', name: 'Familia Campos Rivera',     contact: 'David Campos',             location: 'Alcala de Henares',     phone: '+34 611 23 45 67', relation: 'Madre',   age: 84, caredPersonName: 'Pilar',        context: 'Caida reciente, alta hospitalaria la semana pasada.',                          temperature: 'frio',     temperatureReason: 'Dijo que llamaria, hace 11 dias sin respuesta',               temperatureSource: 'IA', daysWithoutTouch: 11, lastInteraction: 'Hace 11 dias',interactionCount: 2, stage: 'Por aceptar',            urgent: false, urgency: 'Urgente',     serviceType: 'Interno',       prescriptor: 'Hospital Principe de Asturias',entryDate: '2026-05-02', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L121547', name: 'Familia Sanchez Tartalo',   contact: 'Maria Jesus Sanchez',      location: 'Madrid',                phone: '+34 655 90 11 22', relation: 'Madre',   age: 88, caredPersonName: 'Dolores',      context: 'Alzheimer fase moderada. Hija quiere relevo de fines de semana.',              temperature: 'frio',     temperatureReason: 'No responde desde la propuesta hace 10 dias',                 temperatureSource: 'IA', daysWithoutTouch: 10, lastInteraction: 'Hace 10 dias',interactionCount: 2, stage: 'Por elaborar propuesta', urgent: false, urgency: 'Estandar',    serviceType: 'Fin de semana', prescriptor: 'Web organico',                 entryDate: '2026-05-03', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L121749', name: 'Familia Ferreiro Bergino',  contact: 'Maria del Mar Ferreiro',   location: 'Madrid',                phone: '+34 677 88 99 00', relation: 'Tio',     age: 81, caredPersonName: 'Francisco',    context: 'Sin familia cercana. Sobrina unica responsable.',                              temperature: 'templado', temperatureReason: 'Esperando que organice visita al domicilio',                  temperatureSource: 'IA', daysWithoutTouch: 2,  lastInteraction: 'Hace 2 dias', interactionCount: 6, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-07', nextScheduledFollowUp: '2026-05-20', historico: false },
+        { id: 'L122131', name: 'Familia Roge Barcelo',      contact: 'Conxi Roge',               location: 'Barcelona',             phone: '+34 688 77 66 55', relation: 'Marido',  age: 76, caredPersonName: 'Albert',       context: 'Parkinson avanzado. Cuidadora actual deja en mayo.',                           temperature: 'caliente', temperatureReason: 'Urgencia operativa: necesita cuidadora antes del 30/05',     temperatureSource: 'AF', daysWithoutTouch: 2,  lastInteraction: 'Hace 2 dias', interactionCount: 7, stage: 'Por aceptar',            urgent: true,  urgency: 'Muy urgente', serviceType: 'Interno',       prescriptor: 'Recomendacion AF anterior',    entryDate: '2026-05-04', nextScheduledFollowUp: '2026-05-15', historico: false },
+        { id: 'L122055', name: 'Familia Recio del Campo',   contact: 'Jose Maria Recio',         location: 'Collado Villalba',      phone: '+34 699 11 22 33', relation: 'Madre',   age: 85, caredPersonName: 'Mercedes',     context: 'Indecision sobre interna vs externa.',                                         temperature: 'frio',     temperatureReason: 'No contesta WhatsApp ni llamadas hace 9 dias',                temperatureSource: 'IA', daysWithoutTouch: 9,  lastInteraction: 'Hace 9 dias', interactionCount: 3, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Web organico',                 entryDate: '2026-05-05', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L121843', name: 'Familia Avelino Redondo',   contact: 'Avelino Redondo',          location: 'Madrid',                phone: '+34 600 12 34 56', relation: 'Mujer',   age: 78, caredPersonName: 'Rosa',         context: 'Recien derivado, sin contacto inicial todavia.',                               temperature: 'pausa',    temperatureReason: 'Pidio no contactar hasta junio (viaje familiar)',             temperatureSource: 'AF', daysWithoutTouch: 0,  lastInteraction: 'Hace 1 dia', interactionCount: 0, stage: 'Por contactar',          urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'ESSIP-MUNDO MAYOR',            entryDate: '2026-05-10', nextScheduledFollowUp: '2026-06-05', historico: false, pausaUntil: '2026-06-05' },
+        { id: 'L122278', name: 'Familia Ruben Garcia',      contact: 'Marina Ruben',             location: 'Madrid',                phone: '+34 622 99 88 77', relation: 'Padre',   age: 83, caredPersonName: 'Manuel',       context: 'Diabetes y movilidad limitada. Vive con esposa de 80.',                        temperature: 'templado', temperatureReason: 'Esperando respuesta tras enviarle el presupuesto',            temperatureSource: 'IA', daysWithoutTouch: 5,  lastInteraction: 'Hace 5 dias', interactionCount: 3, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'Hospital La Paz',              entryDate: '2026-05-06', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L121399', name: 'Familia Ortiz Pica',        contact: 'Marta Ortiz',              location: 'Madrid',                phone: '+34 644 55 66 77', relation: 'Madre',   age: 86, caredPersonName: 'Concepcion',   context: 'Alta hospitalaria reciente. Necesita ayuda al alta inmediata.',                temperature: 'caliente', temperatureReason: 'Urgente: alta hospitalaria manana, sin alguien en casa',     temperatureSource: 'AF', daysWithoutTouch: 0,  lastInteraction: 'Hoy 08:30',   interactionCount: 2, stage: 'Por elaborar propuesta', urgent: true,  urgency: 'Muy urgente', serviceType: 'Interno',       prescriptor: 'Hospital La Paz',              entryDate: '2026-05-13', nextScheduledFollowUp: '2026-05-15', historico: false },
         // Pausados sin contactar todavia
-        { id: 'L122701', name: 'Familia Lopez Iniesta',     contact: 'Carlos Lopez',             location: 'Madrid',                phone: '+34 611 99 00 11', elderly: 'Madre, 81 anos',    context: 'Derivacion reciente desde hospital. Aun sin primer contacto.',                  temperature: 'pausa',    temperatureReason: 'Sin contactar todavia, lead recien asignado',                 temperatureSource: 'IA', daysWithoutTouch: 1,  lastInteraction: 'Hace 1 dia', interactionCount: 0, stage: 'Por contactar',          urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'Hospital Ramon y Cajal',       entryDate: '2026-05-12', nextScheduledFollowUp: null,         historico: false },
-        { id: 'L122845', name: 'Familia Mestres Carrasco',  contact: 'Pilar Mestres',            location: 'Sabadell',              phone: '+34 633 78 22 41', elderly: 'Padre, 89 anos',    context: 'Ya tuvo cuidadora anterior, busca relevo por jubilacion.',                     temperature: 'pausa',    temperatureReason: 'Pausa hasta que vuelva del viaje el 20/05',                   temperatureSource: 'AF', daysWithoutTouch: 3,  lastInteraction: 'Hace 3 dias', interactionCount: 2, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Recomendacion cliente',        entryDate: '2026-05-09', nextScheduledFollowUp: '2026-05-20', historico: false, pausaUntil: '2026-05-20' },
+        { id: 'L122701', name: 'Familia Lopez Iniesta',     contact: 'Carlos Lopez',             location: 'Madrid',                phone: '+34 611 99 00 11', relation: 'Madre',   age: 81, caredPersonName: 'Isabel',       context: 'Derivacion reciente desde hospital. Aun sin primer contacto.',                  temperature: 'pausa',    temperatureReason: 'Sin contactar todavia, lead recien asignado',                 temperatureSource: 'IA', daysWithoutTouch: 1,  lastInteraction: 'Hace 1 dia', interactionCount: 0, stage: 'Por contactar',          urgent: false, urgency: 'Estandar',    serviceType: 'Interno',       prescriptor: 'Hospital Ramon y Cajal',       entryDate: '2026-05-12', nextScheduledFollowUp: null,         historico: false },
+        { id: 'L122845', name: 'Familia Mestres Carrasco',  contact: 'Pilar Mestres',            location: 'Sabadell',              phone: '+34 633 78 22 41', relation: 'Padre',   age: 89, caredPersonName: 'Jordi',        context: 'Ya tuvo cuidadora anterior, busca relevo por jubilacion.',                     temperature: 'pausa',    temperatureReason: 'Pausa hasta que vuelva del viaje el 20/05',                   temperatureSource: 'AF', daysWithoutTouch: 3,  lastInteraction: 'Hace 3 dias', interactionCount: 2, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Recomendacion cliente',        entryDate: '2026-05-09', nextScheduledFollowUp: '2026-05-20', historico: false, pausaUntil: '2026-05-20' },
         // ----- Leads HISTORICOS (entryDate > 15 dias sin pausa explicita) -----
-        { id: 'L120912', name: 'Familia Heredia Solis',     contact: 'Adriana Heredia',          location: 'Madrid',                phone: '+34 666 77 88 99', elderly: 'Madre, 84 anos',    context: 'Lead derivado hace casi un mes, sin movimiento.',                              temperature: 'frio',     temperatureReason: 'Sin respuesta hace 18 dias. Quedo fuera de ventana operativa.', temperatureSource: 'IA', daysWithoutTouch: 18, lastInteraction: 'Hace 18 dias',interactionCount: 1, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'Web organico',                 entryDate: '2026-04-22', nextScheduledFollowUp: null,         historico: true },
-        { id: 'L120478', name: 'Familia Bertran Casas',     contact: 'Joana Bertran',            location: 'Barcelona',             phone: '+34 622 11 22 33', elderly: 'Padre, 92 anos',    context: 'Familia indecisa por precio, pidio reflexion larga.',                          temperature: 'frio',     temperatureReason: 'Sin respuesta hace 22 dias tras envio presupuesto.',          temperatureSource: 'IA', daysWithoutTouch: 22, lastInteraction: 'Hace 22 dias',interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Recomendacion cliente',        entryDate: '2026-04-15', nextScheduledFollowUp: null,         historico: true }
+        { id: 'L120912', name: 'Familia Heredia Solis',     contact: 'Adriana Heredia',          location: 'Madrid',                phone: '+34 666 77 88 99', relation: 'Madre',   age: 84, caredPersonName: 'Lucia',        context: 'Lead derivado hace casi un mes, sin movimiento.',                              temperature: 'frio',     temperatureReason: 'Sin respuesta hace 18 dias. Quedo fuera de ventana operativa.', temperatureSource: 'IA', daysWithoutTouch: 18, lastInteraction: 'Hace 18 dias',interactionCount: 1, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Por horas',     prescriptor: 'Web organico',                 entryDate: '2026-04-22', nextScheduledFollowUp: null,         historico: true },
+        { id: 'L120478', name: 'Familia Bertran Casas',     contact: 'Joana Bertran',            location: 'Barcelona',             phone: '+34 622 11 22 33', relation: 'Padre',   age: 92, caredPersonName: 'Marc',         context: 'Familia indecisa por precio, pidio reflexion larga.',                          temperature: 'frio',     temperatureReason: 'Sin respuesta hace 22 dias tras envio presupuesto.',          temperatureSource: 'IA', daysWithoutTouch: 22, lastInteraction: 'Hace 22 dias',interactionCount: 4, stage: 'Por aceptar',            urgent: false, urgency: 'Estandar',    serviceType: 'Externo',       prescriptor: 'Recomendacion cliente',        entryDate: '2026-04-15', nextScheduledFollowUp: null,         historico: true }
     ];
 
     var MOCK_WHATSAPP = {
@@ -154,23 +244,25 @@
     };
 
     // Care context estructurado (la AF lo necesita resumido para no abrir Odoo).
+    // v1.5: caredPerson y caredAge migrados a MOCK_LEADS (lead.relation, lead.age).
+    // Aqui queda solo info propia del care context que no esta en el lead base.
     var MOCK_CARE_CONTEXT = {
-        L122581: { caredPerson: 'Padre', caredAge: 87, relationship: 'Padre del contacto Maria', mainCondition: 'Movilidad reducida (post-caida)', livesAlone: true },
-        L122613: { caredPerson: 'Madre', caredAge: 82, relationship: 'Madre de Jordi y hermano',  mainCondition: 'Demencia fase inicial', livesAlone: false },
-        L122476: { caredPerson: 'Suegra', caredAge: 90, relationship: 'Suegra del contacto Alejandra', mainCondition: 'Autonoma con limitaciones leves', livesAlone: true },
-        L121656: { caredPerson: 'Padre', caredAge: 79, relationship: 'Padre de Teresa', mainCondition: 'Postoperatorio cadera', livesAlone: false },
-        L121708: { caredPerson: 'Madre', caredAge: 84, relationship: 'Madre de David', mainCondition: 'Caida reciente, alta hospitalaria', livesAlone: true },
-        L121547: { caredPerson: 'Madre', caredAge: 88, relationship: 'Madre de Maria Jesus', mainCondition: 'Alzheimer fase moderada', livesAlone: false },
-        L121749: { caredPerson: 'Tio',   caredAge: 81, relationship: 'Tio de Maria del Mar', mainCondition: 'Sin condicion grave, vive solo', livesAlone: true },
-        L122131: { caredPerson: 'Marido', caredAge: 76, relationship: 'Marido de Conxi', mainCondition: 'Parkinson avanzado', livesAlone: false },
-        L122055: { caredPerson: 'Madre', caredAge: 85, relationship: 'Madre de Jose Maria', mainCondition: 'Sin condicion grave reportada', livesAlone: true },
-        L121843: { caredPerson: 'Mujer', caredAge: 78, relationship: 'Esposa de Avelino', mainCondition: 'Sin diagnostico aun', livesAlone: false },
-        L122278: { caredPerson: 'Padre', caredAge: 83, relationship: 'Padre de Marina', mainCondition: 'Diabetes + movilidad limitada', livesAlone: false },
-        L121399: { caredPerson: 'Madre', caredAge: 86, relationship: 'Madre de Marta', mainCondition: 'Alta hospitalaria reciente', livesAlone: true },
-        L122701: { caredPerson: 'Madre', caredAge: 81, relationship: 'Madre de Carlos', mainCondition: 'Sin condicion grave reportada', livesAlone: false },
-        L122845: { caredPerson: 'Padre', caredAge: 89, relationship: 'Padre de Pilar', mainCondition: 'Sin condicion grave reportada', livesAlone: false },
-        L120912: { caredPerson: 'Madre', caredAge: 84, relationship: 'Madre de Adriana', mainCondition: 'Sin diagnostico reportado', livesAlone: true },
-        L120478: { caredPerson: 'Padre', caredAge: 92, relationship: 'Padre de Joana', mainCondition: 'Demencia avanzada', livesAlone: false }
+        L122581: { relationship: 'Padre del contacto Maria',        mainCondition: 'Movilidad reducida (post-caida)', livesAlone: true  },
+        L122613: { relationship: 'Madre de Jordi y hermano',         mainCondition: 'Demencia fase inicial',           livesAlone: false },
+        L122476: { relationship: 'Suegra del contacto Alejandra',   mainCondition: 'Autonoma con limitaciones leves', livesAlone: true  },
+        L121656: { relationship: 'Padre de Teresa',                  mainCondition: 'Postoperatorio cadera',           livesAlone: false },
+        L121708: { relationship: 'Madre de David',                   mainCondition: 'Caida reciente, alta hospitalaria', livesAlone: true  },
+        L121547: { relationship: 'Madre de Maria Jesus',             mainCondition: 'Alzheimer fase moderada',         livesAlone: false },
+        L121749: { relationship: 'Tio de Maria del Mar',             mainCondition: 'Sin condicion grave, vive solo',  livesAlone: true  },
+        L122131: { relationship: 'Marido de Conxi',                  mainCondition: 'Parkinson avanzado',              livesAlone: false },
+        L122055: { relationship: 'Madre de Jose Maria',              mainCondition: 'Sin condicion grave reportada',   livesAlone: true  },
+        L121843: { relationship: 'Esposa de Avelino',                mainCondition: 'Sin diagnostico aun',             livesAlone: false },
+        L122278: { relationship: 'Padre de Marina',                  mainCondition: 'Diabetes + movilidad limitada',   livesAlone: false },
+        L121399: { relationship: 'Madre de Marta',                   mainCondition: 'Alta hospitalaria reciente',      livesAlone: true  },
+        L122701: { relationship: 'Madre de Carlos',                  mainCondition: 'Sin condicion grave reportada',   livesAlone: false },
+        L122845: { relationship: 'Padre de Pilar',                   mainCondition: 'Sin condicion grave reportada',   livesAlone: false },
+        L120912: { relationship: 'Madre de Adriana',                 mainCondition: 'Sin diagnostico reportado',       livesAlone: true  },
+        L120478: { relationship: 'Padre de Joana',                   mainCondition: 'Demencia avanzada',               livesAlone: false }
     };
 
     // Adjuntos (segun shape Odoo: id, name, mimetype, type, date, isMain).
@@ -309,26 +401,24 @@
         view: 'dashboard',              // 'dashboard' | 'detail'
         currentLeadId: null,
 
-        // Dashboard filtering / sort. searchQuery se mantiene para uso interno
-        // de matchesSearch desde el Asistente flotante; el viejo search bar grande se removio.
-        activeFilter: 'todos',          // 'todos' | 'caliente' | 'templado' | 'frio-reactivar' | 'pausa' | 'urgente' | 'historico'
+        // searchQuery se mantiene para uso interno de matchesSearch desde el Asistente.
         coverageBucket: null,           // null | 0 | 1 | 2 | 3 (3 significa "3+")
         searchQuery: '',
-        sortCol: 'dias',                // 'familia' | 'temp' | 'servicio' | 'urgencia' | 'dias' | 'interacciones' | 'etapa' | 'proximo'
-        sortDir: 'desc',                // 'asc' | 'desc' (default 'dias' desc)
+        // sortCol = null significa "sort compuesto inteligente" (default v1.4).
+        // Cuando la AF clickea un header, se respeta el sort manual.
+        sortCol: null,                  // null | 'familia' | 'temp' | 'servicio' | 'urgencia' | 'dias' | 'interacciones' | 'etapa' | 'proximo'
+        sortDir: 'desc',                // 'asc' | 'desc'
 
-        // Dashboard v1.3: secciones colapsables
-        collapsedTable: true,           // tabla colapsada por default
-        collapsedScheduled: false,      // actividades agendadas expandida por default
+        // Dashboard v1.4: tabla unificada con toolbar
+        activeTypeChip: 'suggestions',  // 'suggestions' | 'activities' | 'leads'
+        activeSegmentFilter: null,      // null | 'caliente' | 'templado' | 'frio-reactivar' | 'pausa' | 'urgente' | 'historico'
+        filtersExpanded: false,         // toggle del boton "Filtros"
 
-        // Asistente flotante (3 estados)
-        assistantState: 'closed',       // 'closed' (pill) | 'expanded' (input) | 'results' (panel lateral)
+        // Asistente: 3 estados, ahora anclado al header en lugar de flotante
+        assistantState: 'closed',       // 'closed' (pill header) | 'expanded' (input header) | 'results' (panel lateral)
         assistantQuery: '',
         assistantLoading: false,
         assistantResults: null,         // { leads: [...], conversations: [...], material: [...] } | null
-
-        // Sugerencias del dia
-        postponeOpenFor: null,          // id de sugerencia con dropdown de posponer abierto
 
         // Detail state
         activePanel: 'templates',       // 'templates' | 'material' | 'attachments'
@@ -438,10 +528,12 @@
     }
 
     function getFilteredLeads() {
+        // v1.4: usa state.activeSegmentFilter (nullable). null = todos los segmentos activos.
+        var segment = state.activeSegmentFilter || 'todos';
         var out = [];
         for (var i = 0; i < MOCK_LEADS.length; i++) {
             var l = MOCK_LEADS[i];
-            if (!matchesOperationalFilter(l, state.activeFilter)) continue;
+            if (!matchesOperationalFilter(l, segment)) continue;
             if (!matchesCoverageBucket(l, state.coverageBucket)) continue;
             if (!matchesSearch(l, state.searchQuery.trim())) continue;
             out.push(l);
@@ -481,10 +573,11 @@
 
     // Para la nav del detail
     function getNavLeads() {
+        var segment = state.activeSegmentFilter || 'todos';
         var out = [];
         for (var i = 0; i < MOCK_LEADS.length; i++) {
             var l = MOCK_LEADS[i];
-            if (!matchesOperationalFilter(l, state.activeFilter)) continue;
+            if (!matchesOperationalFilter(l, segment)) continue;
             if (!matchesCoverageBucket(l, state.coverageBucket)) continue;
             if (!matchesSearch(l, state.searchQuery.trim())) continue;
             out.push(l);
@@ -651,6 +744,12 @@
             // TODO[odoo]: PATCH /api/activities/:id { state: 'done' }
             EDITS.activitiesDone[actId] = true;
             return simulateLatency(50, 120).then(function () { return true; });
+        },
+        // v1.4: feed unificado consumido por la tabla unica del dashboard.
+        // TODO[odoo]: GET /api/me/feed?window=15d  (composicion server-side si esta disponible;
+        // mientras tanto, hacemos el merge + dedupe + sort compuesto en cliente).
+        getUnifiedFeedSync: function (filters) {
+            return buildUnifiedFeed(filters || {});
         }
     };
 
@@ -694,6 +793,162 @@
             return { byBucket: byBucket, total: total, coveragePct: pct, target: COVERAGE_TARGET };
         }
     };
+
+    // ----- Helper interno del feed unificado (v1.4) -----
+    // Compone sugerencias + actividades (today + overdue) + leads en una sola lista
+    // de filas con shape uniforme. Hace dedupe (la sugerencia gana frente a actividad
+    // del mismo lead, pero la fila de sugerencia retiene hasActivity=true para mostrar
+    // el microcopy "+ actividad" inline), aplica filtro de tipo + segmento, y ordena
+    // con el sort compuesto inteligente cuando state.sortCol === null.
+    function buildUnifiedFeed(filters) {
+        var typeChip = filters.typeChip || state.activeTypeChip || 'suggestions';
+        var segment  = filters.segment  || state.activeSegmentFilter || null;
+
+        var suggestions = SuggestionsService.listSync();   // [{ id, leadId, suggestedFollowUpNumber, reason, urgent, hint }]
+        var activities  = ActivityService.listTodayAndOverdueSync(); // [{ id, leadId, deadline, summary, type, assignee }]
+
+        // Indices para dedupe entre sugerencia y actividad del mismo lead
+        var sugByLeadId = {};
+        for (var i = 0; i < suggestions.length; i++) sugByLeadId[suggestions[i].leadId] = suggestions[i];
+
+        // Filas tipo sugerencia: marcamos hasActivity cuando hay actividad mismo leadId
+        var sugRows = [];
+        for (var s = 0; s < suggestions.length; s++) {
+            var sug = suggestions[s];
+            var lead = getLead(sug.leadId);
+            if (!lead) continue;
+            var hasAct = false;
+            for (var aa = 0; aa < activities.length; aa++) {
+                if (activities[aa].leadId === sug.leadId) { hasAct = true; break; }
+            }
+            sugRows.push({
+                rowKey: 'sug-' + sug.id,
+                type: 'suggestion',
+                leadId: sug.leadId,
+                lead: lead,
+                suggestion: sug,
+                hasActivity: hasAct,           // microcopy "+ actividad" si true
+                sortPriority: sug.urgent ? 2 : 3
+            });
+        }
+
+        // Filas tipo actividad: filtrar las que ya estan representadas como sugerencia.
+        var actRows = [];
+        for (var a = 0; a < activities.length; a++) {
+            var act = activities[a];
+            if (sugByLeadId[act.leadId]) continue; // dedupe: sugerencia gana
+            var aLead = getLead(act.leadId);
+            if (!aLead) continue;
+            var diff = daysBetween(act.deadline);
+            var isOverdue = diff < 0;
+            var isToday   = diff === 0;
+            actRows.push({
+                rowKey: 'act-' + act.id,
+                type: 'activity',
+                leadId: act.leadId,
+                lead: aLead,
+                activity: act,
+                overdueDays: isOverdue ? Math.abs(diff) : 0,
+                isOverdue: isOverdue,
+                isToday: isToday,
+                sortPriority: isOverdue ? 1 : 4 // vencidas suben al tope (despues van las urgentes)
+            });
+        }
+
+        // Filas tipo lead: todos los activos NO representados arriba.
+        var representedLead = {};
+        for (var r = 0; r < sugRows.length; r++) representedLead[sugRows[r].leadId] = true;
+        for (var r2 = 0; r2 < actRows.length; r2++) representedLead[actRows[r2].leadId] = true;
+        var leadRows = [];
+        for (var lL = 0; lL < MOCK_LEADS.length; lL++) {
+            var ld = MOCK_LEADS[lL];
+            if (representedLead[ld.id]) continue;
+            leadRows.push({
+                rowKey: 'lead-' + ld.id,
+                type: 'lead',
+                leadId: ld.id,
+                lead: ld,
+                sortPriority: 5
+            });
+        }
+
+        // Concat segun tipo (excluyente)
+        var rows;
+        if (typeChip === 'suggestions') rows = sugRows.slice();
+        else if (typeChip === 'activities') rows = actRows.slice();
+        else /* 'leads' */ rows = leadRows.slice();
+
+        // Filtro de segmento (combinable con el chip de tipo)
+        if (segment) {
+            var filtered = [];
+            for (var f = 0; f < rows.length; f++) {
+                if (matchesOperationalFilter(rows[f].lead, segment)) filtered.push(rows[f]);
+            }
+            rows = filtered;
+        } else if (typeChip === 'leads') {
+            // Default para Leads sin segmento: cartera activa (excluye historicos)
+            var fa = [];
+            for (var f2 = 0; f2 < rows.length; f2++) {
+                if (!rows[f2].lead.historico) fa.push(rows[f2]);
+            }
+            rows = fa;
+        }
+
+        // Sort
+        if (state.sortCol) {
+            // Sort manual (header clickeado): respetamos ordering por columna del lead.
+            var sign = state.sortDir === 'asc' ? 1 : -1;
+            rows.sort(function (ra, rb) {
+                var av, bv;
+                switch (state.sortCol) {
+                    case 'familia':       av = ra.lead.name.toLowerCase(); bv = rb.lead.name.toLowerCase(); break;
+                    case 'temp':          av = TEMP_ORDER[getLeadTemperature(ra.lead)]; bv = TEMP_ORDER[getLeadTemperature(rb.lead)]; break;
+                    case 'servicio':      av = (ra.lead.serviceType || '').toLowerCase(); bv = (rb.lead.serviceType || '').toLowerCase(); break;
+                    case 'urgencia':      av = URGENCY_ORDER[ra.lead.urgency] || 0; bv = URGENCY_ORDER[rb.lead.urgency] || 0; break;
+                    case 'dias':          av = ra.lead.daysWithoutTouch; bv = rb.lead.daysWithoutTouch; break;
+                    case 'interacciones': av = ra.lead.interactionCount; bv = rb.lead.interactionCount; break;
+                    case 'etapa':         av = ra.lead.stage.toLowerCase(); bv = rb.lead.stage.toLowerCase(); break;
+                    case 'proximo':
+                        av = ra.lead.nextScheduledFollowUp ? daysBetween(ra.lead.nextScheduledFollowUp) : 9999999;
+                        bv = rb.lead.nextScheduledFollowUp ? daysBetween(rb.lead.nextScheduledFollowUp) : 9999999;
+                        break;
+                    default: return 0;
+                }
+                if (av < bv) return -1 * sign;
+                if (av > bv) return 1 * sign;
+                return 0;
+            });
+        } else {
+            // Sort compuesto inteligente (default v1.4):
+            //   1) Actividades vencidas (mas viejas primero)
+            //   2) Sugerencias urgentes
+            //   3) Sugerencias normales
+            //   4) Actividades de hoy
+            //   5) Leads por daysWithoutTouch desc
+            rows.sort(function (ra, rb) {
+                if (ra.sortPriority !== rb.sortPriority) return ra.sortPriority - rb.sortPriority;
+                if (ra.type === 'activity' && rb.type === 'activity') {
+                    return rb.overdueDays - ra.overdueDays; // mas vencidas primero
+                }
+                if (ra.type === 'lead' && rb.type === 'lead') {
+                    return rb.lead.daysWithoutTouch - ra.lead.daysWithoutTouch;
+                }
+                return 0;
+            });
+        }
+
+        return rows;
+    }
+
+    // Counts por tipo para los chips de la toolbar (siempre cuentan el universo,
+    // no se afectan por el segmento ni por el chip activo).
+    function countUnifiedByType(typeChip) {
+        return buildUnifiedFeed({ typeChip: typeChip, segment: null }).length;
+    }
+
+    function countSegmentInActiveType(segment) {
+        return buildUnifiedFeed({ typeChip: state.activeTypeChip, segment: segment }).length;
+    }
 
     var SearchService = {
         // Todo el SearchService corre async. El Asistente flotante (Estado 3) lo consume con loading skeletons.
@@ -794,7 +1049,10 @@
         send:        '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
         listOrdered: '<line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
         briefcase:   '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
-        moreHoriz:   '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'
+        moreHoriz:   '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+        zap:         '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+        dot:         '<circle cx="12" cy="12" r="3"/>',
+        slidersHoriz:'<line x1="4" y1="6" x2="11" y2="6"/><line x1="15" y1="6" x2="20" y2="6"/><line x1="4" y1="18" x2="9" y2="18"/><line x1="13" y1="18" x2="20" y2="18"/><line x1="4" y1="12" x2="6" y2="12"/><line x1="10" y1="12" x2="20" y2="12"/><circle cx="13" cy="6" r="2"/><circle cx="11" cy="18" r="2"/><circle cx="8" cy="12" r="2"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -843,26 +1101,27 @@
             '.qida-shell-mark{width:28px;height:28px;border-radius:6px;background:var(--qg);color:#fff;display:flex;align-items:center;justify-content:center;}',
             '.qida-shell-tt-main{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-weight:600;font-size:16px;line-height:1;color:var(--s900);}',
             '.qida-shell-tt-sub{font-size:11px;color:var(--s500);margin-top:2px;}',
-            '.qida-shell-actions{display:flex;align-items:center;gap:8px;}',
+            '.qida-shell-actions{display:flex;align-items:center;gap:10px;}',
             '.qida-esc{font-size:11px;color:var(--s400);}',
             '.qida-icon-btn{background:transparent;border:0;padding:6px;border-radius:6px;cursor:pointer;color:var(--s600);display:inline-flex;align-items:center;justify-content:center;transition:background .15s;}',
             '.qida-icon-btn:hover{background:var(--s100);color:var(--s900);}',
             '.qida-content{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0;}',
 
             /* coverage widget */
-            '.qida-coverage{padding:16px 24px;background:linear-gradient(180deg,var(--qg-soft) 0%,#fff 100%);border-bottom:1px solid var(--s100);}',
-            '.qida-coverage-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px;gap:12px;}',
-            '.qida-coverage-title{font-size:12px;font-weight:600;color:var(--s700);display:inline-flex;align-items:center;gap:6px;letter-spacing:.02em;}',
+            /* v1.4: cobertura compactada — padding y margenes reducidos */
+            '.qida-coverage{padding:10px 14px;background:linear-gradient(180deg,var(--qg-soft) 0%,#fff 100%);border:1px solid var(--s200);border-radius:10px;}',
+            '.qida-coverage-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:6px;gap:12px;}',
+            '.qida-coverage-title{font-size:11.5px;font-weight:600;color:var(--s700);display:inline-flex;align-items:center;gap:6px;letter-spacing:.02em;}',
             '.qida-coverage-target{font-size:11px;color:var(--s500);}',
             '.qida-coverage-target strong{color:var(--qg);font-weight:600;}',
-            '.qida-coverage-row{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap;}',
-            '.qida-cov-chip{flex:1;min-width:130px;display:inline-flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-radius:8px;border:1px solid var(--s200);background:#fff;cursor:pointer;font-family:inherit;color:var(--s700);transition:border-color .15s,box-shadow .15s,transform .12s;text-align:left;}',
+            '.qida-coverage-row{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;}',
+            '.qida-cov-chip{flex:1;min-width:120px;display:inline-flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border-radius:7px;border:1px solid var(--s200);background:#fff;cursor:pointer;font-family:inherit;color:var(--s700);transition:border-color .15s,box-shadow .15s,transform .12s;text-align:left;}',
             '.qida-cov-chip:hover{border-color:var(--s300);transform:translateY(-1px);}',
             '.qida-cov-chip.active{border-color:var(--qg);box-shadow:0 0 0 2px rgba(14,74,58,.12);background:var(--qg-soft);}',
-            '.qida-cov-chip-label{display:flex;flex-direction:column;gap:2px;}',
-            '.qida-cov-chip-label-main{font-size:12px;font-weight:500;color:var(--s700);display:inline-flex;align-items:center;gap:6px;}',
+            '.qida-cov-chip-label{display:flex;flex-direction:column;gap:1px;}',
+            '.qida-cov-chip-label-main{font-size:11.5px;font-weight:500;color:var(--s700);display:inline-flex;align-items:center;gap:6px;}',
             '.qida-cov-chip-label-sub{font-size:10px;color:var(--s500);}',
-            '.qida-cov-chip-num{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-size:22px;font-weight:600;color:var(--s900);line-height:1;}',
+            '.qida-cov-chip-num{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-size:18px;font-weight:600;color:var(--s900);line-height:1;}',
             '.qida-cov-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;}',
             '.qida-cov-chip[data-bucket="0"] .qida-cov-dot{background:#94a3b8;}',
             '.qida-cov-chip[data-bucket="1"] .qida-cov-dot{background:#f59e0b;}',
@@ -1109,101 +1368,36 @@
             '.qida-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}',
 
             /* ============================================================
-               v1.3 DASHBOARD V2: container + sections + assistant + skeletons
+               v1.4 DASHBOARD: container + cobertura compacta + tabla unificada + asistente header
                ============================================================ */
 
-            /* Dashboard container centrado */
+            /* Dashboard container centrado (max-width subido + padding lateral reducido) */
             '.qida-dash-v2{flex:1;overflow-y:auto;background:var(--s50);}',
-            '.qida-dash-container{max-width:1280px;margin:0 auto;padding:32px;display:flex;flex-direction:column;gap:24px;}',
+            '.qida-dash-container{max-width:1480px;margin:0 auto;padding:16px 20px 24px;display:flex;flex-direction:column;gap:16px;}',
             '.qida-section{background:#fff;border:1px solid var(--s200);border-radius:10px;}',
-            '.qida-section-h{display:flex;align-items:center;gap:10px;padding:14px 18px;}',
-            '.qida-section-h-title{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:15px;color:var(--s900);display:inline-flex;align-items:center;gap:8px;}',
-            '.qida-section-h-count{font-size:12px;color:var(--s500);font-weight:500;}',
-            '.qida-section-h-actions{margin-left:auto;display:inline-flex;align-items:center;gap:8px;}',
-            '.qida-section-h-toggle{background:transparent;border:0;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:4px 6px;border-radius:6px;font-family:inherit;font-size:12px;}',
-            '.qida-section-h-toggle:hover{background:var(--s100);color:var(--s900);}',
-            '.qida-section-body{padding:0 18px 18px;}',
 
-            /* Sugerencias del dia cards */
-            '.qida-sug-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}',
-            '@media (max-width:900px){.qida-sug-grid{grid-template-columns:1fr;}}',
-            '.qida-sug{position:relative;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;transition:border-color .15s,box-shadow .15s;}',
-            '.qida-sug:hover{border-color:var(--s300);box-shadow:0 2px 8px rgba(0,0,0,.04);}',
-            '.qida-sug.urgent{border-left:3px solid #f97316;}',
-            '.qida-sug-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}',
-            '.qida-sug-lead{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;}',
-            '.qida-sug-name{font-weight:600;font-size:13px;color:var(--s900);line-height:1.3;}',
-            '.qida-sug-meta{font-size:11px;color:var(--s500);display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap;}',
-            '.qida-sug-badges{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;}',
-            '.qida-sug-fu{font-size:10px;background:var(--qg-soft);color:var(--qg);padding:2px 8px;border-radius:999px;font-weight:600;letter-spacing:.02em;display:inline-flex;align-items:center;gap:3px;border:1px solid var(--qg-soft-border);}',
-            '.qida-sug-fu.urgent{background:#fff7ed;color:#9a3412;border-color:#fed7aa;}',
-            '.qida-sug-reason{font-size:12px;color:var(--s700);line-height:1.4;margin:0;}',
-            '.qida-sug-aux{font-size:10px;color:var(--s500);display:inline-flex;align-items:center;gap:4px;font-style:italic;}',
-            '.qida-sug-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:auto;}',
-            '.qida-sug-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;font-size:12px;font-weight:500;border-radius:6px;border:1px solid var(--s200);background:#fff;color:var(--s700);cursor:pointer;font-family:inherit;transition:border-color .15s,background .15s,color .15s;}',
-            '.qida-sug-btn:hover{border-color:var(--s400);color:var(--s900);}',
-            '.qida-sug-btn.primary{background:var(--qg);color:#fff;border-color:var(--qg);}',
-            '.qida-sug-btn.primary:hover{background:var(--qgH);border-color:var(--qgH);color:#fff;}',
-            '.qida-sug-btn.success{background:#ecfdf5;color:#047857;border-color:#a7f3d0;}',
-            '.qida-sug-btn.success:hover{background:#d1fae5;color:#065f46;border-color:#6ee7b7;}',
+            /* Asistente en header - Estado 1 (pill inline) */
+            '.qida-asst-anchor{display:inline-flex;align-items:center;}',
+            '.qida-asst-pill{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;background:var(--qg);color:#fff;border:0;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(14,74,58,.18);transition:transform .12s,box-shadow .12s,background .12s;}',
+            '.qida-asst-pill:hover{background:var(--qgH);transform:translateY(-1px);box-shadow:0 4px 10px rgba(14,74,58,.24);}',
+            '.qida-asst-pill kbd{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:4px;padding:1px 5px;font-size:10px;font-family:"Manrope",monospace;}',
 
-            /* Posponer dropdown */
-            '.qida-pp-wrap{position:relative;display:inline-block;}',
-            '.qida-pp-menu{position:absolute;right:0;top:calc(100% + 4px);background:#fff;border:1px solid var(--s200);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:30;min-width:180px;padding:6px;}',
-            '.qida-pp-opt{display:block;width:100%;text-align:left;padding:8px 10px;font-size:12px;color:var(--s700);background:transparent;border:0;border-radius:6px;cursor:pointer;font-family:inherit;}',
-            '.qida-pp-opt:hover{background:var(--s100);color:var(--s900);}',
-
-            /* Sugerencias estado vacio */
-            '.qida-sug-empty{padding:24px 18px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;color:var(--s500);}',
-            '.qida-sug-empty-icon{color:var(--qg);}',
-            '.qida-sug-empty-title{font-size:13px;font-weight:600;color:var(--s700);}',
-            '.qida-sug-empty-sub{font-size:11px;color:var(--s500);}',
-
-            /* Scheduled activities cards */
-            '.qida-sched-list{display:flex;flex-direction:column;gap:8px;}',
-            '.qida-sched{display:flex;align-items:center;gap:12px;padding:10px 12px;background:#fff;border:1px solid var(--s200);border-radius:8px;cursor:pointer;transition:border-color .15s,background .15s;}',
-            '.qida-sched:hover{border-color:var(--s300);background:var(--s50);}',
-            '.qida-sched.overdue{border-color:#fecaca;background:var(--red50);}',
-            '.qida-sched.overdue:hover{border-color:#fca5a5;}',
-            '.qida-sched-icon{flex-shrink:0;padding:7px;border-radius:8px;background:var(--s100);color:var(--s700);}',
-            '.qida-sched.overdue .qida-sched-icon{background:#fee2e2;color:var(--red600);}',
-            '.qida-sched.today .qida-sched-icon{background:var(--qg-soft);color:var(--qg);}',
-            '.qida-sched-body{flex:1;min-width:0;}',
-            '.qida-sched-summary{font-size:13px;font-weight:500;color:var(--s900);line-height:1.3;}',
-            '.qida-sched-meta{font-size:11px;color:var(--s500);margin-top:2px;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;}',
-            '.qida-sched.overdue .qida-sched-meta{color:var(--red600);}',
-            '.qida-sched-badge{font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;}',
-            '.qida-sched-badge.overdue{background:#fee2e2;color:#991b1b;}',
-            '.qida-sched-badge.today{background:var(--qg-soft);color:var(--qg);}',
-            '.qida-sched-done{background:transparent;border:1px solid var(--s200);border-radius:6px;padding:5px 9px;font-size:11px;color:var(--s600);cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;flex-shrink:0;}',
-            '.qida-sched-done:hover{border-color:var(--qg);color:var(--qg);}',
-            '.qida-sched-empty{padding:18px;text-align:center;color:var(--s500);font-size:12px;font-style:italic;}',
-
-            /* Tabla colapsable - header full-clickable, body se muestra/oculta */
-            '.qida-table-header-bar{display:flex;align-items:center;gap:10px;padding:14px 18px;cursor:pointer;border-radius:10px;}',
-            '.qida-table-header-bar:hover{background:var(--s50);}',
-            '.qida-table-body{padding:0 18px 18px;}',
-
-            /* Asistente flotante - Estado 1 (pill) */
-            '.qida-asst-pill{position:absolute;bottom:24px;right:24px;display:inline-flex;align-items:center;gap:8px;padding:11px 18px;background:var(--qg);color:#fff;border:0;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:0 8px 24px rgba(14,74,58,.25),0 2px 4px rgba(14,74,58,.1);transition:transform .15s,box-shadow .15s;z-index:4;}',
-            '.qida-asst-pill:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(14,74,58,.3),0 4px 6px rgba(14,74,58,.15);}',
-            '.qida-asst-pill kbd{background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.22);border-radius:4px;padding:1px 5px;font-size:10px;font-family:"Manrope",monospace;}',
-
-            /* Asistente flotante - Estado 2 (expanded input) */
-            '.qida-asst-exp-bg{position:absolute;inset:0;background:rgba(28,25,23,.15);z-index:4;display:flex;align-items:flex-end;justify-content:flex-end;padding:24px;}',
-            '.qida-asst-exp{background:#fff;border:1px solid var(--s200);border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.18);width:520px;max-width:100%;padding:14px 16px;display:flex;flex-direction:column;gap:10px;}',
-            '.qida-asst-exp-title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;}',
-            '.qida-asst-exp-row{display:flex;align-items:center;gap:8px;}',
-            '.qida-asst-input{flex:1;padding:10px 12px;font-family:inherit;font-size:14px;color:var(--s900);background:var(--s50);border:1px solid var(--s200);border-radius:8px;outline:none;transition:border-color .15s,background .15s;}',
-            '.qida-asst-input:focus{border-color:var(--qg);background:#fff;}',
-            '.qida-asst-send{padding:10px 12px;background:var(--qg);color:#fff;border:0;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}',
+            /* Asistente en header - Estado 2 (input expandido inline) */
+            '.qida-asst-exp-inline{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1.5px solid var(--qg);border-radius:999px;padding:4px 6px 4px 12px;box-shadow:0 4px 12px rgba(14,74,58,.12);color:var(--qg);}',
+            '.qida-asst-input{flex:1;min-width:240px;max-width:420px;padding:6px 4px;font-family:inherit;font-size:13px;color:var(--s900);background:transparent;border:0;outline:none;}',
+            '.qida-asst-send{padding:6px 10px;background:var(--qg);color:#fff;border:0;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}',
             '.qida-asst-send:hover{background:var(--qgH);}',
             '.qida-asst-send:disabled{opacity:.4;cursor:not-allowed;}',
-            '.qida-asst-hints{display:flex;flex-wrap:wrap;gap:6px;padding-top:4px;}',
-            '.qida-asst-hint{font-size:11px;color:var(--s600);background:var(--s100);padding:4px 10px;border-radius:999px;cursor:pointer;border:0;font-family:inherit;transition:background .15s;}',
-            '.qida-asst-hint:hover{background:var(--s200);color:var(--s900);}',
+            '.qida-asst-collapse{background:transparent;border:0;color:var(--s500);cursor:pointer;padding:6px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;}',
+            '.qida-asst-collapse:hover{background:var(--s100);color:var(--s900);}',
 
-            /* Asistente flotante - Estado 3 (panel lateral) */
+            /* Asistente en header - Estado 3 (chip compacto cuando hay panel de resultados abierto) */
+            '.qida-asst-chip{display:inline-flex;align-items:center;gap:6px;background:var(--qg-soft);color:var(--qg);border:1px solid var(--qg-soft-border);border-radius:999px;padding:5px 6px 5px 11px;font-size:12px;font-weight:500;max-width:280px;}',
+            '.qida-asst-chip-q{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+            '.qida-asst-chip-x{background:transparent;border:0;color:var(--qg);cursor:pointer;padding:3px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;}',
+            '.qida-asst-chip-x:hover{background:rgba(14,74,58,.12);}',
+
+            /* Asistente - Estado 3 (panel lateral 30%) */
             '.qida-asst-panel{display:flex;flex-direction:column;width:30%;min-width:340px;max-width:480px;border-left:1px solid var(--s200);background:#fff;flex-shrink:0;}',
             '.qida-asst-panel-head{padding:14px 16px;border-bottom:1px solid var(--s200);display:flex;align-items:center;gap:8px;}',
             '.qida-asst-panel-q{flex:1;font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:14px;color:var(--s900);line-height:1.3;}',
@@ -1219,8 +1413,82 @@
             '.qida-asst-result-name{font-size:12px;font-weight:600;color:var(--s900);line-height:1.3;}',
             '.qida-asst-result-meta{font-size:10px;color:var(--s500);margin-top:2px;display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;}',
             '.qida-asst-result-text{font-size:12px;color:var(--s700);line-height:1.4;margin-top:4px;}',
-            '.qida-asst-result-actions{display:flex;gap:6px;margin-top:6px;}',
             '.qida-asst-empty{padding:14px;background:#fff;border:1px dashed var(--s200);border-radius:8px;text-align:center;font-size:11px;color:var(--s500);font-style:italic;}',
+
+            /* ============================================================
+               v1.4 TABLA UNIFICADA estilo Odoo Activities
+               ============================================================ */
+            '.qida-unified{padding:12px 14px 14px;}',
+            /* Toolbar (boton Filtros + segment tag activa | chips de tipo) */
+            '.qida-unified-toolbar{display:flex;align-items:center;gap:10px;padding:0 0 12px;flex-wrap:wrap;}',
+            '.qida-unified-toolbar-left{display:inline-flex;align-items:center;gap:8px;flex:1;min-width:0;}',
+            '.qida-unified-toolbar-right{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;}',
+            '.qida-filters-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#fff;border:1px solid var(--s200);border-radius:8px;color:var(--s700);font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;transition:border-color .15s,background .15s,color .15s;}',
+            '.qida-filters-btn:hover{border-color:var(--s400);color:var(--s900);}',
+            '.qida-filters-btn.active{border-color:var(--qg);color:var(--qg);background:var(--qg-soft);}',
+            '.qida-filters-btn-count{background:var(--qg);color:#fff;border-radius:999px;padding:0 6px;font-size:10px;font-weight:600;line-height:16px;min-width:16px;text-align:center;}',
+            '.qida-active-segment-tag{display:inline-flex;align-items:center;gap:4px;background:var(--qg-soft);color:var(--qg);border:1px solid var(--qg-soft-border);padding:4px 4px 4px 10px;border-radius:999px;font-size:11px;font-weight:600;}',
+            '.qida-active-segment-x{background:transparent;border:0;color:var(--qg);cursor:pointer;padding:2px;border-radius:999px;display:inline-flex;}',
+            '.qida-active-segment-x:hover{background:rgba(14,74,58,.14);}',
+            /* Type chips (right) */
+            '.qida-type-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#fff;border:1px solid var(--s200);border-radius:999px;color:var(--s600);font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;transition:border-color .15s,color .15s,background .15s;}',
+            '.qida-type-chip:hover{border-color:var(--s400);color:var(--s900);}',
+            '.qida-type-chip.active{background:var(--qg);color:#fff;border-color:var(--qg);box-shadow:0 1px 3px rgba(14,74,58,.18);}',
+            '.qida-type-chip-count{background:rgba(0,0,0,.06);color:inherit;border-radius:999px;padding:0 6px;font-size:10px;font-weight:600;line-height:16px;min-width:16px;text-align:center;}',
+            '.qida-type-chip.active .qida-type-chip-count{background:rgba(255,255,255,.22);color:#fff;}',
+            /* Segment chips (expanded row) */
+            '.qida-segment-chips{display:flex;align-items:center;gap:6px;padding:0 0 12px;flex-wrap:wrap;border-top:1px dashed var(--s200);margin-top:-6px;padding-top:10px;}',
+
+            /* Tabla unificada */
+            '.qida-unified-table-wrap{overflow-x:auto;border:1px solid var(--s200);border-radius:8px;}',
+            '.qida-unified-table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;}',
+            '.qida-unified-table thead th{position:sticky;top:0;background:var(--s50);font-size:11px;font-weight:600;color:var(--s600);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;text-align:left;border-bottom:1px solid var(--s200);white-space:nowrap;}',
+            '.qida-unified-table thead .qida-uth-icon{width:34px;padding-left:14px;}',
+            '.qida-unified-table tbody td{padding:8px 10px;border-bottom:1px solid var(--s100);vertical-align:middle;}',
+            '.qida-unified-table tbody tr:last-child td{border-bottom:0;}',
+
+            /* Fila base */
+            '.qida-urow{cursor:pointer;transition:background .12s;position:relative;}',
+            '.qida-urow:hover{background:var(--s50);}',
+            '.qida-urow td.qida-urow-icon{padding-left:14px;width:34px;}',
+            '.qida-urow-icon-wrap{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:var(--s100);color:var(--s500);}',
+            '.qida-urow-icon-wrap.sug{background:var(--qg-soft);color:var(--qg);}',
+            '.qida-urow-icon-wrap.act{background:#fef3c7;color:#92400e;}',
+            '.qida-urow-icon-wrap.act.overdue{background:#fee2e2;color:var(--red600);}',
+            '.qida-urow-icon-wrap.lead{background:var(--s100);color:var(--s500);}',
+            '.qida-urow-familia{min-width:220px;}',
+            '.qida-urow-name{font-weight:600;color:var(--s900);line-height:1.3;font-size:13px;}',
+            '.qida-urow-meta{font-size:11px;color:var(--s500);margin-top:1px;display:inline-flex;align-items:center;gap:5px;}',
+            /* v1.5: Tipo y Etapa con cap + ellipsis (180/140) para que el ancho extra vaya a "Por que". */
+            '.qida-urow-type{white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;}',
+            '.qida-urow-temp{white-space:nowrap;}',
+            '.qida-urow-porque{min-width:280px;max-width:320px;color:var(--s700);}',
+            '.qida-urow-porque span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;}',
+            '.qida-urow-dias{white-space:nowrap;}',
+            '.qida-urow-proximo{white-space:nowrap;color:var(--s700);}',
+            '.qida-urow-etapa{white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;}',
+            '.qida-urow-etapa .qida-stage{display:inline-block;background:var(--s100);color:var(--s700);border-radius:4px;font-size:10px;padding:2px 7px;font-weight:500;}',
+
+            /* Tipo badges */
+            '.qida-utype-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;letter-spacing:.02em;border:1px solid transparent;}',
+            '.qida-utype-badge.sug{background:var(--qg-soft);color:var(--qg);border-color:var(--qg-soft-border);}',
+            '.qida-utype-badge.sug.urgent{background:#fff7ed;color:#9a3412;border-color:#fed7aa;}',
+            '.qida-utype-badge.act{background:#fef3c7;color:#92400e;border-color:#fde68a;}',
+            '.qida-utype-badge.act-overdue{background:#fee2e2;color:#991b1b;border-color:#fecaca;}',
+            '.qida-utype-badge.act-today{background:#fef3c7;color:#92400e;border-color:#fde68a;}',
+            '.qida-utype-badge.lead{background:var(--s100);color:var(--s600);border-color:var(--s200);}',
+            '.qida-utype-sub{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:500;color:var(--s500);margin-left:6px;font-style:italic;}',
+
+            /* Fondos sutiles por tipo de fila (estilo Odoo Activities) */
+            '.qida-urow-suggestion{background:rgba(14,74,58,.04);}',
+            '.qida-urow-suggestion:hover{background:rgba(14,74,58,.07);}',
+            '.qida-urow-suggestion.urgent{box-shadow:inset 3px 0 0 #f97316;}',
+            '.qida-urow-activity-overdue{background:rgba(220,38,38,.05);}',
+            '.qida-urow-activity-overdue:hover{background:rgba(220,38,38,.08);}',
+
+            /* Estado vacio tabla unificada */
+            '.qida-unified-empty{padding:48px 24px;text-align:center;color:var(--s500);display:flex;flex-direction:column;align-items:center;gap:10px;}',
+            '.qida-unified-empty p{font-size:13px;color:var(--s600);margin:0;max-width:480px;line-height:1.4;}',
 
             /* Skeleton loaders */
             '.qida-skel{background:linear-gradient(90deg,#e7e5e4 0%,#f5f5f4 50%,#e7e5e4 100%);background-size:200% 100%;border-radius:6px;animation:qida-skel 1.2s infinite linear;}',
@@ -1232,9 +1500,9 @@
             '.qida-cov-hint{font-size:10px;color:var(--s500);margin-top:4px;font-style:italic;}',
 
             /* Responsive */
-            '@media (max-width:1100px){.qida-pane-wa{width:280px;}.qida-pane-right{width:280px;}.qida-asst-panel{width:34%;}}',
+            '@media (max-width:1100px){.qida-pane-wa{width:280px;}.qida-pane-right{width:280px;}.qida-asst-panel{width:34%;}.qida-asst-input{min-width:180px;max-width:280px;}}',
             '@media (max-width:900px){.qida-pane-wa{width:240px;}.qida-pane-right{display:none;}.qida-asst-panel{width:100%;position:absolute;inset:0;z-index:5;}}',
-            '@media (max-width:760px){.qida-pane-wa{display:none;}.qida-search input{padding-right:38px;}.qida-search-hint{display:none;}.qida-care-grid{grid-template-columns:1fr;}.qida-dash-container{padding:16px;gap:16px;}.qida-asst-exp{width:100%;}}'
+            '@media (max-width:760px){.qida-pane-wa{display:none;}.qida-search input{padding-right:38px;}.qida-search-hint{display:none;}.qida-care-grid{grid-template-columns:1fr;}.qida-dash-container{padding:12px 14px;gap:12px;}.qida-asst-input{min-width:140px;max-width:200px;}}'
         ].join('');
 
         var style = document.createElement('style');
@@ -1270,7 +1538,7 @@
         var stale = days >= threshold;
         return '<span class="qida-days' + (stale ? ' stale' : '') + '">'
             + (stale ? '<span class="qida-days-dot"></span>' : '')
-            + days + 'd sin tocar'
+            + days + 'd sin contacto'
             + '</span>';
     }
 
@@ -1320,60 +1588,14 @@
     }
 
     // ============================================================
-    // RENDER: dashboard table (modulo)
-    // ============================================================
-    // TODO v1.4: estados especiales en filas
-    // - Acento lateral rojo para leads con urgent=true
-    // - Badge "Reactiva en X dias" para pausados con pausaUntil < 7d
-    // - Badge "Cierra ventana en X dias" para leads con entryDate > 12d
-    // (Postergado a P1 segun decision del 15-may. Implementar en renderLeadsRows
-    // junto con styles `.qida-row-urgent`, `.qida-row-react-badge`, `.qida-row-window-badge`.)
-
-    function renderLeadsRows() {
-        var leads = getFilteredLeads();
-        if (leads.length === 0) {
-            return '<tr><td colspan="9" class="qida-empty">No hay leads que coincidan con este filtro o busqueda.</td></tr>';
-        }
-        var html = '';
-        for (var i = 0; i < leads.length; i++) {
-            var l = leads[i];
-            var t = getLeadTemperature(l);
-            var nextLabel = l.nextScheduledFollowUp ? formatDateEs(l.nextScheduledFollowUp) : '&mdash;';
-            var nextDiff = l.nextScheduledFollowUp ? daysBetween(l.nextScheduledFollowUp) : null;
-            var nextCls = '';
-            var nextHint = '';
-            if (nextDiff != null) {
-                if (nextDiff < 0) { nextCls = ' style="color:var(--red600);font-weight:500;"'; nextHint = ' <span style="font-size:10px;opacity:.75;">(vencido)</span>'; }
-                else if (nextDiff === 0) { nextCls = ' style="color:var(--qg);font-weight:600;"'; nextHint = ' <span style="font-size:10px;">(hoy)</span>'; }
-            }
-            html += '<tr data-action="select-lead" data-id="' + esc(l.id) + '">'
-                + '<td><div><div class="qida-lead-name">' + esc(l.name) + '</div>'
-                + '<div class="qida-lead-meta"><span style="display:inline-flex;align-items:center;gap:2px;">' + icon('mapPin', 9) + esc(l.location) + '</span>'
-                + '<span>&middot;</span><span>' + esc(l.elderly) + '</span></div></div></td>'
-                + '<td>' + renderTempBadge(t, getLeadTemperatureSource(l), false) + '</td>'
-                + '<td><p class="qida-lead-reason">' + esc(l.temperatureReason) + '</p></td>'
-                + '<td><span class="qida-service">' + esc(l.serviceType || '-') + '</span></td>'
-                + '<td>' + renderUrg(l.urgency) + '</td>'
-                + '<td>' + renderDays(l.daysWithoutTouch, t) + '</td>'
-                + '<td><span style="font-size:12px;color:var(--s700);">' + l.interactionCount + '</span></td>'
-                + '<td><span style="font-size:12px;color:var(--s700);"' + nextCls + '>' + nextLabel + nextHint + '</span></td>'
-                + '<td><span class="qida-stage">' + esc(l.stage) + '</span></td>'
-                + '</tr>';
-        }
-        return html;
-    }
-
-    // ============================================================
-    // RENDER: dashboard v2 (4 secciones)
+    // RENDER: dashboard v1.4 (cobertura compacta + tabla unificada)
     // ============================================================
     function renderDashboard() {
         return '<div class="qida-dash-flex" style="display:flex;flex:1;min-height:0;overflow:hidden;">'
             + '<div class="qida-dash-v2">'
                 + '<div class="qida-dash-container">'
                     + renderCoverageSection()
-                    + renderDailySuggestionsSection()
-                    + renderScheduledSection()
-                    + renderTableSection()
+                    + renderUnifiedTable()
                 + '</div>'
             + '</div>'
             + (state.assistantState === 'results' ? renderAssistantPanel() : '')
@@ -1381,251 +1603,188 @@
     }
 
     function renderCoverageSection() {
-        // El widget de cobertura ya tiene su propio chrome visual (gradient header), envuelvo en seccion plana.
-        return '<section class="qida-section" style="overflow:hidden;">' + renderCoverage() + '</section>';
+        // El widget de cobertura ya tiene su propio chrome visual (gradient header). En v1.4 lo dejamos
+        // como franja plana embebida directamente (sin section card), para compactar.
+        return renderCoverage();
     }
 
     // ============================================================
-    // RENDER: sugerencias del dia (seccion 2)
+    // RENDER: tabla unificada estilo Odoo Activities (v1.4 - reemplaza Secciones 2/3/4 de v1.3)
     // ============================================================
-    function renderDailySuggestionsSection() {
-        var all = SuggestionsService.listSync();
-        var visible = all.slice(0, 5);
-        var hidden = all.length - visible.length;
-        var totalLabel = all.length === 0 ? '0' : all.length;
+    // TODO v1.5: estados especiales en filas (postergado de v1.3 P1, sigue vigente):
+    // - Badge "Reactiva en X dias" en fila pausa con pausaUntil < 7d
+    // - Badge "Cierra ventana en X dias" en fila lead con entryDate > 12d
+    // - Indicador de prescriptor (ESSIP, hospital, organico) como pill suave en col "Familia"
+    function renderUnifiedTable() {
+        var typeChip = state.activeTypeChip;
+        var segment  = state.activeSegmentFilter;
 
-        var body;
-        if (all.length === 0) {
-            body = '<div class="qida-sug-empty">'
-                + '<span class="qida-sug-empty-icon">' + icon('check', 24) + '</span>'
-                + '<span class="qida-sug-empty-title">Sin sugerencias para hoy</span>'
-                + '<span class="qida-sug-empty-sub">Aprovecha para retomar los Frios a reactivar de la tabla.</span>'
-            + '</div>';
-        } else {
-            var cards = '';
-            for (var i = 0; i < visible.length; i++) cards += renderSuggestionCard(visible[i]);
-            body = '<div class="qida-sug-grid">' + cards + '</div>'
-                + (hidden > 0
-                    ? '<div style="margin-top:10px;text-align:right;">'
-                        + '<button class="qida-link-btn" data-action="suggestion-show-all">Ver todas (' + all.length + ') ' + icon('arrowRight', 11) + '</button>'
-                    + '</div>'
-                    : '');
-        }
+        // Counts para los chips de tipo (universo total por tipo, sin segmento aplicado)
+        var nSug  = countUnifiedByType('suggestions');
+        var nAct  = countUnifiedByType('activities');
+        var nLead = countUnifiedByType('leads');
 
-        return '<section class="qida-section">'
-            + '<div class="qida-section-h">'
-                + '<span class="qida-section-h-title">' + icon('sparkles', 14) + ' Sugerencias del dia</span>'
-                + '<span class="qida-section-h-count">' + totalLabel + ' lead' + (all.length === 1 ? '' : 's') + ' que necesitan tu atencion hoy</span>'
-            + '</div>'
-            + '<div class="qida-section-body">' + body + '</div>'
-        + '</section>';
-    }
+        // Counts para los segment chips dentro del tipo activo
+        var nCaliente   = countSegmentInActiveType('caliente');
+        var nTemplado   = countSegmentInActiveType('templado');
+        var nFrio       = countSegmentInActiveType('frio-reactivar');
+        var nPausa      = countSegmentInActiveType('pausa');
+        var nUrgente    = countSegmentInActiveType('urgente');
+        var nHistorico  = countSegmentInActiveType('historico');
 
-    function renderSuggestionCard(sug) {
-        var lead = getLead(sug.leadId);
-        if (!lead) return '';
-        var temp = getLeadTemperature(lead);
-        var fuLabel = sug.suggestedFollowUpNumber === 1 ? '1er msg'
-                    : sug.suggestedFollowUpNumber === 2 ? '2do msg'
-                    : sug.suggestedFollowUpNumber === 3 ? '3er msg'
-                    : sug.suggestedFollowUpNumber + 'o msg';
+        var rows = buildUnifiedFeed({ typeChip: typeChip, segment: segment });
 
-        // Si la sugerencia tiene un nextScheduledFollowUp ya creado, indicar.
-        var hasScheduled = false;
-        for (var i = 0; i < EDITS.scheduledActivities.length; i++) {
-            if (EDITS.scheduledActivities[i].leadId === lead.id) { hasScheduled = true; break; }
-        }
-        if (!hasScheduled && lead.nextScheduledFollowUp) {
-            var diff = daysBetween(lead.nextScheduledFollowUp);
-            if (diff >= 0) hasScheduled = true;
-        }
-
-        var ppOpen = (state.postponeOpenFor === sug.id);
-
-        return '<div class="qida-sug' + (sug.urgent ? ' urgent' : '') + '">'
-            + '<div class="qida-sug-top">'
-                + '<div class="qida-sug-lead">'
-                    + '<span class="qida-sug-name">' + esc(lead.name) + '</span>'
-                    + '<span class="qida-sug-meta">' + renderTempBadge(temp, getLeadTemperatureSource(lead), true)
-                        + '<span>&middot;</span><span>' + esc(lead.location) + '</span>'
-                        + '<span>&middot;</span><span>' + esc(lead.elderly) + '</span>'
-                    + '</span>'
-                + '</div>'
-                + '<div class="qida-sug-badges">'
-                    + '<span class="qida-sug-fu' + (sug.urgent ? ' urgent' : '') + '">' + icon('sparkles', 9) + ' ' + esc(fuLabel) + '</span>'
-                + '</div>'
-            + '</div>'
-            + '<p class="qida-sug-reason">' + esc(sug.reason) + '</p>'
-            + (hasScheduled
-                ? '<span class="qida-sug-aux">' + icon('calendar', 10) + ' + actividad agendada</span>'
-                : '')
-            + '<div class="qida-sug-actions">'
-                + '<button class="qida-sug-btn primary" data-action="suggestion-open" data-id="' + esc(sug.leadId) + '">' + icon('arrowRight', 11) + ' Abrir</button>'
-                + '<button class="qida-sug-btn success" data-action="suggestion-done" data-id="' + esc(sug.id) + '" data-lead="' + esc(sug.leadId) + '">' + icon('check', 11) + ' Marcar hecho</button>'
-                + '<div class="qida-pp-wrap">'
-                    + '<button class="qida-sug-btn" data-action="suggestion-postpone-toggle" data-id="' + esc(sug.id) + '">' + icon('clock', 11) + ' Posponer ' + icon('chevDown', 10) + '</button>'
-                    + (ppOpen
-                        ? '<div class="qida-pp-menu">'
-                            + '<button class="qida-pp-opt" data-action="suggestion-postpone" data-id="' + esc(sug.id) + '" data-days="1">Manana</button>'
-                            + '<button class="qida-pp-opt" data-action="suggestion-postpone" data-id="' + esc(sug.id) + '" data-days="7">En 7 dias</button>'
-                            + '<button class="qida-pp-opt" data-action="suggestion-postpone" data-id="' + esc(sug.id) + '" data-days="14">En 14 dias</button>'
-                            + '<button class="qida-pp-opt" data-action="suggestion-postpone-custom" data-id="' + esc(sug.id) + '">Custom...</button>'
-                          + '</div>'
-                        : '')
-                + '</div>'
-            + '</div>'
-        + '</div>';
-    }
-
-    // ============================================================
-    // RENDER: actividades agendadas (seccion 3)
-    // ============================================================
-    function renderScheduledSection() {
-        // Dedupe contra sugerencias del dia (no mostrar actividades cuyo leadId ya esta sugerido)
-        var sugLeadIds = {};
-        var sugs = SuggestionsService.listSync();
-        for (var i = 0; i < sugs.length; i++) sugLeadIds[sugs[i].leadId] = true;
-
-        var all = ActivityService.listTodayAndOverdueSync();
-        var deduped = [];
-        for (var j = 0; j < all.length; j++) {
-            if (sugLeadIds[all[j].leadId]) continue;
-            deduped.push(all[j]);
-        }
-        var n = deduped.length;
-        var collapsed = state.collapsedScheduled;
-
-        var body;
-        if (collapsed) {
-            body = '';
-        } else if (n === 0) {
-            body = '<div class="qida-sched-empty">Sin actividades agendadas para hoy ni vencidas.</div>';
-        } else {
-            // ordenar: vencidas primero (mas vencidas arriba), luego hoy
-            deduped.sort(function (a, b) {
-                var da = daysBetween(a.deadline);
-                var db = daysBetween(b.deadline);
-                return da - db;
-            });
-            var cards = '';
-            for (var k = 0; k < deduped.length; k++) cards += renderScheduledCard(deduped[k]);
-            body = '<div class="qida-sched-list">' + cards + '</div>';
-        }
-
-        return '<section class="qida-section">'
-            + '<div class="qida-section-h">'
-                + '<span class="qida-section-h-title">' + icon('calendar', 14) + ' Actividades agendadas</span>'
-                + '<span class="qida-section-h-count">' + n + ' para hoy o vencidas</span>'
-                + '<div class="qida-section-h-actions">'
-                    + '<button class="qida-section-h-toggle" data-action="toggle-scheduled">'
-                        + (collapsed ? icon('chevDown', 12) + ' Expandir' : icon('chevUp', 12) + ' Colapsar')
-                    + '</button>'
-                + '</div>'
-            + '</div>'
-            + (collapsed ? '' : '<div class="qida-section-body">' + body + '</div>')
-        + '</section>';
-    }
-
-    function renderScheduledCard(act) {
-        var lead = getLead(act.leadId);
-        var diff = daysBetween(act.deadline);
-        var isOverdue = diff < 0;
-        var isToday = diff === 0;
-        var cls = 'qida-sched' + (isOverdue ? ' overdue' : (isToday ? ' today' : ''));
-        var badgeHtml = '';
-        if (isOverdue) badgeHtml = '<span class="qida-sched-badge overdue">Vencida hace ' + Math.abs(diff) + ' dia' + (Math.abs(diff) === 1 ? '' : 's') + '</span>';
-        else if (isToday) badgeHtml = '<span class="qida-sched-badge today">Hoy</span>';
-
-        var iconName = act.type === 'Llamada' ? 'phone' : (act.type === 'Recordatorio' ? 'clock' : 'check');
-
-        return '<div class="' + cls + '" data-action="scheduled-open" data-id="' + esc(act.leadId) + '">'
-            + '<div class="qida-sched-icon">' + icon(iconName, 14) + '</div>'
-            + '<div class="qida-sched-body">'
-                + '<div class="qida-sched-summary">' + esc(act.summary) + '</div>'
-                + '<div class="qida-sched-meta">'
-                    + (lead ? '<strong>' + esc(lead.name) + '</strong>' : esc(act.leadId))
-                    + '<span>&middot;</span><span>' + icon('calendar', 10) + ' ' + esc(formatDateEs(act.deadline)) + '</span>'
-                    + '<span>&middot;</span><span>' + esc(act.assignee) + '</span>'
-                + '</div>'
-            + '</div>'
-            + badgeHtml
-            + '<button class="qida-sched-done" data-action="scheduled-done" data-id="' + esc(act.id) + '" data-lead="' + esc(act.leadId) + '" data-stop="1">'
-                + icon('check', 11) + ' Marcar hecho'
-            + '</button>'
-        + '</div>';
-    }
-
-    // ============================================================
-    // RENDER: tabla colapsable (seccion 4)
-    // ============================================================
-    function renderTableSection() {
-        var nCaliente   = countByOperational('caliente');
-        var nTemplado   = countByOperational('templado');
-        var nFrio       = countByOperational('frio-reactivar');
-        var nPausa      = countByOperational('pausa');
-        var nUrgente    = countByOperational('urgente');
-        var nHistorico  = countByOperational('historico');
-        var nTodos      = countByOperational('todos');
-        var nPausaReact = pausaReactivacionEstaSemana();
-        var filtered   = getFilteredLeads();
-        var collapsed  = state.collapsedTable;
-
-        function chip(id, label, count, extra) {
-            var cls = 'qida-chip' + (state.activeFilter === id ? ' active' : '');
-            return '<button class="' + cls + '" data-action="set-filter" data-id="' + id + '" data-stop="1">'
-                + esc(label) + '<span class="qida-chip-count">' + count + '</span>'
-                + (extra ? '<span class="qida-chip-extra">' + extra + '</span>' : '')
+        function typeChipBtn(id, label, count) {
+            var cls = 'qida-type-chip' + (typeChip === id ? ' active' : '');
+            return '<button class="' + cls + '" data-action="set-type-chip" data-id="' + id + '">'
+                + esc(label) + '<span class="qida-type-chip-count">' + count + '</span>'
             + '</button>';
         }
 
-        var header = '<div class="qida-table-header-bar" data-action="toggle-table">'
-            + '<span class="qida-section-h-title">' + icon('listOrdered', 14) + ' Toda tu cartera</span>'
-            + '<span class="qida-section-h-count">' + filtered.length + ' de ' + nTodos + ' activos</span>'
-            + '<div class="qida-section-h-actions">'
-                + '<button class="qida-section-h-toggle" data-action="toggle-table" data-stop="1">'
-                    + (collapsed ? icon('chevDown', 12) + ' Expandir' : icon('chevUp', 12) + ' Colapsar')
-                + '</button>'
-            + '</div>'
-        + '</div>';
-
-        if (collapsed) {
-            return '<section class="qida-section">' + header + '</section>';
+        function segmentChip(id, label, count) {
+            var cls = 'qida-chip' + (segment === id ? ' active' : '');
+            return '<button class="' + cls + '" data-action="set-segment" data-id="' + id + '">'
+                + esc(label) + '<span class="qida-chip-count">' + count + '</span>'
+            + '</button>';
         }
 
-        return '<section class="qida-section">'
-            + header
-            + '<div class="qida-table-body">'
-                + '<div class="qida-chips" style="margin-bottom:12px;">'
-                    + chip('todos', 'Todos', nTodos)
-                    + chip('caliente', 'Calientes', nCaliente)
-                    + chip('templado', 'Templados', nTemplado)
-                    + chip('frio-reactivar', 'Frios a reactivar', nFrio)
-                    + chip('pausa', 'Pausados', nPausa, nPausaReact > 0 ? '(' + nPausaReact + ' reactivan esta semana)' : '')
-                    + chip('urgente', 'Urgentes', nUrgente)
-                    + chip('historico', 'Historico', nHistorico)
-                + '</div>'
-                + '<div class="qida-table-wrap">'
-                    + '<table class="qida-table">'
-                        + '<thead><tr>'
-                            + renderSortHeader('familia',       'Familia')
-                            + renderSortHeader('temp',          'Temperatura')
-                            + '<th>Por que</th>'
-                            + renderSortHeader('servicio',      'Tipo de servicio')
-                            + renderSortHeader('urgencia',      'Urgencia')
-                            + renderSortHeader('dias',          'Sin tocar')
-                            + renderSortHeader('interacciones', 'Interacc.')
-                            + renderSortHeader('proximo',       'Proximo seg.')
-                            + renderSortHeader('etapa',         'Etapa')
-                        + '</tr></thead>'
-                        + '<tbody id="qida-leads-tbody">' + renderLeadsRows() + '</tbody>'
-                    + '</table>'
-                + '</div>'
-                + '<div class="qida-dash-footer">'
-                    + '<span id="qida-leads-count">' + filtered.length + ' de ' + nTodos + ' leads</span>'
-                    + '<span>Actualizado hace 2 min &middot; sincronizado con Odoo</span>'
-                + '</div>'
+        var segmentBadgeCount = segment ? 1 : 0;
+        var segmentLabelMap = {
+            'caliente': 'Calientes', 'templado': 'Templados', 'frio-reactivar': 'Frios a reactivar',
+            'pausa': 'Pausados', 'urgente': 'Urgentes', 'historico': 'Historico'
+        };
+
+        var toolbar = '<div class="qida-unified-toolbar">'
+            + '<div class="qida-unified-toolbar-left">'
+                + '<button class="qida-filters-btn' + (state.filtersExpanded ? ' active' : '') + '" data-action="toggle-filters">'
+                    + icon('slidersHoriz', 13) + ' Filtros'
+                    + (segmentBadgeCount > 0 ? '<span class="qida-filters-btn-count">' + segmentBadgeCount + '</span>' : '')
+                + '</button>'
+                + (segment
+                    ? '<span class="qida-active-segment-tag">' + esc(segmentLabelMap[segment] || segment)
+                        + '<button class="qida-active-segment-x" data-action="clear-segment" aria-label="Quitar filtro">' + icon('x', 11) + '</button>'
+                      + '</span>'
+                    : '')
             + '</div>'
+            + '<div class="qida-unified-toolbar-right">'
+                + typeChipBtn('suggestions', 'Sugerencias del dia', nSug)
+                + typeChipBtn('activities',  'Actividades',         nAct)
+                + typeChipBtn('leads',       'Leads',               nLead)
+            + '</div>'
+        + '</div>'
+        + (state.filtersExpanded
+            ? '<div class="qida-segment-chips">'
+                + segmentChip('caliente',       'Calientes',         nCaliente)
+                + segmentChip('templado',       'Templados',         nTemplado)
+                + segmentChip('frio-reactivar', 'Frios a reactivar', nFrio)
+                + segmentChip('pausa',          'Pausados',          nPausa)
+                + segmentChip('urgente',        'Urgentes',          nUrgente)
+                + segmentChip('historico',      'Historico',         nHistorico)
+              + '</div>'
+            : '');
+
+        // Estado vacio contextual
+        var bodyHtml;
+        if (rows.length === 0) {
+            var emptyCopy;
+            if (typeChip === 'suggestions') {
+                emptyCopy = "Sin seguimientos sugeridos para hoy. Cambia a 'Actividades' o 'Leads' para ver el resto de tu cartera.";
+            } else if (typeChip === 'activities') {
+                emptyCopy = 'Sin actividades agendadas hoy ni vencidas.';
+            } else if (segment) {
+                emptyCopy = 'No hay leads que coincidan con este filtro.';
+            } else {
+                emptyCopy = 'Sin leads en la cartera activa.';
+            }
+            bodyHtml = '<div class="qida-unified-empty">' + icon('check', 22) + '<p>' + esc(emptyCopy) + '</p></div>';
+        } else {
+            var trs = '';
+            for (var i = 0; i < rows.length; i++) trs += renderUnifiedRow(rows[i]);
+            bodyHtml = '<div class="qida-unified-table-wrap">'
+                + '<table class="qida-unified-table">'
+                    + '<thead><tr>'
+                        + '<th class="qida-uth-icon"></th>'
+                        + renderSortHeader('familia',  'Familia')
+                        + '<th>Tipo</th>'
+                        + renderSortHeader('temp',     'Temp.')
+                        + '<th>Por que</th>'
+                        + renderSortHeader('dias',     'Sin contacto')
+                        + renderSortHeader('proximo',  'Vence')
+                        + renderSortHeader('etapa',    'Etapa')
+                    + '</tr></thead>'
+                    + '<tbody>' + trs + '</tbody>'
+                + '</table>'
+            + '</div>';
+        }
+
+        return '<section class="qida-section qida-unified">'
+            + toolbar
+            + bodyHtml
         + '</section>';
+    }
+
+    // Una fila de la tabla unificada. row = { type, leadId, lead, ...payload, hasActivity? }
+    function renderUnifiedRow(row) {
+        var lead = row.lead;
+        var temp = getLeadTemperature(lead);
+        var tempSource = getLeadTemperatureSource(lead);
+
+        // Icono identificador segun tipo
+        var iconHtml, rowCls, typeBadge, porQue;
+        if (row.type === 'suggestion') {
+            var sug = row.suggestion;
+            var fuLabel = sug.suggestedFollowUpNumber === 1 ? '1er msg'
+                        : sug.suggestedFollowUpNumber === 2 ? '2do msg'
+                        : sug.suggestedFollowUpNumber === 3 ? '3er msg'
+                        : sug.suggestedFollowUpNumber + 'o msg';
+            iconHtml = '<span class="qida-urow-icon-wrap sug">' + icon('zap', 13) + '</span>';
+            rowCls = 'qida-urow qida-urow-suggestion' + (sug.urgent ? ' urgent' : '');
+            typeBadge = '<span class="qida-utype-badge sug' + (sug.urgent ? ' urgent' : '') + '">' + icon('sparkles', 9) + ' Sugerencia ' + esc(fuLabel) + '</span>'
+                + (row.hasActivity ? '<span class="qida-utype-sub" title="Este lead tambien tiene una actividad agendada">' + icon('calendar', 9) + ' + actividad</span>' : '');
+            porQue = sug.reason;
+        } else if (row.type === 'activity') {
+            var act = row.activity;
+            iconHtml = '<span class="qida-urow-icon-wrap act' + (row.isOverdue ? ' overdue' : '') + '">' + icon('calendar', 13) + '</span>';
+            rowCls = 'qida-urow ' + (row.isOverdue ? 'qida-urow-activity-overdue' : (row.isToday ? 'qida-urow-activity-today' : 'qida-urow-activity'));
+            if (row.isOverdue) {
+                typeBadge = '<span class="qida-utype-badge act-overdue">' + icon('alert', 9) + ' Vencida hace ' + row.overdueDays + 'd</span>';
+            } else if (row.isToday) {
+                typeBadge = '<span class="qida-utype-badge act-today">' + icon('clock', 9) + ' Actividad hoy</span>';
+            } else {
+                typeBadge = '<span class="qida-utype-badge act">' + icon('calendar', 9) + ' Actividad</span>';
+            }
+            porQue = act.summary;
+        } else {
+            // 'lead'
+            iconHtml = '<span class="qida-urow-icon-wrap lead">' + icon('dot', 13) + '</span>';
+            rowCls = 'qida-urow qida-urow-lead';
+            typeBadge = '<span class="qida-utype-badge lead">Lead activo</span>';
+            porQue = lead.temperatureReason;
+        }
+
+        // Proximo seg
+        var nextLabel = lead.nextScheduledFollowUp ? formatDateEs(lead.nextScheduledFollowUp) : '&mdash;';
+        var nextDiff  = lead.nextScheduledFollowUp ? daysBetween(lead.nextScheduledFollowUp) : null;
+        var nextStyle = '';
+        if (nextDiff != null) {
+            if (nextDiff < 0) nextStyle = 'color:var(--red600);font-weight:500;';
+            else if (nextDiff === 0) nextStyle = 'color:var(--qg);font-weight:600;';
+        }
+
+        // v1.5: sin acciones contextuales. Toda la fila abre el detail del lead.
+        return '<tr class="' + rowCls + '" data-action="select-lead" data-id="' + esc(row.leadId) + '">'
+            + '<td class="qida-urow-icon">' + iconHtml + '</td>'
+            + '<td class="qida-urow-familia">'
+                + '<div class="qida-urow-name">' + esc(lead.contact) + ' &middot; ' + esc(lead.location) + '</div>'
+                + '<div class="qida-urow-meta">' + esc(lead.relation) + ' ' + esc(lead.caredPersonName) + ', ' + lead.age + ' anos</div>'
+            + '</td>'
+            + '<td class="qida-urow-type">' + typeBadge + '</td>'
+            + '<td class="qida-urow-temp">' + renderTempBadge(temp, tempSource, true) + '</td>'
+            + '<td class="qida-urow-porque"><span title="' + esc(porQue) + '">' + esc(porQue) + '</span></td>'
+            + '<td class="qida-urow-dias">' + renderDays(lead.daysWithoutTouch, temp) + '</td>'
+            + '<td class="qida-urow-proximo"><span style="' + nextStyle + '">' + nextLabel + '</span></td>'
+            + '<td class="qida-urow-etapa"><span class="qida-stage">' + esc(lead.stage) + '</span></td>'
+        + '</tr>';
     }
 
     // ============================================================
@@ -1634,27 +1793,33 @@
     // Estado 1 (closed): pill bottom-right "Pregunta cualquier cosa..."
     // Estado 2 (expanded): input expandido con sugerencias
     // Estado 3 (results): panel lateral 30% con Leads / Conversaciones / Material
+    // Estado 1: pill inline en el header (verde corporativo + Sparkles + texto + "/").
     function renderAssistantPill() {
         return '<button class="qida-asst-pill" data-action="assistant-open">'
-            + icon('sparkles', 14) + ' Pregunta cualquier cosa... <kbd>/</kbd>'
+            + icon('sparkles', 13) + ' Pregunta cualquier cosa... <kbd>/</kbd>'
         + '</button>';
     }
 
+    // Estado 2: la pill crece a un input field anclado al header (no overlay).
     function renderAssistantExpanded() {
         var q = state.assistantQuery;
-        return '<div class="qida-asst-exp-bg" data-action="assistant-close-bg">'
-            + '<div class="qida-asst-exp" data-stop="1">'
-                + '<div class="qida-asst-exp-title">' + icon('sparkles', 12) + ' Asistente</div>'
-                + '<div class="qida-asst-exp-row">'
-                    + '<input class="qida-asst-input" type="text" data-input="assistant-q" id="qida-asst-input" value="' + esc(q) + '" placeholder=\'Buscar leads, conversaciones o material &mdash; p.ej. "familias que dudaban del precio"\' />'
-                    + '<button class="qida-asst-send" data-action="assistant-submit"' + (q.trim() ? '' : ' disabled') + '>' + icon('send', 14) + '</button>'
-                + '</div>'
-                + '<div class="qida-asst-hints">'
-                    + '<button class="qida-asst-hint" data-action="assistant-hint" data-q="familias que dudaban del precio">familias que dudaban del precio</button>'
-                    + '<button class="qida-asst-hint" data-action="assistant-hint" data-q="alta hospitalaria">alta hospitalaria</button>'
-                    + '<button class="qida-asst-hint" data-action="assistant-hint" data-q="interno vs externo">interno vs externo</button>'
-                + '</div>'
-            + '</div>'
+        return '<div class="qida-asst-exp-inline" data-stop="1">'
+            + icon('sparkles', 13)
+            + '<input class="qida-asst-input" type="text" data-input="assistant-q" id="qida-asst-input" value="' + esc(q) + '" placeholder=\'Buscar leads, conversaciones o material...\' />'
+            + '<button class="qida-asst-send" data-action="assistant-submit"' + (q.trim() ? '' : ' disabled') + ' title="Buscar">' + icon('send', 13) + '</button>'
+            + '<button class="qida-asst-collapse" data-action="assistant-collapse" title="Cerrar busqueda">' + icon('x', 13) + '</button>'
+        + '</div>';
+    }
+
+    // Estado 3: en el header, chip compacto con la query truncada y X. El panel lateral
+    // sigue viviendo dentro de renderDashboard().
+    function renderAssistantHeaderChip() {
+        var q = state.assistantQuery || 'Busqueda';
+        var truncated = q.length > 32 ? q.slice(0, 30) + '...' : q;
+        return '<div class="qida-asst-chip" title="' + esc(q) + '">'
+            + icon('sparkles', 12)
+            + '<span class="qida-asst-chip-q">' + esc(truncated) + '</span>'
+            + '<button class="qida-asst-chip-x" data-action="assistant-close" aria-label="Cerrar busqueda">' + icon('x', 12) + '</button>'
         + '</div>';
     }
 
@@ -1791,7 +1956,7 @@
         return '<div class="qida-block">'
             + '<div class="qida-block-h">' + icon('users', 13) + '<span class="qida-block-h-title">Contexto del cuidado</span></div>'
             + '<div class="qida-care"><div class="qida-care-grid">'
-                + item('Persona cuidada', (c.caredPerson || lead.elderly) + (c.caredAge ? ', ' + c.caredAge + ' anos' : ''))
+                + item('Persona cuidada', lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos')
                 + item('Relacion',        c.relationship)
                 + item('Condicion principal', c.mainCondition)
                 + item('Ubicacion',       lead.location)
@@ -2032,7 +2197,7 @@
                 + '<span class="qida-dh-meta">'
                     + '<span class="qida-dh-meta-item">' + icon('mapPin', 11) + esc(lead.location) + '</span>'
                     + '<span>&middot;</span>'
-                    + '<span class="qida-dh-meta-item">' + icon('users', 11) + esc(lead.elderly) + '</span>'
+                    + '<span class="qida-dh-meta-item">' + icon('users', 11) + esc(lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos') + '</span>'
                     + '<span>&middot;</span>'
                     + '<span class="qida-dh-meta-item">' + icon('phone', 11) + esc(lead.phone) + '</span>'
                     + '<span>&middot;</span>'
@@ -2185,41 +2350,30 @@
         if (!content) return;
         content.innerHTML = renderContent();
         syncScheduleModal();
-        syncAssistantFloating();
+        syncAssistantHeader();
         syncToast();
     }
 
-    function rerenderTable() {
-        var tbody = document.getElementById('qida-leads-tbody');
-        if (tbody) tbody.innerHTML = renderLeadsRows();
-        var count = document.getElementById('qida-leads-count');
-        if (count) count.textContent = getFilteredLeads().length + ' de ' + countByOperational('todos') + ' leads';
-    }
-
-    // Pill (estado 1) y expanded (estado 2) flotan en el shell, no en el content scrollable.
-    // El panel lateral (estado 3) sale dentro de renderDashboard porque shrinkea el content.
-    function syncAssistantFloating() {
-        var shell = document.getElementById('qida-shell');
-        if (!shell) return;
-        var existing = document.getElementById('qida-asst-floating');
-        if (existing) existing.parentNode.removeChild(existing);
-        // Solo flotamos en el dashboard, no en el detail.
-        if (state.view !== 'dashboard') return;
+    // v1.4: el asistente ya no flota. Vive en #qida-asst-anchor dentro del header del shell.
+    //   - closed   -> pill inline
+    //   - expanded -> input field inline (crece in-place a la izquierda gracias al flex del header)
+    //   - results  -> chip compacto con la query truncada (el panel lateral 30% sale dentro de
+    //                renderDashboard porque shrinkea el content)
+    //   En el detail no mostramos nada (no aplica al flujo de detail).
+    function syncAssistantHeader() {
+        var anchor = document.getElementById('qida-asst-anchor');
+        if (!anchor) return;
+        if (state.view !== 'dashboard') { anchor.innerHTML = ''; return; }
         if (state.assistantState === 'closed') {
-            var pill = document.createElement('div');
-            pill.id = 'qida-asst-floating';
-            pill.innerHTML = renderAssistantPill();
-            shell.appendChild(pill);
+            anchor.innerHTML = renderAssistantPill();
         } else if (state.assistantState === 'expanded') {
-            var exp = document.createElement('div');
-            exp.id = 'qida-asst-floating';
-            exp.innerHTML = renderAssistantExpanded();
-            shell.appendChild(exp);
-            // Auto-focus input cuando aparece
+            anchor.innerHTML = renderAssistantExpanded();
             setTimeout(function () {
                 var inp = document.getElementById('qida-asst-input');
                 if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
             }, 30);
+        } else if (state.assistantState === 'results') {
+            anchor.innerHTML = renderAssistantHeaderChip();
         }
     }
 
@@ -2283,20 +2437,27 @@
 
     function handleClick(e) {
         var target = findActionTarget(e.target);
+        var shouldRerender = false;
 
-        // Auto-cerrar dropdown de posponer si clickeo fuera de el o sus opciones.
-        if (state.postponeOpenFor) {
-            var keepOpen = false;
-            if (target) {
-                var a = target.getAttribute('data-action');
-                if (a === 'suggestion-postpone-toggle' || a === 'suggestion-postpone' || a === 'suggestion-postpone-custom') keepOpen = true;
+        // Click-outside del asistente expandido: colapsar si el click no fue dentro del anchor.
+        // El switch debajo procesara la accion del target normalmente (en este flow el siguiente
+        // setState() del case ya hace el rerender; si no hay case, el shouldRerender lo dispara).
+        if (state.assistantState === 'expanded') {
+            var isInsideExp = false;
+            var n = e.target;
+            while (n && n.nodeType === 1) {
+                if (n.id === 'qida-asst-anchor') { isInsideExp = true; break; }
+                n = n.parentNode;
             }
-            if (!keepOpen) state.postponeOpenFor = null;
+            if (!isInsideExp) {
+                state.assistantState = 'closed';
+                state.assistantQuery = '';
+                shouldRerender = true;
+            }
         }
 
         if (!target) {
-            // Si cerramos el dropdown, re-render para reflejarlo.
-            if (state.postponeOpenFor === null) rerenderContent();
+            if (shouldRerender) rerenderContent();
             return;
         }
         var action = target.getAttribute('data-action');
@@ -2314,9 +2475,6 @@
                 setState({ view: 'dashboard', currentLeadId: null, editingTemp: false, editingIaSummary: false, addingNote: false });
                 return;
 
-            case 'set-filter':
-                setState({ activeFilter: id });
-                return;
             case 'set-coverage':
                 var bucket = parseInt(id, 10);
                 var newBucket = (state.coverageBucket === bucket) ? null : bucket;
@@ -2326,59 +2484,35 @@
                 handleSetSort(id);
                 return;
 
-            // --- v1.3: secciones colapsables ---
-            case 'toggle-table':
-                setState({ collapsedTable: !state.collapsedTable });
+            // --- v1.4: toolbar tabla unificada ---
+            case 'toggle-filters':
+                setState({ filtersExpanded: !state.filtersExpanded });
                 return;
-            case 'toggle-scheduled':
-                setState({ collapsedScheduled: !state.collapsedScheduled });
+            case 'set-type-chip':
+                setState({ activeTypeChip: id });
                 return;
-
-            // --- v1.3: sugerencias del dia ---
-            case 'suggestion-open':
-                setState({ view: 'detail', currentLeadId: id, activePanel: 'templates', editingTemp: false, editingIaSummary: false, addingNote: false });
+            case 'set-segment':
+                setState({ activeSegmentFilter: state.activeSegmentFilter === id ? null : id });
                 return;
-            case 'suggestion-done':
-                openScheduleFromSuggestion(id, target.getAttribute('data-lead'));
-                return;
-            case 'suggestion-postpone-toggle':
-                setState({ postponeOpenFor: (state.postponeOpenFor === id ? null : id) });
-                return;
-            case 'suggestion-postpone':
-                var days = parseInt(target.getAttribute('data-days'), 10) || 1;
-                SuggestionsService.postpone(id, addDaysISO(days));
-                state.postponeOpenFor = null;
-                rerenderContent();
-                showToast('Sugerencia pospuesta ' + days + ' dia' + (days === 1 ? '' : 's'));
-                return;
-            case 'suggestion-postpone-custom':
-                // P1: abrir un date picker dedicado. Por ahora, posponer 30 dias.
-                SuggestionsService.postpone(id, addDaysISO(30));
-                state.postponeOpenFor = null;
-                rerenderContent();
-                showToast('Sugerencia pospuesta 30 dias (custom date picker en P1)');
-                return;
-            case 'suggestion-show-all':
-                showToast('Ver todas: pendiente para P1');
+            case 'clear-segment':
+                setState({ activeSegmentFilter: null });
                 return;
 
-            // --- v1.3: actividades agendadas ---
-            case 'scheduled-open':
-                setState({ view: 'detail', currentLeadId: id, activePanel: 'templates', editingTemp: false, editingIaSummary: false, addingNote: false });
-                return;
-            case 'scheduled-done':
-                openScheduleFromActivity(id, target.getAttribute('data-lead'));
-                return;
+            // v1.5: las acciones "suggestion-done", "suggestion-postpone-*" y "scheduled-done"
+            // se eliminaron del hover de las filas. Toda la fila abre el detail del lead.
+            // Las funciones openScheduleFromSuggestion / openScheduleFromActivity siguen vivas
+            // (ver TODO v1.6+) pero sin invocador en v1.5.0.
 
             // --- v1.3: asistente flotante ---
             case 'assistant-open':
                 setState({ assistantState: 'expanded' });
                 return;
-            case 'assistant-close-bg':
-                if (e.target === target) setState({ assistantState: 'closed', assistantQuery: state.assistantState === 'results' ? state.assistantQuery : '', assistantResults: null });
-                return;
             case 'assistant-close':
                 setState({ assistantState: 'closed', assistantQuery: '', assistantResults: null, assistantLoading: false });
+                return;
+            case 'assistant-collapse':
+                // X dentro del input expanded: vuelve a la pill (state 'closed') sin perder nada importante.
+                setState({ assistantState: 'closed', assistantQuery: '' });
                 return;
             case 'assistant-edit':
                 setState({ assistantState: 'expanded' });
@@ -2481,6 +2615,14 @@
         });
     }
 
+    // TODO v1.6+: agregar "marcar hecha sin agendar" como accion desde el detalle del lead.
+    // Caso: AF hizo el seguimiento por via externa (llamada celular, presencial, etc.) y quiere
+    // limpiar la sugerencia/actividad sin agendar proximo. Hoy queda como gap conocido: el
+    // dashboard v1.5 ya no invoca estas funciones. Se preservan para reconectarlas desde el
+    // detail del lead en proxima iteracion. Tambien se preservan __pendingSuggestionDoneId /
+    // __pendingActivityDoneId en state y las ramas correspondientes en handleScheduleConfirm
+    // y handleScheduleCloseApply por el mismo motivo.
+    //
     // Reuse del Schedule modal desde "Marcar hecho" de Sugerencias del dia.
     // Mantiene la opcion "Cerrar lead sin agendar" (Perdido / Convertido / Sin interes / Otro)
     // segun ajuste del 15-may.
@@ -2493,13 +2635,12 @@
             scheduleNote: lead ? buildScheduleNote(lead) : '',
             scheduleMarkPause: false,
             scheduleOrigin: 'suggestion',
-            scheduleLeadIdOverride: leadId,
-            // Truco: guardo el sugId en el note buffer? mejor en una propiedad ad-hoc.
-            postponeOpenFor: null
+            scheduleLeadIdOverride: leadId
         });
         state.__pendingSuggestionDoneId = sugId;
     }
 
+    // TODO v1.6+: ver nota arriba sobre openScheduleFromSuggestion. Misma logica de reserva.
     function openScheduleFromActivity(actId, leadId) {
         var lead = getLead(leadId);
         var defaultIso = addDaysISO(7);
@@ -2549,8 +2690,8 @@
         } else if (state.sortDir === 'asc') {
             setState({ sortDir: 'desc' });
         } else {
-            // 3er click: vuelve al default (dias desc).
-            setState({ sortCol: 'dias', sortDir: 'desc' });
+            // 3er click: vuelve al default v1.4 (sort compuesto inteligente, sortCol=null).
+            setState({ sortCol: null, sortDir: 'desc' });
         }
     }
 
@@ -2607,11 +2748,7 @@
         var node = e.target;
         if (!node || !node.getAttribute) return;
         var input = node.getAttribute('data-input');
-        if (input === 'search') {
-            // search bar grande eliminado, pero por compatibilidad se mantiene la branch.
-            state.searchQuery = node.value;
-            rerenderTable();
-        } else if (input === 'assistant-q') {
+        if (input === 'assistant-q') {
             state.assistantQuery = node.value;
             // No re-render completo: solo togglear disabled del send button.
             var sendBtn = document.querySelector('.qida-asst-send');
@@ -2665,6 +2802,7 @@
                         + '</div>'
                     + '</div>'
                     + '<div class="qida-shell-actions">'
+                        + '<div id="qida-asst-anchor" class="qida-asst-anchor"></div>'
                         + '<span class="qida-esc">Esc para cerrar</span>'
                         + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                     + '</div>'
@@ -2766,7 +2904,13 @@
         state.assistantQuery = '';
         state.assistantResults = null;
         state.assistantLoading = false;
-        state.postponeOpenFor = null;
+        // v1.4: reset toolbar de la tabla unificada a defaults
+        state.activeTypeChip = 'suggestions';
+        state.activeSegmentFilter = null;
+        state.filtersExpanded = false;
+        state.sortCol = null;
+        state.sortDir = 'desc';
+        state.coverageBucket = null;
         rerenderContent();
         log('closeModal()');
     }

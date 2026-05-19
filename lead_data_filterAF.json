@@ -1,0 +1,1769 @@
+{
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": {
+        "length": 10000,
+        "records": [
+            {
+                "id": 16259,
+                "res_model": "crm.lead",
+                "state": "overdue",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L28369 Francy A Quinitiva",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2023-09-26 08:13:04",
+                "date_deadline": "2023-09-26",
+                "user_id": [
+                    83,
+                    "Paloma Giménez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 28525,
+                "res_model": "crm.lead",
+                "state": "overdue",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L35268 Juan Luis",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    2,
+                    "Llamada"
+                ],
+                "summary": false,
+                "create_date": "2023-12-04 12:03:34",
+                "date_deadline": "2023-12-04",
+                "user_id": [
+                    83,
+                    "Paloma Giménez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 28638,
+                "res_model": "crm.lead",
+                "state": "overdue",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L35571 Carlos Lorenzo Figueroa",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    2,
+                    "Llamada"
+                ],
+                "summary": false,
+                "create_date": "2023-12-04 18:27:39",
+                "date_deadline": "2023-12-12",
+                "user_id": [
+                    83,
+                    "Paloma Giménez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 64666,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L42167 Rosa Santos",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": "Seguimiento del lead ya que lleva en estado proactivo 45 días",
+                "create_date": "2024-03-24 14:46:24",
+                "date_deadline": "2024-03-25",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 139756,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L37733 Betlem Cervelló",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    8,
+                    "Presupuesto aceptado por el cliente"
+                ],
+                "summary": "Presupuesto aceptado",
+                "create_date": "2024-11-18 22:46:35",
+                "date_deadline": "2024-11-18",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 139419,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L66532 Montserrat Prat",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    8,
+                    "Presupuesto aceptado por el cliente"
+                ],
+                "summary": "Quotation accepted",
+                "create_date": "2024-11-18 20:44:59",
+                "date_deadline": "2024-11-18",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132193,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66271 Roser Vidiella",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-12 12:19:44",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133052,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66572 Bernardo",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-15 09:47:03",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132031,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L62049 Oscar Forcadell Fuentes",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": "despedida",
+                "create_date": "2024-11-12 08:56:23",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 130213,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L64798 Carmen García",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-05 09:18:59",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 124576,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L50402 Moisès Mora",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-16 09:27:48",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 130207,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L61770 Cristina Fernández Género",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-05 09:14:51",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 128391,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L59529 Jaume Pijuan",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-29 08:45:53",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 130252,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L55793 Tomás Martinez Marín",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-05 10:15:21",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131997,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L65762 Isabel Carreter Marejos",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-12 08:14:05",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 140205,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L50402 Moisès Mora",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-19 09:49:41",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 130926,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L64945 Marta Martín González",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-07 09:43:08",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 127953,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L64179 Laia Herrero",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": "ha salido del socio?",
+                "create_date": "2024-10-28 07:44:46",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132021,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L65002 Dolors",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-12 08:47:31",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 130243,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L58697 Ana Pastor",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-05 10:06:24",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132215,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66278 Marta García",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-12 13:24:30",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 140825,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L66891 Magda",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-19 12:08:35",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132028,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L62256 Maria José Arevalo",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-12 08:54:13",
+                "date_deadline": "2024-11-19",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131617,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L62677 Nuria Espallargas",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-11 09:37:40",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 128386,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L64564 Marcos De Pedro",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-29 08:41:20",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 127532,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L63109 Marta Robira",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-25 08:18:30",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 129070,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L61383 Cristina Montero",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-31 08:32:09",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133677,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66687 Helena Sayós Viñas",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-18 15:10:47",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 129065,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L63269 Rosa Laviga",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-31 08:23:19",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132388,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L63237 Ana Fernandez",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-13 09:07:27",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133388,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L37733 Betlem Cervelló",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-18 08:29:06",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132358,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L65128 Angelines Oñate",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-13 08:16:41",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132348,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66133 Alejandra Saiz",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-13 08:11:22",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 128393,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L58555 Gemma Mellado",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-29 08:47:52",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132441,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66376 Marc Oller",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-13 11:16:02",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 143327,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L66774 Lourdes Montaner",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    2,
+                    "Llamada"
+                ],
+                "summary": false,
+                "create_date": "2024-11-20 15:28:33",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 127536,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L63004 Antonio Pellicer Figueras",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-25 08:20:34",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132018,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66085 Yolanda Atienza",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": "sabes fecha de alta?",
+                "create_date": "2024-11-12 08:39:22",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 128379,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L62015 Gisela Asensio",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-29 08:15:45",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 143707,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L67059 Lourdes Montaner",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-20 17:12:39",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 140418,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66530 Roser",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-19 10:26:54",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132641,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66410 Maria Pilar Escribano Ramon",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": "es para diciembre",
+                "create_date": "2024-11-13 17:24:32",
+                "date_deadline": "2024-11-20",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 145607,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L67167 +34659584476 Aircall nuevo lead",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-21 17:00:15",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 145545,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L67154 ponsacandela@gmail.com",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-21 16:41:14",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133433,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L46117 Paloma Chacoris",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-18 09:48:38",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 144674,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "2_added_plan",
+                "res_name": "L67114 Albert Baranguer Codina",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-21 11:47:43",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132706,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66197 José",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-14 07:58:49",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132139,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L65652 Rosa Vidal Miranda",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-12 10:38:58",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 130976,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L59848 Mila",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": "despedida?",
+                "create_date": "2024-11-07 11:16:12",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 141857,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66935 Maria Jose Huertas Clemente",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-19 17:29:30",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133583,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L40509 Arantza Iglesias",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-18 12:02:38",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 130223,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L62157 Andrea Lahuerta",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-05 09:29:45",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132720,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66270 Mari Zapata",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-14 08:47:14",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132727,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66076 Maria del Mar Viadé",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-14 09:07:19",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 143313,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L67045 Elena (llamar viernes por la mañana) stellamaris-calafell@hotmail.com",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-20 15:23:36",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132726,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66113 Maria Josep Ballarin",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-14 09:05:54",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132732,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L65511 Yolanda Puig",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-14 09:15:17",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133397,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66532 Montserrat Prat",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-18 08:39:21",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 132721,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66185 Susana Ferrer",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-14 08:48:44",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 130974,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L62208 Mari Leon",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-07 11:13:13",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 140250,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66869 Vanessa Godayol",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-19 09:56:43",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131601,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L64731 Maria Fabrega",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-11 09:15:22",
+                "date_deadline": "2024-11-21",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 145546,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L67154 ponsacandela@gmail.com",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-21 16:41:19",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131235,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L62016 Tomás Mayenco",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-08 09:09:35",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131189,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L64537 José Egea Salvador",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-08 07:55:29",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131612,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L62720 Juan Francisco Franco Sanchez",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-11 09:30:45",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 141618,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66925 Carlos Lorenzo Valcarcel",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-19 16:06:00",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 144712,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L67114 Albert Baranguer Codina",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-21 11:57:45",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 129061,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L63904 Jose Peralta",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-10-31 08:18:01",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133064,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L61885 Jordi Llibre",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-15 10:08:47",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131229,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L63985 Montse García Ruiz",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-08 09:01:21",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133028,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66357 Clara Cendra",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-15 09:10:55",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133029,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66257 Pilar De Blas",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-15 09:12:36",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131594,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L65129 Alicia Begoña Pardo Ortega",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-11 09:01:37",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 140924,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66891 Magda Esteban",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-19 12:31:58",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133031,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66108 Amparo Miguel",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-15 09:15:03",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 131603,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L64594 Isabel Guichard",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-11 09:17:10",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133030,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66148 Adela Palà Selva",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-15 09:13:34",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133741,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L66801 Jose Miguel",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-18 17:02:49",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            },
+            {
+                "id": 133076,
+                "res_model": "crm.lead",
+                "state": "done",
+                "initial_plan": "1_initial_plan",
+                "res_name": "L4755 Maite Lumbreras",
+                "activity_category_id": false,
+                "activity_type_id": [
+                    4,
+                    "Por hacer"
+                ],
+                "summary": false,
+                "create_date": "2024-11-15 10:18:45",
+                "date_deadline": "2024-11-22",
+                "user_id": [
+                    66,
+                    "Paloma Gálvez"
+                ],
+                "payer_id": false,
+                "caregiver_id": false,
+                "cared_people_ids": []
+            }
+        ]
+    }
+}

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Force -Name | Where-Object { $_ -ne 'node_modules' -and $_ -ne '.next' -and $_ -ne '.git' })",
+      "PowerShell(\\(Get-Content qida-widget.v1.js | Measure-Object -Line\\).Lines; \\(Get-Content seguimientos_v2_prototype.jsx | Measure-Object -Line\\).Lines)"
+    ]
+  }
+}
