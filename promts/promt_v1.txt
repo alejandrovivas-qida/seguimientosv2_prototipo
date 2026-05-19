@@ -1,0 +1,468 @@
+# Prompt para Cursor — Rediseño visual del detalle del lead v1.7.0
+
+Bump `v1.6.0 → v1.7.0`. Cambio mayor de layout y sistema visual del detalle del lead. **No toca el dashboard** (eso queda para una iteración separada).
+
+## Contexto
+
+El detalle del lead v1.6.0 quedó funcionalmente bien, pero visualmente débil: todo el contenido del pane central (resumen, contexto, notas, actividades, adjuntos, chat IA) flota sobre el mismo fondo, sin separación visual entre secciones. El chat IA al pie compite por espacio vertical con el contenido informativo: cuando se expande, "come" la información del lead.
+
+**La iteración corrige esto con dos cambios combinados**:
+
+1. **Cambio de layout**: de 2 a 3 columnas. WhatsApp a la izquierda, información del lead al centro, chat IA en una columna dedicada a la derecha.
+2. **Sistema visual**: cards con identidad propia, jerarquía clara, contraste sutil entre columnas. Sin multicolor.
+
+**Va adjunta una imagen del mockup que validamos con Alejandro**. Tu trabajo es implementarlo lo más fiel posible respetando los detalles técnicos de este prompt.
+
+## Decisiones cerradas
+
+1. **Modal del detalle a 96vw × 96vh**, sin max-width, padding lateral mínimo. Corrige la desviación 2 de v1.6.0 (donde se conservaron `max-width: 1400px` / `max-height: 90vh`). Esto sí o sí — el layout de 3 columnas necesita el ancho.
+2. **Tres columnas dentro del `.qida-detail-body`**:
+   - **Pane WhatsApp** a la izquierda (~28%)
+   - **Pane Información del lead** al centro (~40%)
+   - **Pane Chat IA** a la derecha (~32%)
+3. **El chat IA deja de estar al pie del pane central**. Pasa a tener su propia columna dedicada. En estado colapsado muestra header + 3 chips + input. En estado activo, los chips desaparecen y la conversación llena la columna verticalmente.
+4. **Información del lead estructurada en cards independientes**: cada sección (Resumen IA, Contexto del cuidado, Notas internas, Próximas actividades, Adjuntos colapsable) en su propia card con borde sutil. Adjuntos sigue colapsable como en v1.6.0.
+5. **Sin multicolor**: una sola paleta — blanco, grises sutiles, verde Qida para acentos. WhatsApp mantiene su crema típico solo en su columna porque las AFs lo esperan.
+6. **Tipografía sin negritas heavy**: regular (400) para contenido, medium (500) solo para títulos y acentos. Nunca 600 o 700.
+
+## Sistema visual con valores exactos
+
+### Paleta
+
+| Uso | Variable / Hex |
+|---|---|
+| Fondo principal superficies | `var(--color-background-primary)` (blanco) |
+| Fondo neutro columna info | `#FAFAF9` |
+| Fondo crema WhatsApp | `#ECE5DD` |
+| Fondo burbuja WhatsApp lead | `#FFFFFF` |
+| Fondo burbuja WhatsApp AF | `#DCF8C6` |
+| Fondo resumen IA highlight | `#E1F5EE` |
+| Texto sobre resumen IA | `#143C32` |
+| Acento Qida verde principal | `#0F6E56` |
+| Acento Qida verde soft (badges, avatars IA) | `#E1F5EE` |
+| Border principal sutil | `0.5px solid var(--color-border-tertiary)` |
+| Border destacado | `0.5px solid var(--color-border-secondary)` |
+| Texto principal | `var(--color-text-primary)` |
+| Texto secundario | `var(--color-text-secondary)` |
+| Texto terciario / hints | `var(--color-text-tertiary)` |
+| Urgencia destacada (color texto) | `#993C1D` |
+
+Si el sistema de variables CSS actual no tiene equivalentes para `var(--color-text-secondary)` etc., usar los grises del sistema existente (`s400`, `s500`, `s600`) o mantener consistencia con lo que ya hay.
+
+### Tipografía
+
+| Elemento | Tamaño | Peso | Color |
+|---|---|---|---|
+| Nombre lead en shell header | 14px | 500 | principal |
+| ID lead en shell header | 12px | 400 | terciario |
+| Badge "Sin contacto" en shell | 11px | 500 | según umbral |
+| Datos compactos shell header | 12px | 400 | secundario |
+| Título de sección (uppercase) | 11px | 500 | secundario, letter-spacing 0.05em |
+| Contenido principal de cards | 12.5-13px | 400 | principal |
+| Labels en grid de contexto | 11px | 400 | terciario |
+| Valores en grid de contexto | 12.5px | 400 | principal |
+| Mensajes WhatsApp | 12.5px | 400 | principal |
+| Timestamps WhatsApp | 10px | 400 | terciario |
+| Mensajes chat IA | 12.5px | 400 | principal |
+| Label variante en respuesta IA | 11px | 500 | verde Qida `#0F6E56` |
+| Botón "Usar este mensaje" | 11px | 400 | verde Qida `#0F6E56` |
+
+Sentence case en todo. Sin ALL CAPS excepto en los títulos de sección uppercase.
+
+### Espaciado
+
+- Padding interno de cards: `12px 14px`
+- Gap entre cards en el pane central: `10px`
+- Padding general de cada columna: `14px 12px`
+- Padding del shell header: `10px 16px`
+- Gap entre items del shell header: `14px`
+- Border radius cards: `var(--border-radius-lg)` (12px)
+- Border radius badges/chips: `var(--border-radius-md)` (8px)
+- Border radius burbujas WhatsApp: `0 8px 8px 8px` (lead) / `8px 0 8px 8px` (AF)
+- Border radius input WhatsApp: `18px` (pill)
+
+## Mapa del código actual a tocar
+
+Identificadores verificados contra v1.6.0:
+
+| Componente | Línea aprox. | Acción |
+|---|---|---|
+| `.qida-shell` CSS rules | varias | Agregar override con clase `.qida-view-detail` cuando `state.view === 'detail'` para que sea 96vw × 96vh (ver punto 1 de Cambios concretos) |
+| `renderDetail()` | ~2126 | Cambiar a 3 columnas en lugar de 2 |
+| Estructura HTML de `.qida-detail-body` con `.qida-pane-wa` + `.qida-pane-center` | ~2211-2231 | Agregar tercera columna `.qida-pane-ai`, mover `renderAiChat` ahí |
+| `renderAiChat(lead)` | 2329 | Adaptar para vivir en su columna (no al pie del centro). Mantener estado colapsado/activo. |
+| `renderAttachmentsCollapsable(lead)` | nueva v1.6 | Sigue en el pane central como una card más |
+| `injectStyles` o donde estén los estilos | ~1100+ | Reescribir reglas de `.qida-pane-wa`, agregar `.qida-pane-ai`, ajustar `.qida-pane-center` para flex 1.3 |
+| Media queries del detalle | 1503-1505 | Ajustar para nueva distribución 3 columnas. En viewport chico: stack vertical o ocultar pane-wa |
+| `syncShellHeader` rama `view === 'detail'` | 2644 | Sin cambios funcionales, queda como está |
+
+## Cambios concretos en `qida-widget.v1.js`
+
+### 1. Modal a 96vw × 96vh cuando es detalle
+
+Hoy `.qida-shell` está limitado a `max-width: 1400px` y `max-height: 90vh`. Hay que agregar un override cuando el modal está en vista detalle. Una forma limpia:
+
+```javascript
+// En syncShellHeader o en una nueva syncShellSizing()
+var shell = document.getElementById('qida-shell');
+if (!shell) return;
+if (state.view === 'detail') {
+    shell.classList.add('qida-view-detail');
+} else {
+    shell.classList.remove('qida-view-detail');
+}
+```
+
+Y agregar al CSS:
+
+```css
+.qida-shell.qida-view-detail {
+    max-width: none;
+    max-height: none;
+    width: 96vw;
+    height: 96vh;
+}
+```
+
+Esto NO afecta al dashboard, solo al detalle. Cuando se vuelve al dashboard con `back-to-dashboard`, la clase se quita y el shell vuelve a sus dimensiones originales.
+
+### 2. Estructura HTML del detalle (3 columnas)
+
+Reemplazar el contenido de `renderDetail()` para que use 3 paneles en lugar de 2:
+
+```javascript
+function renderDetail() {
+    var lead = getLead(state.currentLeadId);
+    if (!lead) return renderDashboard();
+    return '<div class="qida-detail">'
+        + '<div class="qida-detail-body">'
+            + '<div class="qida-pane-wa">' + renderWhatsAppPane(lead) + '</div>'
+            + '<div class="qida-pane-center">' + renderCenterPane(lead) + '</div>'
+            + '<div class="qida-pane-ai">' + renderAiChat(lead) + '</div>'
+        + '</div>'
+    + '</div>';
+}
+```
+
+Donde `renderCenterPane(lead)` agrupa el contenido informativo (Resumen IA, Contexto, Notas, Actividades, Followers si aplica, Adjuntos colapsable) sin incluir el chat IA al final.
+
+### 3. Layout flex de las 3 columnas
+
+```css
+.qida-detail-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.qida-pane-wa {
+    flex: 0 0 28%;
+    background: #ECE5DD;
+    border-right: 0.5px solid var(--color-border-secondary);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.qida-pane-center {
+    flex: 1 1 auto;
+    background: #FAFAF9;
+    border-right: 0.5px solid var(--color-border-secondary);
+    padding: 14px 12px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+}
+
+.qida-pane-ai {
+    flex: 0 0 32%;
+    background: var(--color-background-primary);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+```
+
+Media queries (mantener tres columnas en desktop, degradar elegantemente):
+
+```css
+@media (max-width: 1200px) {
+    .qida-pane-wa { flex: 0 0 26%; }
+    .qida-pane-ai { flex: 0 0 30%; }
+}
+
+@media (max-width: 980px) {
+    /* Ocultar el chat IA en pantallas muy chicas */
+    .qida-pane-ai { display: none; }
+}
+
+@media (max-width: 760px) {
+    /* Mantener solo el pane central */
+    .qida-pane-wa { display: none; }
+}
+```
+
+### 4. Pane WhatsApp
+
+Hoy el pane WhatsApp ya tiene la conversación + input. Solo refinamientos visuales:
+
+- Fondo de la columna: `#ECE5DD`
+- Header pequeño arriba con "Conversación" en uppercase 11px (siguiendo el patrón de las cards del centro):
+
+```html
+<div class="qida-pane-wa-head">
+    <i class="lucide-icon" data-icon="message-circle"></i> Conversación
+</div>
+```
+
+Fondo del header del pane: `rgba(255, 255, 255, 0.6)`, padding `10px 14px`, border-bottom 0.5px sutil.
+
+- Burbujas: fondo blanco (lead) o `#DCF8C6` (AF). Padding `8px 11px`. Font-size `12.5px`.
+- Input al pie estilo WhatsApp: clip + input pill + send circle.
+
+### 5. Pane Información del lead (centro) — cards independientes
+
+Cada sección como una card con esta estructura base:
+
+```html
+<div class="qida-info-card">
+    <div class="qida-info-card-head">
+        <span class="qida-info-card-title">RESUMEN IA</span>
+        <span class="qida-info-card-actions">Editar · Regenerar</span>
+    </div>
+    <div class="qida-info-card-body">
+        ...contenido...
+    </div>
+</div>
+```
+
+Estilos:
+
+```css
+.qida-info-card {
+    background: var(--color-background-primary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-lg);
+    padding: 12px 14px;
+}
+
+.qida-info-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.qida-info-card-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-secondary);
+    font-weight: 500;
+}
+
+.qida-info-card-actions {
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+}
+```
+
+**Secciones a renderizar dentro del pane central, en este orden**:
+
+1. **Resumen IA** — card con highlight verde sutil para el texto del resumen:
+   ```html
+   <div class="qida-info-card-body" style="background: #E1F5EE; border-radius: 8px; padding: 10px 12px; color: #143C32; font-size: 13px; line-height: 1.55;">
+       [texto del resumen]
+   </div>
+   ```
+   Header con título "Resumen IA" + acciones "Editar · Regenerar".
+
+2. **Contexto del cuidado** — card con grid de 2 columnas:
+   ```css
+   .qida-context-grid {
+       display: grid;
+       grid-template-columns: 1fr 1fr;
+       gap: 10px 16px;
+       font-size: 12.5px;
+   }
+   ```
+   Items: Persona cuidada / Relación / Condición / Ubicación / Tipo de servicio / Urgencia. Cada item con label arriba (11px terciario) y valor abajo (12.5px principal).
+   Urgencia destacada en `#993C1D` cuando es "Muy urgente".
+
+3. **Notas internas** — card simple con texto + opción "+ Añadir" en el header.
+
+4. **Próximas actividades** — card con items horizontales:
+   ```html
+   <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px;">
+       <span style="width: 6px; height: 6px; border-radius: 50%; background: #0F6E56;"></span>
+       Llamar para confirmar fecha de inicio
+       <span style="color: terciario; margin-left: auto; font-size: 11px;">Hoy</span>
+   </div>
+   ```
+
+5. **Followers** — si aplica, manteniendo el render actual de v1.6.
+
+6. **Adjuntos colapsable** — el `renderAttachmentsCollapsable` actual de v1.6, sigue exactamente igual. Card con header clickeable y body expandible.
+
+### 6. Pane Chat IA (columna derecha)
+
+Estructura:
+
+```html
+<div class="qida-pane-ai">
+    <div class="qida-pane-ai-head">
+        <i class="lucide-icon" data-icon="sparkles"></i> Asistente IA
+    </div>
+    <div class="qida-pane-ai-body">
+        [conversación si hay aiChatHistory, sino vacío]
+    </div>
+    <div class="qida-pane-ai-foot">
+        [si !hay conversación: chips arriba del input]
+        [input siempre presente al pie]
+    </div>
+</div>
+```
+
+Estilos del header del pane:
+
+```css
+.qida-pane-ai-head {
+    background: #F7FAF8;
+    border-bottom: 0.5px solid var(--color-border-tertiary);
+    padding: 10px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #0F6E56;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+```
+
+#### Estado colapsado (sin conversación)
+
+Cuando `state.aiChatHistory[leadId]` está vacío o ausente:
+
+- El body del pane queda vacío (puede mostrar un microcopy gris claro tipo "Pregunta sobre este lead o usa un atajo abajo").
+- En el footer del pane, **arriba del input**, los 3 chips fijos:
+  - `Material marketing` (icono `book-open` o similar)
+  - `Sugerir mensaje` (icono `message-square`)
+  - `Reactivar sin presionar` (icono `seedling` o `leaf`)
+- Estilos de los chips: pill rounded, fondo blanco, border 0.5px secundario, hover ligero, padding `6px 10px`, font-size `12px`, color principal.
+
+#### Estado activo (con conversación)
+
+- Los 3 chips desaparecen.
+- El body del pane se llena con el historial:
+  - Mensajes del usuario: avatar circular `var(--color-background-secondary)` con texto "Tú" 11px medium secundario, mensaje a la derecha en regular sin background.
+  - Mensajes de la IA: avatar circular `#E1F5EE` con icono `sparkles` color `#0F6E56`, mensaje a la derecha sin background, padding-top sutil.
+
+#### Respuestas estructuradas según tipo
+
+Para `sugerir-mensaje`: variantes en cards con fondo `var(--color-background-secondary)`:
+
+```html
+<div style="background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 10px 12px; margin-bottom: 8px;">
+    <div style="font-size: 11px; color: #0F6E56; font-weight: 500; margin-bottom: 4px;">
+        Más cálida
+    </div>
+    <div style="font-size: 12.5px; color: principal; line-height: 1.5; margin-bottom: 8px;">
+        [texto de la variante]
+    </div>
+    <button style="background: white; border: 0.5px solid secundario; border-radius: var(--border-radius-md); padding: 4px 10px; font-size: 11px; cursor: pointer; color: #0F6E56;">
+        Usar este mensaje
+    </button>
+</div>
+```
+
+Para `material-marketing`: cards con título + descripción + acción (Adjuntar al próximo mensaje / Compartir link), siguiendo el mismo patrón visual.
+
+Para `reactivar-sin-presionar`: cards con título del enfoque + racional + ejemplo de mensaje + botón "Usar este mensaje".
+
+#### Input del footer del chat IA
+
+Container con fondo `var(--color-background-secondary)`, border-radius `var(--border-radius-md)`, padding `8px 12px`. Estructura: icono `sparkles` verde + input plano + botón send con flecha.
+
+```html
+<div class="qida-ai-input">
+    <i class="lucide-icon sparkles" style="color: #0F6E56"></i>
+    <input type="text" placeholder="Pregunta sobre este lead..." />
+    <button class="qida-ai-send"><i class="lucide-icon arrow-right"></i></button>
+</div>
+```
+
+### 7. Botón "Usar este mensaje" — comportamiento
+
+Sin cambios respecto a v1.6.0: copia el texto resuelto (con placeholders aplicados al lead activo) al `state.draftMessage` del pane WhatsApp y el textarea se actualiza. La AF puede editar antes de enviar.
+
+## Cleanup
+
+Eliminar:
+- El render del chat IA al pie del `qida-pane-center` (en v1.6 vivía dentro del pane central, ahora vive en su columna propia).
+- La regla CSS de `.qida-center-foot` si existía como contenedor del chat IA al pie.
+
+Conservar (no tocar):
+- `state.aiChatHistory`, `state.aiChatDraft`, `state.draftMessage`, `state.attachmentsExpanded`, `state.__waNeedsScroll`
+- `pushAiChat`, `handleAiChip`, `renderAiPayload`, `renderAiChat` (refactorizar internamente, no eliminar)
+- `sendWhatsAppMock`, `scrollWaToBottom`, `autoResizeTextarea`
+- `renderAttachmentsCollapsable`
+- `syncShellHeader` (ambas ramas)
+- Persistencia de `aiChatHistory` por leadId (sin cambios respecto a v1.6.0)
+- Schedule modal y sus funciones de reserva
+- Todo el dashboard
+
+## Layout final del detalle
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ [Volver] Familia Roge Barcelo  L122131  [Sin contacto: 2d]  Marido Albert · 76a · BCN  [X] │
+├─────────────────────┬───────────────────────────────────┬──────────────────────────────────┤
+│ Pane WhatsApp 28%   │ Pane Información del lead 40%     │ Pane Chat IA 32%                 │
+│                     │                                   │                                  │
+│ Conversación        │ Resumen IA (card destacada)       │ Asistente IA (header verde sutil)│
+│ (mensajes)          │ Contexto del cuidado (card grid)  │                                  │
+│                     │ Notas internas (card)             │ [conversación si hay]            │
+│                     │ Próximas actividades (card)       │                                  │
+│                     │ Adjuntos (card colapsable)        │                                  │
+│ ─────────────────   │                                   │                                  │
+│ [input WA]          │ scroll vertical                   │ ── footer ──                     │
+│                     │                                   │ [3 chips si vacío]               │
+│                     │                                   │ [input al pie]                   │
+└─────────────────────┴───────────────────────────────────┴──────────────────────────────────┘
+
+Modal: 96vw × 96vh sobre fondo overlay oscuro
+```
+
+## Validación post-cambio
+
+- `node --check qida-widget.v1.js`
+- Confirmar log `[QidaAssistant] Assistant loaded (v1.7.0)` en consola.
+- Smoke visual contra el mockup adjunto:
+  - Modal del detalle ocupa 96vw × 96vh.
+  - Tres columnas claramente delimitadas con borders sutiles.
+  - WhatsApp con fondo crema, info del lead con fondo `#FAFAF9`, chat IA con fondo blanco.
+  - Pane info: cada sección es una card blanca independiente con border sutil.
+  - Resumen IA con highlight verde claro (`#E1F5EE`) en el body de la card.
+  - Header del pane chat IA en verde Qida sutil (`#F7FAF8` con texto `#0F6E56`).
+  - Sin conversación IA: 3 chips visibles arriba del input.
+  - Con conversación IA: chips desaparecen, mensajes con avatars (Tú / IA).
+  - "Usar este mensaje" sigue copiando el texto al textarea del pane WhatsApp.
+  - Al volver al dashboard, las dimensiones del modal vuelven a las originales (max-width 1400px / 90vh) — el dashboard no debe cambiar de tamaño.
+  - El chat IA persiste por leadId al cerrar/reabrir el detalle del mismo lead (comportamiento ya validado en v1.6.0).
+
+## Output esperado
+
+1. `qida-widget.v1.js` v1.7.0 con el detalle rediseñado a 3 columnas y el sistema visual aplicado.
+2. Bloque "Cambios v1.7.0" en el docstring + bloque "DEFAULTS QUE TOMÉ EN v1.7.0" con cualquier decisión visual que hayas tenido que tomar (ej: ajustes específicos del border radius si el sistema actual usa otros valores, etc.).
+3. Cleanup completo del chat IA al pie del pane central (ya no vive ahí).
+4. Validación OK, smoke test contra el mockup adjunto.
+5. Sin tocar el dashboard, sin tocar el Schedule modal, sin tocar las funciones de reserva v1.7+.
+
+## Nota sobre la imagen adjunta
+
+La imagen que va junto a este prompt muestra el layout final con un caso real (Familia Roge Barcelo). Úsala como referencia visual pero respetá los valores técnicos especificados en este prompt cuando haya discrepancia (ej: si la imagen muestra un color levemente distinto al hex especificado acá, usa el hex de este prompt).
