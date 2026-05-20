@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.6.0
+ * QIDA ASSISTANT v1.10.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,64 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.10.0 (rediseno del dashboard, solo UI - el detalle NO se toca):
+ *   - Pivote del dashboard de "workspace multi-pieza" a una vista unica: lista
+ *     priorizada de leads enfriandose. La AF entra y ve maximo 5 filas con la
+ *     info mas operativa, sin tabs ni filtros ni asistente.
+ *   - Eliminado: tabs "Actividades"/"Leads", bloque "Tu cobertura", boton
+ *     "Filtros", pill "Pregunta cualquier cosa..." y todo el bloque del
+ *     asistente del dashboard (renderAssistantPill/Expanded/HeaderChip/Panel,
+ *     syncAssistantHeader, SearchService entero, atajo "/"), buildUnifiedFeed
+ *     y la tabla unificada (renderUnifiedTable/renderUnifiedRow/countUnifiedByType/
+ *     countSegmentInActiveType), renderCoverage/renderCoverageSection,
+ *     renderSortHeader/handleSetSort, ActivityService.getUnifiedFeedSync,
+ *     SuggestionsService entera, CoverageService entera.
+ *   - Header del shell en dashboard: minimo (Esc para cerrar + X). El bloque
+ *     Sparkles + "Seguimientos" + sub queda solo en la rama del detail.
+ *   - Tabla de 4 columnas: Familia (contacto + ubicacion / relacion + cuidado +
+ *     edad), Tipo (serviceType), Por que (reason del enfriamiento), Sin
+ *     contacto (dias grande + fecha del ultimo mensaje pequeno).
+ *   - Tope visual: MAX_VISIBLE = 5 leads. Filas que exceden se ocultan client-side.
+ *   - Boton "Refrescar" debajo de la lista: re-renderiza, los completados en
+ *     sesion (state.completedTodayIds) quedan filtrados naturalmente.
+ *   - Estado vacio: "Estás al día. No hay leads enfriándose." Sin emojis, sin
+ *     copy motivacional.
+ *   - Degradacion de color por urgencia: 0-3 normal, 4-7 amarillo sutil, 8-14
+ *     naranja sutil, 15-20 rojo sutil, 21+ rojo + icono warning. daysWithoutTouchLevel
+ *     extendido de 4 niveles a 6 (lvl-today / lvl-fresh / lvl-warn / lvl-orange /
+ *     lvl-stale / lvl-danger).
+ *   - Acciones por fila: click en celda (excepto boton) abre el detail; hover
+ *     muestra "Marcar hecho" que filtra la fila + toast inferior "Marcado como
+ *     hecho · Deshacer" durante 4s. Deshacer revierte; pasados los 4s el
+ *     filtrado es permanente en sesion (no hay localStorage).
+ *   - Mock estatico MOCK_COOLING_LEADS_RESPONSE simula el GET /api/me/leads/cooling
+ *     que devuelve la cohorte ya filtrada y priorizada por backend. El frontend
+ *     NO aplica criterios de negocio (umbrales, ventana, exclusion de leads con
+ *     seguimiento futuro): solo el filtro local de "completados en sesion".
+ *   - LeadService.getCoolingLeadsSync (nuevo) lo consume sincronamente desde
+ *     renderDashboard. La version async LeadService.getCoolingLeads queda como
+ *     TODO[odoo] (para cuando se cablee al endpoint real).
+ *   - Mocks eliminados: MOCK_DAILY_SUGGESTIONS, MOCK_SCHEDULED_ACTIVITIES,
+ *     MOCK_MATERIAL_SEARCHABLE, MOCK_CONVERSATION_MATCHES (solo lo consumia
+ *     SearchService). MOCK_LEADS se conserva (lo consume el detalle al abrir).
+ *   - State: eliminados activeTypeChip, activeSegmentFilter, filtersExpanded,
+ *     sortCol, sortDir, searchQuery, assistant*, coverageBucket, __pendingSuggestionDoneId,
+ *     __pendingActivityDoneId. Agregados completedTodayIds (Set), undoToast
+ *     (objeto o null) y undoTimeoutId (ID del setTimeout activo).
+ *   - Handlers eliminados: toggle-filters, set-type-chip, set-segment, clear-segment,
+ *     set-coverage, set-sort, assistant-* (open/close/collapse/edit/submit/hint/
+ *     open-lead/open-material). Handlers nuevos: mark-done, undo-mark-done,
+ *     refresh-cooling.
+ *   - Iconos nuevos: refresh-cw (lucide RefreshCw), alert-triangle (lucide AlertTriangle).
+ *   - CSS nuevo: bloque .qida-cooling-* (dashboard / header / list / row / cells /
+ *     row-actions / mark-done-btn / refresh-btn / undo-toast / empty-state /
+ *     niveles lvl-*). CSS eliminado: cobertura, toolbar unificada, type-chips,
+ *     segment-chips, asistente (pill/exp/chip/panel), tabla unificada (qida-urow*),
+ *     filas con fondos sutiles, skeletons.
+ *   - Conservado intacto: TODO el detalle (renderDetail, panes WA/center/ai,
+ *     chat IA, schedule modal, swap, scroll WA/AI, etc.). syncShellHeader rama
+ *     view==='detail' intacta. EDITS.temperatures y getters relacionados.
  *
  * Cambios v1.4.0 (iteracion layout AF-like, modelo Odoo Activities):
  *   - Asistente pasa del bottom-right flotante al header del modal (inline).
@@ -118,6 +176,77 @@
  *      seguimiento por via externa (llamada celular, presencial). Se resuelve en v1.6+ con
  *      banner en el detail del lead.
  *
+ * Cambios v1.9.1 (auto-scroll del pane Chat IA):
+ *   - Pane Chat IA scrollea al fondo automaticamente cuando se agrega un mensaje (chip, texto
+ *     libre, pick-variant, refine). Replica el patron de __waNeedsScroll usado para WhatsApp:
+ *     flag state.__aiNeedsScroll consumido en rerenderContent con requestAnimationFrame.
+ *   - Se setea en pushAiChat (cubre todos los puntos de append: chips, query libre y la rama
+ *     pick-variant que va via pushAiChat). Tambien al entrar al detalle (select-lead /
+ *     assistant-open-lead) para que si hay historial previo se vea el ultimo mensaje primero.
+ *   - Funcion nueva: scrollAiToBottom (mirror de scrollWaToBottom). closeModal resetea el flag.
+ *
+ * Cambios v1.9.0 (default del toggle de layout invertido + textarea WA auto-expande al copiar):
+ *   - Default de state.detailLayoutSwapped pasa a true: chat IA al CENTRO (columna ancha) y
+ *     detalle del lead a la DERECHA (columna estrecha). El boton Swap en el shell header
+ *     vuelve al layout v1.8.0 (info al centro, chat IA a la derecha). closeModal resetea a true.
+ *   - Anchos de columnas pasan a depender de la posicion estructural, no de la clase:
+ *     col 1 (siempre pane-wa) = 28%, col 2 (variable) = flex 1, col 3 (variable) = 32%.
+ *     Asi el swap intercambia tanto el ORDEN como los ANCHOS (la columna del medio siempre
+ *     es la ancha; la de la derecha siempre la estrecha).
+ *   - Handler ai-copy-to-wa ahora invoca autoResizeTextarea(ta) en el mismo setTimeout que
+ *     hace focus, asi el textarea WhatsApp se expande inmediatamente para mostrar el mensaje
+ *     copiado en lugar de quedarse con altura 1 linea + scroll oculto.
+ *   - Media queries del detalle migran a selectores estructurales (.qida-detail-body > *:nth-child(N))
+ *     en linea con la nueva semantica posicional. @980px oculta la 3ra columna (la estrecha),
+ *     @760px oculta la 1ra (WhatsApp).
+ *
+ * Cambios v1.8.0 (refinamientos visuales y de flujo del chat IA del detalle, sin tocar dashboard):
+ *   - Fondo del pane central pasa de #FAFAF9 a verde menta sutil #DBE9D5. Border de
+ *     .qida-info-card sube de var(--s200) a var(--s300) para preservar separacion contra
+ *     el verde (default que tome para no perder definicion visual).
+ *   - Toggle de layout en el shell header del detail: boton "Swap" intercambia el orden
+ *     centro/derecha entre pane info y pane IA. State nuevo state.detailLayoutSwapped (bool)
+ *     persiste en sesion del modal: NO se resetea al navegar entre leads, SI se resetea al
+ *     cerrar el modal con X (closeModal). Default false (info al centro, IA a la derecha).
+ *   - Los borders verticales del .qida-detail-body se gestionan por selector estructural
+ *     (.qida-detail-body > *:not(:last-child)) para no romper con el swap. Se eliminan los
+ *     border-right hardcodeados de .qida-pane-wa y .qida-pane-center.
+ *   - Chat IA con sistema visual ampliado:
+ *       * Avatar usuario .qida-aichat-bubble.user .qida-aichat-bubble-icon -> bg #143C32
+ *         (verde oscuro Qida) + color #FFEFDA (crema). Muestra "T" como inicial.
+ *       * Avatar IA .qida-aichat-bubble.ai .qida-aichat-bubble-icon -> bg #E1F5EE +
+ *         color #0F6E56 (Qida solido).
+ *       * Burbuja usuario -> bg #F1F8EE, border-radius 12 12 4 12 (cola al avatar).
+ *       * Burbuja IA -> bg #FAFAF9, border-radius 12 12 12 4 (cola al avatar).
+ *       * Cards internas (.qida-aichat-variant, .qida-aichat-mat-card) -> bg #fff con border
+ *         sutil 0.5px var(--s200) para destacarse contra el fondo de la burbuja.
+ *   - Chips fijos del chat IA (Material marketing / Sugerir mensaje / Reactivar sin presionar)
+ *     ahora SIEMPRE visibles debajo del input, en fila (flex-wrap), estilo Gemini. La AF
+ *     puede re-invocar quick prompts durante la conversacion. Microcopy del estado vacio
+ *     actualizado a "Pregunta sobre este lead o usa uno de los atajos."
+ *   - Flujo nuevo "Esta me gusta mas" (reemplaza "Usar este mensaje"):
+ *       Aplica a Sugerir mensaje (variants) Y Reactivar sin presionar (approaches).
+ *       Material marketing queda intacto (Adjuntar / Compartir link sin cambio).
+ *       1. Click variante -> push al chat como user message "<label> - esta me gusta mas".
+ *       2. IA responde con payload kind: 'refine' (intro + texto propuesto en card + boton
+ *          "Copiar al WhatsApp").
+ *       3. AF puede iterar escribiendo texto libre en el input del chat: mockAIResponse
+ *          detecta contexto refine y devuelve otro refine con prefijo "[Mock: ajuste pedido
+ *          aplicado] ..." (TODO[ai]: cuando este conectado al LLM, ajustar de verdad).
+ *       4. Click "Copiar al WhatsApp" -> textarea WA se llena con el texto. La AF revisa,
+ *          edita si quiere, y clickea send. Principio rector: IA propone, AF envia.
+ *   - Funciones nuevas: pushAiPickVariant.
+ *   - Handlers nuevos: ai-pick-variant, ai-copy-to-wa, toggle-detail-layout.
+ *   - Handler eliminado: ai-use-message (reemplazado por el flujo conversacional).
+ *
+ * Cambios v1.7.0 (rediseño visual del detalle — 3 columnas, sin tocar dashboard):
+ *   - Detalle pasa de 2 a 3 columnas: WhatsApp (28%) + Informacion del lead (flex) + Chat IA (32%).
+ *   - Modal en vista detalle: 96vw x 96vh (.qida-view-detail). Dashboard conserva dimensiones previas.
+ *   - Chat IA deja el pie del pane central y vive en columna dedicada (.qida-pane-ai).
+ *   - Pane central con cards independientes (.qida-info-card) sobre fondo #FAFAF9.
+ *   - Sistema visual unificado: paleta blanco/grises/verde Qida, pesos 400/500, sin multicolor.
+ *   - WhatsApp mantiene fondo crema #ECE5DD en su columna. Resumen IA con highlight #E1F5EE.
+ *
  * Cambios v1.6.0 (rediseno del detalle del lead, sin tocar dashboard):
  *   - Detalle pasa de 3 paneles a 2: pane WhatsApp (40%) + pane central (60%).
  *     Se elimina el pane derecho (Plantillas/Material/Adjuntos en tabs) y se elimina la
@@ -213,6 +342,172 @@
  *  11. EDITS.temperatures NO se elimina aunque el set-temp manual se haya borrado: lo siguen
  *      leyendo los getters globales (getLeadTemperature/Source) y lo escribe la rama
  *      markPause de ActivityService.schedule (preservada vista por Schedule modal v1.7+).
+ *
+ * ============================================================
+ * DEFAULTS QUE TOME EN v1.7.0 (no especificados explicitamente):
+ * ============================================================
+ *   1. Modal detalle 96vw x 96vh via clase .qida-view-detail en #qida-shell (syncShellSizing).
+ *      Dashboard sin clase: max-width 1400px, max-height 90vh (corrige typo previo 100%px).
+ *   2. Proporciones columnas: WA flex 0 0 28%, centro flex 1 1 auto, IA flex 0 0 32%.
+ *   3. Variables CSS del prompt (--color-text-*) mapeadas a la paleta existente (--s500, etc.)
+ *      y hex explicitos del brief (#0F6E56, #E1F5EE, #FAFAF9, #ECE5DD).
+ *   4. Border radius cards 12px, chips/badges 8px (equivalente a border-radius-lg/md del brief).
+ *   5. Chips IA arriba del input en el footer del pane (orden invertido vs v1.6).
+ *   6. Titulo seccion actividades: "Proximas actividades" (antes "Actividades planificadas").
+ *   7. Variantes IA muestran solo v.label ("Mas calida") sin prefijo "Variante N -".
+ *   8. Shell header en detail: padding 10px 16px, nombre lead 14px/500, se restaura "Esc para cerrar".
+ *   9. Followers se mantiene como card info (el mock no lo muestra pero el brief dice "si aplica").
+ *  10. Media queries: <980px oculta pane-ai; <760px oculta pane-wa (igual espiritu v1.6).
+ *
+ * ============================================================
+ * DEFAULTS QUE TOME EN v1.10.0 (no especificados explicitamente):
+ * ============================================================
+ *   1. VERSION = '1.10.0' (no '1.8.0' como dice el prompt original). El prompt
+ *      se escribio asumiendo v1.7.0 como base; el archivo ya estaba en v1.9.1
+ *      con varias iteraciones sobre el detalle. Seguimos la convencion minor
+ *      del archivo: refinamientos del detalle bumpean patch (1.9.0 -> 1.9.1),
+ *      una iteracion grande de UI del dashboard bumpea minor (1.9.1 -> 1.10.0).
+ *   2. daysWithoutTouchLevel pasa de 4 a 6 niveles (no 5 como dice el prompt
+ *      en su titulo, pero coherente con sus 5 rangos de color + el caso
+ *      especial lvl-today). Niveles: lvl-today (0) / lvl-fresh (1-3) / lvl-warn
+ *      (4-7) / lvl-orange (8-14) / lvl-stale (15-20) / lvl-danger (21+). El
+ *      shell header del detalle solo usa today/fresh/warn/stale (no cambia); los
+ *      nuevos orange y danger los consume EXCLUSIVAMENTE la lista del dashboard.
+ *      No agrego clases CSS .qida-dsh-days.lvl-orange/danger porque el detalle no
+ *      los usa hoy (un lead con 22d nunca abre con esa categoria propia: solo se
+ *      muestra como rojo via lvl-stale, que ya cubre 8+).
+ *   3. getCoolingLeads se expone como getCoolingLeadsSync (sincrono, lee mock
+ *      directo) + getCoolingLeads (async con simulateLatency, TODO[odoo]). El
+ *      render del dashboard es sincrono (rerenderContent llama renderDashboard
+ *      en el mismo tick) asi que usamos la version Sync. Cuando se cablee a
+ *      Odoo, renderDashboard pasa a leer state.coolingLeads (cacheado) y se
+ *      dispara fetch en mount / refresh. No me adelanto a esa logica.
+ *   4. state.completedTodayIds usa Set() global (ES2015). Justificacion: todos
+ *      los navegadores objetivo (Odoo erp.qida.es / Chrome/Firefox/Edge modernos)
+ *      soportan Set nativo desde 2014. No vale la pena polyfillar con un objeto
+ *      indexado por leadId para un Set efimero de sesion.
+ *   5. data-stop en el boton "Marcar hecho" NO requiere handler extra:
+ *      findActionTarget sube por el DOM hasta encontrar el primer ancestro con
+ *      data-action. El boton "Marcar hecho" tiene su propio data-action="mark-done";
+ *      el switch lo ejecuta y devuelve antes de propagar al data-action="select-lead"
+ *      del row. data-stop queda como semantica documental (no funcional) por si
+ *      mas adelante hay listeners que necesiten respetarlo. Esto evita modificar
+ *      el patron de event delegation existente.
+ *   6. Race condition de undoToast: si la AF clickea Marcar hecho en una fila A
+ *      y antes de 4s clickea en una fila B, el timeout previo se cancela
+ *      (clearTimeout) y se programa uno nuevo apuntando a B. El toast se
+ *      reemplaza visualmente (queda apuntando al ultimo). Deshacer entonces
+ *      solo revierte B (intentional: la AF ve "Marcado como hecho · Deshacer"
+ *      y entiende que afecta al ultimo). A queda permanentemente marcado en
+ *      sesion. Compromiso aceptable para no inflar UX con multi-undo.
+ *   7. completedTodayIds NO se resetea en closeModal: persiste durante toda
+ *      la sesion del page load (la AF puede cerrar el modal y volver a abrirlo
+ *      y los marcados siguen filtrados). Solo se vacian undoToast + undoTimeoutId.
+ *      Justificacion: la AF puede estar trabajando otros leads en Odoo entre
+ *      apertura y apertura del widget, y no queremos que aparezcan leads ya
+ *      "completados hoy" cada vez que reabre.
+ *   8. Iconos refresh-cw y alert-triangle agregados al set I (lucide). No reutilizo
+ *      'refresh' (que es RefreshCcw) ni 'alert' (que es AlertCircle) para
+ *      respetar la semantica del prompt y los pesos visuales correctos.
+ *   9. CSS del prompt usa --color-text-tertiary / --color-border-secondary /
+ *      --color-background-secondary / --border-radius-md, variables que no
+ *      existen en este archivo. Mapeo:
+ *        --color-text-primary    -> var(--s900)
+ *        --color-text-secondary  -> var(--s700)
+ *        --color-text-tertiary   -> var(--s500)
+ *        --color-background-secondary -> var(--s50)
+ *        --color-border-secondary -> var(--s200)
+ *        --color-border-tertiary -> var(--s100)
+ *        --border-radius-md      -> 8px (consistente con qida-aichat-chip y similares)
+ *      No invento variables nuevas. El sistema cromatico del archivo (paleta
+ *      qg / s-scale) ya tenia esas equivalencias.
+ *  10. Numeros grandes en columna "Sin contacto": font-size 22px (no 18px como
+ *      el prompt) para que sea claramente la unidad de informacion principal
+ *      de la fila. La fecha pequena abajo queda en 11px var(--s500). Margen
+ *      tight para reforzar que son un par.
+ *  11. Toast de undo: bottom 24px (no 20px) para alinear con la posicion del
+ *      .qida-toast existente. Mismo estilo visual base (fondo oscuro, sombra)
+ *      pero color verde menta en el boton "Deshacer" para diferenciarlo
+ *      semanticamente de los toasts neutros (informacion vs accion reversible).
+ *  12. Boton "Marcar hecho": color #0F6E56 (verde Qida) sobre fondo blanco.
+ *      Aparece SOLO en hover (opacity 0 -> 1 con transicion 120ms) para no
+ *      saturar visualmente las 5 filas. En mobile / sin hover, se podria
+ *      ajustar mas adelante (gap conocido).
+ *  13. closeModal: limpia undoToast + undoTimeoutId pero NO completedTodayIds.
+ *      tambien limpia state legacy que ya no existe en initial state (defensive,
+ *      por si quedan referencias en algun branch).
+ *  14. Keyboard handler global: eliminado el atajo "/" y el branch isEnter
+ *      del asistente. Solo queda Esc para cerrar (con el guard del schedule modal).
+ *      Esc en dashboard cierra el modal directamente (sin estados intermedios
+ *      del asistente que ya no existen).
+ *
+ * ============================================================
+ * DEFAULTS QUE TOME EN v1.9.0 (no especificados explicitamente):
+ * ============================================================
+ *   1. detailLayoutSwapped default = true (chat IA al centro). closeModal resetea a true (no
+ *      a false): el reset preserva el default operativo nuevo. Si la AF queria volver al
+ *      layout v1.8.0, lo logra con el boton Swap.
+ *   2. Anchos por posicion estructural en lugar de por clase:
+ *        .qida-detail-body > *:nth-child(1) { flex: 0 0 28%; min-width: 0; }   // siempre pane-wa
+ *        .qida-detail-body > *:nth-child(2) { flex: 1 1 auto; min-width: 0; }  // centro variable
+ *        .qida-detail-body > *:nth-child(3) { flex: 0 0 32%; min-width: 0; }   // derecha variable
+ *      Se eliminan los flex hardcodeados de .qida-pane-wa, .qida-pane-center y .qida-pane-ai
+ *      (el resto del CSS de cada clase queda intacto). Las media queries siguen el mismo
+ *      patron posicional. Implicancia visual: cuando se hace swap, no solo cambia el ORDEN
+ *      sino tambien los ANCHOS (la columna del medio siempre es la ancha).
+ *   3. Auto-resize del textarea WhatsApp tras ai-copy-to-wa: se invoca autoResizeTextarea(ta)
+ *      dentro del mismo setTimeout que hace ta.focus(). Asi cuando la AF clickea "Copiar al
+ *      WhatsApp" con un mensaje de 3-4 lineas, el textarea se expande hasta el max (5 lineas
+ *      = 120px) en vez de quedar a min-height 24px con el contenido oculto.
+ *   4. Bloque "Cambios v1.9.0" en orden descendente con los previos (mas reciente arriba).
+ *
+ * ============================================================
+ * DEFAULTS QUE TOME EN v1.8.0 (no especificados explicitamente):
+ * ============================================================
+ *   1. Paleta del chat IA (hex exactos del plan, sin ajustes):
+ *        Avatar Tu      -> bg #143C32 (verde oscuro Qida) / color #FFEFDA (crema calido).
+ *        Avatar IA      -> bg #E1F5EE / color #0F6E56.
+ *        Burbuja Tu     -> bg #F1F8EE (verde-blanco muy sutil).
+ *        Burbuja IA     -> bg #FAFAF9 (off-white).
+ *        Cards internas -> bg #fff con border 0.5px var(--s200).
+ *      Las 3 capas (avatar / burbuja / card interna) tienen contraste claro entre si sin
+ *      caer en multicolor: dos tonos verdes (oscuro/sutil) + dos neutros calidos (cream/off-white).
+ *   2. Avatar usuario muestra "T" como inicial (no hay datos del usuario logueado todavia).
+ *      Cuando se conecte a Odoo, reemplazar por primera letra del nombre de la AF.
+ *   3. Mock de refine usa prefijo literal "[Mock: ajuste pedido aplicado] " concatenado al
+ *      texto previo (no genera nada nuevo). Esta marcado con TODO[ai] arriba de mockAIResponse.
+ *      Justificacion: simular el flujo conversacional sin requerir LLM, dejando claro al
+ *      mirar el resultado que es mock y no algo "real".
+ *   4. Border de .qida-info-card sube de var(--s200) a var(--s300) porque var(--s200) sobre
+ *      el nuevo fondo verde menta #DBE9D5 queda apenas perceptible. Se evaluo box-shadow pero
+ *      el cambio de variable es menor diff y consistente con el resto del archivo.
+ *   5. Borders entre paneles del detail: selector estructural
+ *      .qida-detail-body > *:not(:last-child) { border-right: 0.5px solid var(--s300); }
+ *      garantiza que la columna mas a la derecha NUNCA tenga border-right, sin importar el
+ *      orden con/sin swap. Se eliminan los border-right hardcodeados de .qida-pane-wa y
+ *      .qida-pane-center.
+ *   6. Boton swap en el shell header del detail: ubicado entre el qida-asst-anchor (vacio en
+ *      detail) y el qida-esc, dentro del .qida-shell-actions. Estilo discreto: border 0.5px,
+ *      transparent fill, hover var(--s100). Cuando active (swapped=true) usa fondo #E1F5EE
+ *      + color #0F6E56 + border #c5e8dc para feedback visual sin agresividad.
+ *   7. Icono del boton swap: combinacion "arrowLeft + arrowRight" como dos iconos consecutivos
+ *      (no existe un solo icono "shuffle" en el set I; agregarlo solo para esto seria over-
+ *      engineering). El label "Swap" se mantiene corto y descriptivo.
+ *   8. Chips del chat IA en fila usan flex-wrap: wrap. En pane-ai estrecho (32% de 96vw) los
+ *      3 chips pueden no entrar en una sola linea con anchos chicos -> wrap natural, sin
+ *      breakpoint adicional.
+ *   9. showToast ya existia en v1.6+: lo reutilizamos en ai-copy-to-wa con el mensaje
+ *      "Mensaje copiado al campo de WhatsApp. Editalo y envialo." (consistente con el toast
+ *      anterior de ai-use-message). NO se crea un nuevo sistema de feedback.
+ *  10. pushAiPickVariant siempre crea el par user/ai en aiChatHistory (mismo patron que
+ *      pushAiChat + handleAiChip). El texto del user-message visible es
+ *      "<label> - esta me gusta mas" (ej "Mas calida - esta me gusta mas") para que en el
+ *      historial quede claro que variante eligio.
+ *  11. mockAIResponse en contexto refine recibe lead pero ignora el query (no analiza nada,
+ *      solo prepende prefijo). El TODO[ai] marca el punto exacto a reemplazar con LLM real.
+ *  12. detailLayoutSwapped se inicializa UNA SOLA VEZ en el state inicial. NO se toca en
+ *      select-lead, back-to-dashboard ni assistant-open-lead (persiste durante toda la
+ *      navegacion intra-sesion del modal). Solo se vuelve a false en closeModal.
  */
 (function (window, document) {
     'use strict';
@@ -223,11 +518,11 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.6.0';
+    var VERSION = '1.10.0';
     var CONFIG = null;
     var QIDA_LOGO_URL = 'https://strapi-upload-files-production.s3.eu-central-1.amazonaws.com/qida_logo_ba5b1d80b5.png?w=1080';
     var FONTS_HREF = 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap';
-    var COVERAGE_TARGET = 68;
+    // v1.10: COVERAGE_TARGET eliminado (lo consumia renderCoverage / CoverageService).
 
     function log(msg, data) {
         if (data !== undefined) console.log('[QidaAssistant] ' + msg, data);
@@ -316,8 +611,8 @@
     };
 
     // v1.6: MOCK_TEMPLATES y MOCK_MATERIAL eliminados. El pane derecho del detalle desaparece
-    // (Plantillas / Material / Adjuntos en tabs). MOCK_MATERIAL_SEARCHABLE sigue vivo mas abajo
-    // porque SearchService del dashboard lo consume (es un array distinto, no confundir).
+    // (Plantillas / Material / Adjuntos en tabs).
+    // v1.10: MOCK_MATERIAL_SEARCHABLE tambien eliminado (lo consumia SearchService).
 
     // Resumenes IA (texto + autor + timestamp). Si un lead no esta en este mapa,
     // se muestra el placeholder "Resumen no generado todavia".
@@ -426,49 +721,27 @@
     };
 
     // ============================================================
-    // MOCKS v1.3 (dashboard v2)
+    // MOCK v1.10 (dashboard de leads enfriandose)
     // ============================================================
-    // Sugerencias del dia: 5 elementos exactos. Cada uno apunta a un leadId real.
-    // suggestedFollowUpNumber indica si es el 1ro/2do/3ro/4to contacto sugerido
-    // (alineado con el OKR de cobertura del 3er msg).
-    var MOCK_DAILY_SUGGESTIONS = [
-        { id: 'sug-1', leadId: 'L122581', suggestedFollowUpNumber: 4, reason: 'Respondio hoy con dos dudas concretas. Momento ideal para cierre.',   urgent: true,  hint: 'Cierre proximo' },
-        { id: 'sug-2', leadId: 'L121399', suggestedFollowUpNumber: 1, reason: 'Alta hospitalaria manana, urgencia operativa. Falta perfilar.',       urgent: true,  hint: 'Alta hospitalaria' },
-        { id: 'sug-3', leadId: 'L122131', suggestedFollowUpNumber: 4, reason: 'Confirmar fecha de arranque (25/05). Operativo, deadline 30/05.',     urgent: true,  hint: 'Cierre operativo' },
-        { id: 'sug-4', leadId: 'L122613', suggestedFollowUpNumber: 3, reason: 'Hace 4 dias sin respuesta tras presupuesto. Toque 3er msg.',          urgent: false, hint: '3er msg' },
-        { id: 'sug-5', leadId: 'L122278', suggestedFollowUpNumber: 3, reason: 'Hace 5 dias del presupuesto. Toque 3er msg para cobertura.',          urgent: false, hint: '3er msg' }
+    // TODO[odoo]: cuando este el endpoint real GET /api/me/leads/cooling, este mock
+    // se reemplaza por la llamada al backend. Especificacion del endpoint al final
+    // del archivo (comentario "TODOs para backend").
+    // El array YA esta filtrado (solo enfriandose), YA priorizado (orden por urgencia),
+    // y YA excluye leads con seguimiento agendado futuro (lógica del backend).
+    // Cubre los 5 rangos de urgencia: warn (4-7), orange (8-14), stale (15-20), danger (21+).
+    var MOCK_COOLING_LEADS_RESPONSE = [
+        { leadId: 'L121399', contact: 'Marta Ortiz',          location: 'Madrid',                relation: 'Madre', caredPersonName: 'Concepcion', age: 86, serviceType: 'Interno',       daysWithoutTouch: 22, lastMessageDate: '27-abr', reason: 'Pidio pensarlo en familia, sin respuesta' },
+        { leadId: 'L121547', contact: 'Maria Jesus Sanchez',  location: 'Madrid',                relation: 'Madre', caredPersonName: 'Dolores',    age: 88, serviceType: 'Fin de semana', daysWithoutTouch: 17, lastMessageDate: '02-may', reason: 'No responde desde la propuesta hace 17 dias' },
+        { leadId: 'L121708', contact: 'David Campos',         location: 'Alcala de Henares',     relation: 'Madre', caredPersonName: 'Pilar',      age: 84, serviceType: 'Interno',       daysWithoutTouch: 11, lastMessageDate: '08-may', reason: 'Dijo que llamaria, hace 11 dias sin respuesta' },
+        { leadId: 'L122055', contact: 'Jose Maria Recio',     location: 'Collado Villalba',      relation: 'Madre', caredPersonName: 'Mercedes',   age: 85, serviceType: 'Externo',       daysWithoutTouch: 9,  lastMessageDate: '10-may', reason: 'No contesta WhatsApp ni llamadas hace 9 dias' },
+        { leadId: 'L122278', contact: 'Marina Ruben',         location: 'Madrid',                relation: 'Padre', caredPersonName: 'Manuel',     age: 83, serviceType: 'Por horas',     daysWithoutTouch: 5,  lastMessageDate: '14-may', reason: 'Esperando respuesta tras enviarle el presupuesto' },
+        { leadId: 'L121656', contact: 'Teresa Parellada',     location: "Sant Sadurni d'Anoia",  relation: 'Padre', caredPersonName: 'Joan',       age: 79, serviceType: 'Externo',       daysWithoutTouch: 6,  lastMessageDate: '13-may', reason: 'Familia comparando con otras dos opciones' },
+        { leadId: 'L122613', contact: 'Jordi Vidal',          location: 'Barcelona',             relation: 'Madre', caredPersonName: 'Carmen',     age: 82, serviceType: 'Interno',       daysWithoutTouch: 4,  lastMessageDate: '15-may', reason: 'Pidio pensarlo en familia, han pasado 4 dias' }
     ];
 
-    // Actividades agendadas globales (vencidas + hoy). El render hace dedupe contra MOCK_DAILY_SUGGESTIONS.
-    var MOCK_SCHEDULED_ACTIVITIES = [
-        { id: 'act-1', leadId: 'L122613', deadline: '2026-05-10', summary: 'Followup tras presupuesto familiar',    type: 'Por hacer', assignee: 'Patricia V.', done: false }, // overdue
-        { id: 'act-2', leadId: 'L122131', deadline: '2026-05-12', summary: 'Llamada con seleccion para cierre',     type: 'Llamada',   assignee: 'Patricia V.', done: false }, // overdue
-        { id: 'act-3', leadId: 'L122581', deadline: '2026-05-15', summary: 'Responder dudas fin de semana y arranque', type: 'Por hacer', assignee: 'Patricia V.', done: false }, // today (15-may)
-        { id: 'act-4', leadId: 'L121399', deadline: '2026-05-15', summary: 'Llamar a Marta para captar perfil',     type: 'Llamada',   assignee: 'Patricia V.', done: false }  // today
-    ];
-
-    // Conversaciones (mensajes WhatsApp) con keywords para el SearchService.
-    // Cubre las 3 busquedas tipicas del brief: precio, alta hospitalaria, interno vs externo.
-    var MOCK_CONVERSATION_MATCHES = [
-        { id: 'conv-1', leadId: 'L121656', leadName: 'Familia Parellada Canals', from: 'lead', text: 'Recibido, lo estamos comparando con dos opciones mas. Te digo manana.',                                          time: 'Hace 6 dias',  keywords: ['precio', 'comparar', 'familia', 'dudaban'] },
-        { id: 'conv-2', leadId: 'L122055', leadName: 'Familia Recio del Campo',  from: 'lead', text: 'Estamos dudando entre interna y externa. La interna es mas cara pero quizas mas tranquila.',                       time: 'Hace 12 dias', keywords: ['interno', 'externo', 'interna', 'externa', 'precio'] },
-        { id: 'conv-3', leadId: 'L121708', leadName: 'Familia Campos Rivera',    from: 'lead', text: 'Mi madre tuvo el alta hospitalaria la semana pasada y no podemos cubrir solos.',                                   time: 'Hace 11 dias', keywords: ['alta hospitalaria', 'hospitalaria', 'alta'] },
-        { id: 'conv-4', leadId: 'L121399', leadName: 'Familia Ortiz Pica',       from: 'lead', text: 'Sale del hospital manana, necesitamos cobertura desde el dia 1. Cuesta mucho?',                                    time: 'Hoy 08:30',    keywords: ['alta hospitalaria', 'hospital', 'precio', 'cuesta'] },
-        { id: 'conv-5', leadId: 'L120478', leadName: 'Familia Bertran Casas',    from: 'lead', text: 'El presupuesto se nos va de presupuesto, dudabamos por el precio. Vamos a darle una vuelta en familia.',           time: 'Hace 22 dias', keywords: ['precio', 'dudaban', 'presupuesto', 'familia'] },
-        { id: 'conv-6', leadId: 'L121547', leadName: 'Familia Sanchez Tartalo',  from: 'lead', text: 'Mi madre tiene Alzheimer y la queremos en casa, no nos atrevemos con interna. Externa quizas?',                    time: 'Hace 14 dias', keywords: ['interno', 'externo', 'interna', 'externa'] }
-    ];
-
-    // Material con descripcion + keywords para el SearchService del dashboard.
-    // v1.6: el pane derecho del detail (que consumia MOCK_MATERIAL) fue eliminado, pero este
-    // array se conserva intacto porque lo consume el asistente del header del dashboard.
-    var MOCK_MATERIAL_SEARCHABLE = [
-        { id: 'm1', title: 'Guia: Primeros pasos cuando hay alta hospitalaria',                  match: '92%', tag: 'Postoperatorio', keywords: ['alta hospitalaria', 'hospital', 'postoperatorio', 'alta'] },
-        { id: 'm2', title: 'Video: Como elegimos a las cuidadoras (3 min)',                       match: '88%', tag: 'Confianza',      keywords: ['confianza', 'cuidadora', 'eleccion'] },
-        { id: 'm3', title: 'PDF: Diferencias entre interna y externa',                            match: '94%', tag: 'Comparativa',    keywords: ['interno', 'externo', 'interna', 'externa', 'comparativa', 'diferencias'] },
-        { id: 'm4', title: 'PDF: Como hablar de precio sin cerrar la conversacion',               match: '89%', tag: 'Precio',         keywords: ['precio', 'objecion', 'presupuesto', 'precio'] },
-        { id: 'm5', title: 'Caso real: familia que dudaba por precio y termino contratando',      match: '86%', tag: 'Caso real',      keywords: ['precio', 'dudaban', 'caso', 'familia'] },
-        { id: 'm6', title: 'Plantilla: explicar coste interna vs externa con ejemplo',            match: '83%', tag: 'Plantilla',      keywords: ['interno', 'externo', 'precio', 'plantilla'] }
-    ];
+    // Tope visual del dashboard. El backend ya devuelve la cohorte priorizada;
+    // el frontend muestra como mucho MAX_VISIBLE filas para no abrumar a la AF.
+    var MAX_VISIBLE = 5;
 
     // ============================================================
     // MOCKS v1.6 (chat IA del pane central del detalle)
@@ -500,17 +773,9 @@
         }
     };
 
-    var TEMP_CONFIG = {
-        caliente: { label: 'Caliente', icon: 'flame',     bg: '#ffedd5', color: '#7c2d12', border: '#fdba74', dot: '#f97316' },
-        templado: { label: 'Templado', icon: 'thermo',    bg: '#fffbeb', color: '#78350f', border: '#fcd34d', dot: '#f59e0b' },
-        // Cambio v1.2: frio pasa de sky-blue a slate (azul-gris, segun brief)
-        frio:     { label: 'Frio',     icon: 'snowflake', bg: '#f1f5f9', color: '#1e293b', border: '#94a3b8', dot: '#64748b' },
-        pausa:    { label: 'Pausa',    icon: 'pause',     bg: '#f5f5f4', color: '#44403c', border: '#d6d3d1', dot: '#a8a29e' }
-    };
-
-    var URGENCY_ORDER = { 'Estandar': 0, 'Urgente': 1, 'Muy urgente': 2 };
-    var TEMP_ORDER = { caliente: 0, templado: 1, frio: 2, pausa: 3 };
-    var STALE_THRESHOLD = { caliente: 3, templado: 7, frio: 14, pausa: 99 };
+    // v1.10: TEMP_CONFIG, URGENCY_ORDER, TEMP_ORDER, STALE_THRESHOLD eliminados.
+    //   Solo los consumian renderTempBadge / renderUrg / renderDays / sortLeads /
+    //   buildUnifiedFeed (todos eliminados con el dashboard nuevo).
 
     // ============================================================
     // STATE
@@ -519,24 +784,14 @@
         view: 'dashboard',              // 'dashboard' | 'detail'
         currentLeadId: null,
 
-        // searchQuery se mantiene para uso interno de matchesSearch desde el Asistente.
-        coverageBucket: null,           // null | 0 | 1 | 2 | 3 (3 significa "3+")
-        searchQuery: '',
-        // sortCol = null significa "sort compuesto inteligente" (default v1.4).
-        // Cuando la AF clickea un header, se respeta el sort manual.
-        sortCol: null,                  // null | 'familia' | 'temp' | 'servicio' | 'urgencia' | 'dias' | 'interacciones' | 'etapa' | 'proximo'
-        sortDir: 'desc',                // 'asc' | 'desc'
-
-        // Dashboard v1.4: tabla unificada con toolbar
-        activeTypeChip: 'suggestions',  // 'suggestions' | 'activities' | 'leads'
-        activeSegmentFilter: null,      // null | 'caliente' | 'templado' | 'frio-reactivar' | 'pausa' | 'urgente' | 'historico'
-        filtersExpanded: false,         // toggle del boton "Filtros"
-
-        // Asistente: 3 estados, ahora anclado al header en lugar de flotante
-        assistantState: 'closed',       // 'closed' (pill header) | 'expanded' (input header) | 'results' (panel lateral)
-        assistantQuery: '',
-        assistantLoading: false,
-        assistantResults: null,         // { leads: [...], conversations: [...], material: [...] } | null
+        // v1.10: dashboard "lista de leads enfriandose".
+        //   completedTodayIds: Set<leadId>. Filas que la AF marco como hechas en esta sesion.
+        //   Persiste durante toda la sesion del page load (NO se vacia en closeModal).
+        //   undoToast / undoTimeoutId: estado del toast inferior "Marcado como hecho · Deshacer".
+        //   Solo el ultimo "Marcar hecho" tiene undo activo (los anteriores quedan permanentes en sesion).
+        completedTodayIds: new Set(),
+        undoToast: null,                // { leadId, expiresAt } | null
+        undoTimeoutId: null,            // ID del setTimeout activo (o null)
 
         // Detail state
         // v1.6: state.activePanel y state.editingTemp eliminados (no hay tabs ni temp editable
@@ -550,6 +805,14 @@
         aiChatHistory: {},              // { leadId: [{ from: 'user'|'ai', payload }] } - PERSISTENTE en sesion
         aiChatDraft: '',                // texto vivo del input del chat IA del pane central
         __waNeedsScroll: false,         // flag para auto-scroll al fondo del pane WhatsApp post-rerender
+        __aiNeedsScroll: false,         // v1.9.1: flag para auto-scroll al fondo del pane Chat IA post-rerender
+
+        // v1.8: toggle de orden de columnas del detalle (info vs IA en centro/derecha).
+        //   false (default) -> WA | Info | IA   (orden actual de v1.7).
+        //   true            -> WA | IA   | Info (swap entre centro y derecha).
+        // Persiste en sesion del modal (no se resetea al navegar entre leads). Se resetea
+        // a false en closeModal.
+        detailLayoutSwapped: true,
 
         // Schedule modal (reutilizado desde Detail Y desde "Marcar hecho" de sugerencias/actividades)
         showScheduleModal: false,
@@ -595,10 +858,7 @@
         var ed = EDITS.temperatures[lead.id];
         return ed ? ed.source : lead.temperatureSource;
     }
-    function getLeadTemperatureReason(lead) {
-        // Si la AF edito la temperatura sin tocar el motivo, mantenemos el motivo original.
-        return lead.temperatureReason;
-    }
+    // v1.10: getLeadTemperatureReason eliminado (sin consumidores tras la limpieza del dashboard).
 
     function getIaSummary(leadId) {
         if (EDITS.iaSummaries[leadId]) return EDITS.iaSummaries[leadId];
@@ -612,142 +872,14 @@
         return added.concat(base);
     }
 
-    function getInteractionCount(lead) {
-        return lead.interactionCount;
-    }
-
-    // ----- Filtros operacionales -----
-    // "Todos" excluye historicos por default (cartera activa). "Historico" es el opuesto explicito.
-    // Los demas chips operan sobre cartera activa unicamente.
-    function isActive(lead) { return !lead.historico; }
-
-    function matchesOperationalFilter(lead, filter) {
-        var t = getLeadTemperature(lead);
-        if (filter === 'historico')        return !!lead.historico;
-        if (!isActive(lead))               return false; // los demas chips solo sobre activos
-        if (filter === 'caliente')         return t === 'caliente';
-        if (filter === 'templado')         return t === 'templado';
-        if (filter === 'frio-reactivar')   return t === 'frio' && lead.daysWithoutTouch < 21;
-        if (filter === 'pausa')            return t === 'pausa';
-        if (filter === 'urgente')          return !!lead.urgent;
-        return true; // 'todos' sobre cartera activa
-    }
-
-    function matchesCoverageBucket(lead, bucket) {
-        if (bucket == null) return true;
-        if (!isActive(lead)) return false; // cobertura solo sobre cartera activa
-        var n = getInteractionCount(lead);
-        if (bucket === 3) return n >= 3; // "3+"
-        return n === bucket;
-    }
-
-    function matchesSearch(lead, q) {
-        if (!q) return true;
-        var lq = q.toLowerCase();
-        return lead.name.toLowerCase().indexOf(lq) !== -1
-            || lead.context.toLowerCase().indexOf(lq) !== -1
-            || lead.temperatureReason.toLowerCase().indexOf(lq) !== -1
-            || lead.location.toLowerCase().indexOf(lq) !== -1
-            || (lead.prescriptor && lead.prescriptor.toLowerCase().indexOf(lq) !== -1)
-            || (lead.serviceType && lead.serviceType.toLowerCase().indexOf(lq) !== -1);
-    }
-
-    function getFilteredLeads() {
-        // v1.4: usa state.activeSegmentFilter (nullable). null = todos los segmentos activos.
-        var segment = state.activeSegmentFilter || 'todos';
-        var out = [];
+    // ----- Helpers de cartera (solo lo que sigue vivo en v1.10) -----
+    // countLeadsUrgent: contador para el badge del bottom-right (numero rojo).
+    // Se mantiene como simple count de lead.urgent sobre cartera activa.
+    function countLeadsUrgent() {
+        var n = 0;
         for (var i = 0; i < MOCK_LEADS.length; i++) {
             var l = MOCK_LEADS[i];
-            if (!matchesOperationalFilter(l, segment)) continue;
-            if (!matchesCoverageBucket(l, state.coverageBucket)) continue;
-            if (!matchesSearch(l, state.searchQuery.trim())) continue;
-            out.push(l);
-        }
-        return sortLeads(out);
-    }
-
-    function sortLeads(arr) {
-        var col = state.sortCol, dir = state.sortDir;
-        if (!col) return arr;
-        var sign = dir === 'asc' ? 1 : -1;
-        var copy = arr.slice();
-        // nextScheduledFollowUp = null se ordena al final independientemente del sign.
-        var BIG = 9999999;
-        copy.sort(function (a, b) {
-            var av, bv;
-            switch (col) {
-                case 'familia':       av = a.name.toLowerCase(); bv = b.name.toLowerCase(); break;
-                case 'temp':          av = TEMP_ORDER[getLeadTemperature(a)]; bv = TEMP_ORDER[getLeadTemperature(b)]; break;
-                case 'servicio':      av = (a.serviceType || '').toLowerCase(); bv = (b.serviceType || '').toLowerCase(); break;
-                case 'urgencia':      av = URGENCY_ORDER[a.urgency] || 0; bv = URGENCY_ORDER[b.urgency] || 0; break;
-                case 'dias':          av = a.daysWithoutTouch; bv = b.daysWithoutTouch; break;
-                case 'interacciones': av = a.interactionCount; bv = b.interactionCount; break;
-                case 'etapa':         av = a.stage.toLowerCase(); bv = b.stage.toLowerCase(); break;
-                case 'proximo':
-                    av = a.nextScheduledFollowUp ? daysBetween(a.nextScheduledFollowUp) : BIG;
-                    bv = b.nextScheduledFollowUp ? daysBetween(b.nextScheduledFollowUp) : BIG;
-                    break;
-                default:              return 0;
-            }
-            if (av < bv) return -1 * sign;
-            if (av > bv) return 1 * sign;
-            return 0;
-        });
-        return copy;
-    }
-
-    // Para la nav del detail
-    function getNavLeads() {
-        var segment = state.activeSegmentFilter || 'todos';
-        var out = [];
-        for (var i = 0; i < MOCK_LEADS.length; i++) {
-            var l = MOCK_LEADS[i];
-            if (!matchesOperationalFilter(l, segment)) continue;
-            if (!matchesCoverageBucket(l, state.coverageBucket)) continue;
-            if (!matchesSearch(l, state.searchQuery.trim())) continue;
-            out.push(l);
-        }
-        return out;
-    }
-
-    function countByOperational(filter) {
-        var n = 0;
-        for (var i = 0; i < MOCK_LEADS.length; i++) if (matchesOperationalFilter(MOCK_LEADS[i], filter)) n++;
-        return n;
-    }
-
-    function countByCoverage(bucket) {
-        var n = 0;
-        for (var i = 0; i < MOCK_LEADS.length; i++) if (matchesCoverageBucket(MOCK_LEADS[i], bucket)) n++;
-        return n;
-    }
-
-    function coveragePct() {
-        // Solo cartera activa (sin historicos), alineado con CoverageService.weeklySync()
-        var total = 0;
-        for (var i = 0; i < MOCK_LEADS.length; i++) if (isActive(MOCK_LEADS[i])) total++;
-        if (total === 0) return 0;
-        var n3plus = countByCoverage(3);
-        return Math.round((n3plus / total) * 100);
-    }
-
-    function activeLeadsCount() {
-        var n = 0;
-        for (var i = 0; i < MOCK_LEADS.length; i++) if (isActive(MOCK_LEADS[i])) n++;
-        return n;
-    }
-
-    // Para el sub-info de "Pausados con reactivacion esta semana"
-    function pausaReactivacionEstaSemana() {
-        var n = 0;
-        var today = new Date(); today.setHours(0,0,0,0);
-        var weekAhead = new Date(today.getTime() + 7 * 24 * 3600 * 1000);
-        for (var i = 0; i < MOCK_LEADS.length; i++) {
-            var l = MOCK_LEADS[i];
-            if (getLeadTemperature(l) !== 'pausa') continue;
-            if (!l.pausaUntil) continue;
-            var d = new Date(l.pausaUntil + 'T00:00:00');
-            if (d >= today && d <= weekAhead) n++;
+            if (!l.historico && l.urgent) n++;
         }
         return n;
     }
@@ -823,6 +955,28 @@
         close: function (id, reason) {
             // TODO[odoo]: POST /api/leads/:id/close { reason }
             return simulateLatency(80, 180).then(function () { return { ok: true, reason: reason }; });
+        },
+
+        // v1.10: lista de leads enfriandose. El backend devuelve la cohorte ya filtrada
+        // y priorizada (ver TODOs al final del archivo). El frontend solo filtra los que
+        // la AF marco hechos en sesion (state.completedTodayIds).
+        //
+        // getCoolingLeadsSync: version sincrona, consumida por renderDashboard.
+        getCoolingLeadsSync: function () {
+            var out = [];
+            for (var i = 0; i < MOCK_COOLING_LEADS_RESPONSE.length; i++) {
+                var row = MOCK_COOLING_LEADS_RESPONSE[i];
+                if (state.completedTodayIds && state.completedTodayIds.has(row.leadId)) continue;
+                out.push(row);
+            }
+            return out;
+        },
+        // TODO[odoo]: GET /api/me/leads/cooling. Cuando se cablee, getCoolingLeadsSync
+        // pasa a leer state.coolingLeads (cacheado) y este getCoolingLeads dispara el
+        // fetch + setea el cache. En v1.10 ambos comparten el mismo mock.
+        getCoolingLeads: function () {
+            var self = this;
+            return simulateLatency(120, 280).then(function () { return self.getCoolingLeadsSync(); });
         }
     };
 
@@ -845,17 +999,6 @@
             }
             return base;
         },
-        // Globales (hoy + vencidas) para la seccion 3 del dashboard.
-        listTodayAndOverdueSync: function () {
-            // TODO[odoo]: GET /api/me/activities?state=today,overdue
-            var out = [];
-            for (var i = 0; i < MOCK_SCHEDULED_ACTIVITIES.length; i++) {
-                var a = MOCK_SCHEDULED_ACTIVITIES[i];
-                if (EDITS.activitiesDone[a.id]) continue;
-                out.push(a);
-            }
-            return out;
-        },
         schedule: function (leadId, deadline, note, markPause) {
             // TODO[odoo]: POST /api/activities { lead_id, date_deadline, note, type='todo' }
             EDITS.scheduledActivities.push({
@@ -869,271 +1012,10 @@
             // TODO[odoo]: PATCH /api/activities/:id { state: 'done' }
             EDITS.activitiesDone[actId] = true;
             return simulateLatency(50, 120).then(function () { return true; });
-        },
-        // v1.4: feed unificado consumido por la tabla unica del dashboard.
-        // TODO[odoo]: GET /api/me/feed?window=15d  (composicion server-side si esta disponible;
-        // mientras tanto, hacemos el merge + dedupe + sort compuesto en cliente).
-        getUnifiedFeedSync: function (filters) {
-            return buildUnifiedFeed(filters || {});
         }
-    };
-
-    var SuggestionsService = {
-        listSync: function () {
-            // TODO[odoo]: GET /api/me/daily-suggestions
-            // Filtrar las que la AF ya marco hecho / pospuso a futuro.
-            var today = new Date(); today.setHours(0, 0, 0, 0);
-            var out = [];
-            for (var i = 0; i < MOCK_DAILY_SUGGESTIONS.length; i++) {
-                var s = MOCK_DAILY_SUGGESTIONS[i];
-                if (EDITS.suggestionsDone[s.id]) continue;
-                var pp = EDITS.suggestionsPostponed[s.id];
-                if (pp && pp.until) {
-                    var d = new Date(pp.until + 'T00:00:00');
-                    if (d > today) continue;
-                }
-                out.push(s);
-            }
-            return out;
-        },
-        markDone: function (sugId) { EDITS.suggestionsDone[sugId] = true; return simulateLatency(40, 100); },
-        postpone: function (sugId, untilIso) { EDITS.suggestionsPostponed[sugId] = { until: untilIso }; return simulateLatency(40, 100); }
-    };
-
-    var CoverageService = {
-        // Cobertura: distribucion por interactionCount, scoped a "cartera activa ventana 15d".
-        weeklySync: function () {
-            // TODO[odoo]: GET /api/me/coverage?window=15d
-            var active = LeadService.listSync().filter(function (l) { return !l.historico; });
-            var byBucket = { 0: 0, 1: 0, 2: 0, 3: 0 };
-            for (var i = 0; i < active.length; i++) {
-                var n = active[i].interactionCount;
-                if (n >= 3) byBucket[3]++;
-                else if (n === 2) byBucket[2]++;
-                else if (n === 1) byBucket[1]++;
-                else byBucket[0]++;
-            }
-            var total = active.length;
-            var pct = total > 0 ? Math.round((byBucket[3] / total) * 100) : 0;
-            return { byBucket: byBucket, total: total, coveragePct: pct, target: COVERAGE_TARGET };
-        }
-    };
-
-    // ----- Helper interno del feed unificado (v1.4) -----
-    // Compone sugerencias + actividades (today + overdue) + leads en una sola lista
-    // de filas con shape uniforme. Hace dedupe (la sugerencia gana frente a actividad
-    // del mismo lead, pero la fila de sugerencia retiene hasActivity=true para mostrar
-    // el microcopy "+ actividad" inline), aplica filtro de tipo + segmento, y ordena
-    // con el sort compuesto inteligente cuando state.sortCol === null.
-    function buildUnifiedFeed(filters) {
-        var typeChip = filters.typeChip || state.activeTypeChip || 'suggestions';
-        var segment  = filters.segment  || state.activeSegmentFilter || null;
-
-        var suggestions = SuggestionsService.listSync();   // [{ id, leadId, suggestedFollowUpNumber, reason, urgent, hint }]
-        var activities  = ActivityService.listTodayAndOverdueSync(); // [{ id, leadId, deadline, summary, type, assignee }]
-
-        // Indices para dedupe entre sugerencia y actividad del mismo lead
-        var sugByLeadId = {};
-        for (var i = 0; i < suggestions.length; i++) sugByLeadId[suggestions[i].leadId] = suggestions[i];
-
-        // Filas tipo sugerencia: marcamos hasActivity cuando hay actividad mismo leadId
-        var sugRows = [];
-        for (var s = 0; s < suggestions.length; s++) {
-            var sug = suggestions[s];
-            var lead = getLead(sug.leadId);
-            if (!lead) continue;
-            var hasAct = false;
-            for (var aa = 0; aa < activities.length; aa++) {
-                if (activities[aa].leadId === sug.leadId) { hasAct = true; break; }
-            }
-            sugRows.push({
-                rowKey: 'sug-' + sug.id,
-                type: 'suggestion',
-                leadId: sug.leadId,
-                lead: lead,
-                suggestion: sug,
-                hasActivity: hasAct,           // microcopy "+ actividad" si true
-                sortPriority: sug.urgent ? 2 : 3
-            });
-        }
-
-        // Filas tipo actividad: filtrar las que ya estan representadas como sugerencia.
-        var actRows = [];
-        for (var a = 0; a < activities.length; a++) {
-            var act = activities[a];
-            if (sugByLeadId[act.leadId]) continue; // dedupe: sugerencia gana
-            var aLead = getLead(act.leadId);
-            if (!aLead) continue;
-            var diff = daysBetween(act.deadline);
-            var isOverdue = diff < 0;
-            var isToday   = diff === 0;
-            actRows.push({
-                rowKey: 'act-' + act.id,
-                type: 'activity',
-                leadId: act.leadId,
-                lead: aLead,
-                activity: act,
-                overdueDays: isOverdue ? Math.abs(diff) : 0,
-                isOverdue: isOverdue,
-                isToday: isToday,
-                sortPriority: isOverdue ? 1 : 4 // vencidas suben al tope (despues van las urgentes)
-            });
-        }
-
-        // Filas tipo lead: todos los activos NO representados arriba.
-        var representedLead = {};
-        for (var r = 0; r < sugRows.length; r++) representedLead[sugRows[r].leadId] = true;
-        for (var r2 = 0; r2 < actRows.length; r2++) representedLead[actRows[r2].leadId] = true;
-        var leadRows = [];
-        for (var lL = 0; lL < MOCK_LEADS.length; lL++) {
-            var ld = MOCK_LEADS[lL];
-            if (representedLead[ld.id]) continue;
-            leadRows.push({
-                rowKey: 'lead-' + ld.id,
-                type: 'lead',
-                leadId: ld.id,
-                lead: ld,
-                sortPriority: 5
-            });
-        }
-
-        // Concat segun tipo (excluyente)
-        var rows;
-        if (typeChip === 'suggestions') rows = sugRows.slice();
-        else if (typeChip === 'activities') rows = actRows.slice();
-        else /* 'leads' */ rows = leadRows.slice();
-
-        // Filtro de segmento (combinable con el chip de tipo)
-        if (segment) {
-            var filtered = [];
-            for (var f = 0; f < rows.length; f++) {
-                if (matchesOperationalFilter(rows[f].lead, segment)) filtered.push(rows[f]);
-            }
-            rows = filtered;
-        } else if (typeChip === 'leads') {
-            // Default para Leads sin segmento: cartera activa (excluye historicos)
-            var fa = [];
-            for (var f2 = 0; f2 < rows.length; f2++) {
-                if (!rows[f2].lead.historico) fa.push(rows[f2]);
-            }
-            rows = fa;
-        }
-
-        // Sort
-        if (state.sortCol) {
-            // Sort manual (header clickeado): respetamos ordering por columna del lead.
-            var sign = state.sortDir === 'asc' ? 1 : -1;
-            rows.sort(function (ra, rb) {
-                var av, bv;
-                switch (state.sortCol) {
-                    case 'familia':       av = ra.lead.name.toLowerCase(); bv = rb.lead.name.toLowerCase(); break;
-                    case 'temp':          av = TEMP_ORDER[getLeadTemperature(ra.lead)]; bv = TEMP_ORDER[getLeadTemperature(rb.lead)]; break;
-                    case 'servicio':      av = (ra.lead.serviceType || '').toLowerCase(); bv = (rb.lead.serviceType || '').toLowerCase(); break;
-                    case 'urgencia':      av = URGENCY_ORDER[ra.lead.urgency] || 0; bv = URGENCY_ORDER[rb.lead.urgency] || 0; break;
-                    case 'dias':          av = ra.lead.daysWithoutTouch; bv = rb.lead.daysWithoutTouch; break;
-                    case 'interacciones': av = ra.lead.interactionCount; bv = rb.lead.interactionCount; break;
-                    case 'etapa':         av = ra.lead.stage.toLowerCase(); bv = rb.lead.stage.toLowerCase(); break;
-                    case 'proximo':
-                        av = ra.lead.nextScheduledFollowUp ? daysBetween(ra.lead.nextScheduledFollowUp) : 9999999;
-                        bv = rb.lead.nextScheduledFollowUp ? daysBetween(rb.lead.nextScheduledFollowUp) : 9999999;
-                        break;
-                    default: return 0;
-                }
-                if (av < bv) return -1 * sign;
-                if (av > bv) return 1 * sign;
-                return 0;
-            });
-        } else {
-            // Sort compuesto inteligente (default v1.4):
-            //   1) Actividades vencidas (mas viejas primero)
-            //   2) Sugerencias urgentes
-            //   3) Sugerencias normales
-            //   4) Actividades de hoy
-            //   5) Leads por daysWithoutTouch desc
-            rows.sort(function (ra, rb) {
-                if (ra.sortPriority !== rb.sortPriority) return ra.sortPriority - rb.sortPriority;
-                if (ra.type === 'activity' && rb.type === 'activity') {
-                    return rb.overdueDays - ra.overdueDays; // mas vencidas primero
-                }
-                if (ra.type === 'lead' && rb.type === 'lead') {
-                    return rb.lead.daysWithoutTouch - ra.lead.daysWithoutTouch;
-                }
-                return 0;
-            });
-        }
-
-        return rows;
-    }
-
-    // Counts por tipo para los chips de la toolbar (siempre cuentan el universo,
-    // no se afectan por el segmento ni por el chip activo).
-    function countUnifiedByType(typeChip) {
-        return buildUnifiedFeed({ typeChip: typeChip, segment: null }).length;
-    }
-
-    function countSegmentInActiveType(segment) {
-        return buildUnifiedFeed({ typeChip: state.activeTypeChip, segment: segment }).length;
-    }
-
-    var SearchService = {
-        // Todo el SearchService corre async. El Asistente flotante (Estado 3) lo consume con loading skeletons.
-        // Mock devuelve matches por substring sobre name/context/temperatureReason/keywords.
-        all: function (q) {
-            // TODO[odoo]: POST /api/search { q } -> { leads, conversations, material }
-            return simulateLatency(220, 480).then(function () {
-                return {
-                    leads: SearchService._leadsSync(q),
-                    conversations: SearchService._conversationsSync(q),
-                    material: SearchService._materialSync(q)
-                };
-            });
-        },
-        _leadsSync: function (q) {
-            if (!q) return [];
-            var lq = q.toLowerCase();
-            var out = [];
-            for (var i = 0; i < MOCK_LEADS.length; i++) {
-                if (matchesSearch(MOCK_LEADS[i], q)) out.push(MOCK_LEADS[i]);
-                if (out.length >= 6) break;
-            }
-            return out;
-        },
-        _conversationsSync: function (q) {
-            if (!q) return [];
-            var lq = q.toLowerCase();
-            var out = [];
-            for (var i = 0; i < MOCK_CONVERSATION_MATCHES.length; i++) {
-                var c = MOCK_CONVERSATION_MATCHES[i];
-                var hit = c.text.toLowerCase().indexOf(lq) !== -1
-                       || c.leadName.toLowerCase().indexOf(lq) !== -1;
-                if (!hit && c.keywords) {
-                    for (var k = 0; k < c.keywords.length; k++) {
-                        if (lq.indexOf(c.keywords[k]) !== -1 || c.keywords[k].indexOf(lq) !== -1) { hit = true; break; }
-                    }
-                }
-                if (hit) out.push(c);
-                if (out.length >= 5) break;
-            }
-            return out;
-        },
-        _materialSync: function (q) {
-            if (!q) return [];
-            var lq = q.toLowerCase();
-            var out = [];
-            for (var i = 0; i < MOCK_MATERIAL_SEARCHABLE.length; i++) {
-                var m = MOCK_MATERIAL_SEARCHABLE[i];
-                var hit = m.title.toLowerCase().indexOf(lq) !== -1
-                       || (m.tag || '').toLowerCase().indexOf(lq) !== -1;
-                if (!hit && m.keywords) {
-                    for (var k = 0; k < m.keywords.length; k++) {
-                        if (lq.indexOf(m.keywords[k]) !== -1 || m.keywords[k].indexOf(lq) !== -1) { hit = true; break; }
-                    }
-                }
-                if (hit) out.push(m);
-                if (out.length >= 5) break;
-            }
-            return out;
-        }
+        // v1.10: getUnifiedFeedSync, listTodayAndOverdueSync, SuggestionsService entera y
+        // CoverageService entera ELIMINADAS. El dashboard ya no consume sugerencias,
+        // actividades globales ni cobertura.
     };
 
     // ============================================================
@@ -1177,7 +1059,11 @@
         moreHoriz:   '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
         zap:         '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
         dot:         '<circle cx="12" cy="12" r="3"/>',
-        slidersHoriz:'<line x1="4" y1="6" x2="11" y2="6"/><line x1="15" y1="6" x2="20" y2="6"/><line x1="4" y1="18" x2="9" y2="18"/><line x1="13" y1="18" x2="20" y2="18"/><line x1="4" y1="12" x2="6" y2="12"/><line x1="10" y1="12" x2="20" y2="12"/><circle cx="13" cy="6" r="2"/><circle cx="11" cy="18" r="2"/><circle cx="8" cy="12" r="2"/>'
+        slidersHoriz:'<line x1="4" y1="6" x2="11" y2="6"/><line x1="15" y1="6" x2="20" y2="6"/><line x1="4" y1="18" x2="9" y2="18"/><line x1="13" y1="18" x2="20" y2="18"/><line x1="4" y1="12" x2="6" y2="12"/><line x1="10" y1="12" x2="20" y2="12"/><circle cx="13" cy="6" r="2"/><circle cx="11" cy="18" r="2"/><circle cx="8" cy="12" r="2"/>',
+        // v1.10: lucide RefreshCw (rotation horario, dos arrows) - distinto a "refresh" que es RefreshCcw.
+        'refresh-cw':'<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>',
+        // v1.10: lucide AlertTriangle (triangulo con !) - distinto a "alert" que es AlertCircle.
+        'alert-triangle':'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -1217,7 +1103,8 @@
             /* overlay + shell */
             '.qida-overlay{position:fixed;inset:0;z-index:2147483001;display:none;align-items:center;justify-content:center;background:rgba(28,25,23,.55);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);font-family:"Manrope",system-ui,sans-serif;color:var(--s900);padding:16px;box-sizing:border-box;}',
             '.qida-overlay.active{display:flex;}',
-            '.qida-shell{background:#fff;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.3);width:100%;max-width:100%px;height:100%;max-height:97vh;display:flex;flex-direction:column;overflow:hidden;position:relative;}',
+            '.qida-shell{background:#fff;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.3);width:100%;max-width:1400px;height:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;position:relative;}',
+            '.qida-shell.qida-view-detail{max-width:none;max-height:none;width:96vw;height:96vh;}',
             '.qida-shell *{box-sizing:border-box;}',
 
             /* shell header */
@@ -1230,189 +1117,110 @@
             '.qida-esc{font-size:11px;color:var(--s400);}',
             '.qida-icon-btn{background:transparent;border:0;padding:6px;border-radius:6px;cursor:pointer;color:var(--s600);display:inline-flex;align-items:center;justify-content:center;transition:background .15s;}',
             '.qida-icon-btn:hover{background:var(--s100);color:var(--s900);}',
+            /* v1.8: toggle swap layout en el shell header del detail */
+            '.qida-shell-swap{background:transparent;border:0.5px solid var(--s300);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--s600);cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:inherit;transition:background .15s,color .15s,border-color .15s;}',
+            '.qida-shell-swap:hover{background:var(--s100);}',
+            '.qida-shell-swap.active{background:#E1F5EE;color:#0F6E56;border-color:#c5e8dc;}',
             '.qida-content{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0;}',
 
-            /* coverage widget */
-            /* v1.4: cobertura compactada — padding y margenes reducidos */
-            '.qida-coverage{padding:10px 14px;background:linear-gradient(180deg,var(--qg-soft) 0%,#fff 100%);border:1px solid var(--s200);border-radius:10px;}',
-            '.qida-coverage-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:6px;gap:12px;}',
-            '.qida-coverage-title{font-size:11.5px;font-weight:600;color:var(--s700);display:inline-flex;align-items:center;gap:6px;letter-spacing:.02em;}',
-            '.qida-coverage-target{font-size:11px;color:var(--s500);}',
-            '.qida-coverage-target strong{color:var(--qg);font-weight:600;}',
-            '.qida-coverage-row{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;}',
-            '.qida-cov-chip{flex:1;min-width:120px;display:inline-flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border-radius:7px;border:1px solid var(--s200);background:#fff;cursor:pointer;font-family:inherit;color:var(--s700);transition:border-color .15s,box-shadow .15s,transform .12s;text-align:left;}',
-            '.qida-cov-chip:hover{border-color:var(--s300);transform:translateY(-1px);}',
-            '.qida-cov-chip.active{border-color:var(--qg);box-shadow:0 0 0 2px rgba(14,74,58,.12);background:var(--qg-soft);}',
-            '.qida-cov-chip-label{display:flex;flex-direction:column;gap:1px;}',
-            '.qida-cov-chip-label-main{font-size:11.5px;font-weight:500;color:var(--s700);display:inline-flex;align-items:center;gap:6px;}',
-            '.qida-cov-chip-label-sub{font-size:10px;color:var(--s500);}',
-            '.qida-cov-chip-num{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-size:18px;font-weight:600;color:var(--s900);line-height:1;}',
-            '.qida-cov-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;}',
-            '.qida-cov-chip[data-bucket="0"] .qida-cov-dot{background:#94a3b8;}',
-            '.qida-cov-chip[data-bucket="1"] .qida-cov-dot{background:#f59e0b;}',
-            '.qida-cov-chip[data-bucket="2"] .qida-cov-dot{background:#84cc16;}',
-            '.qida-cov-chip[data-bucket="3"] .qida-cov-dot{background:var(--qg);}',
-            '.qida-cov-pct{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-size:13px;font-weight:600;color:var(--qg);margin-left:4px;}',
+            /* v1.10: coverage widget, dashboard search/chips/table, badges util ELIMINADOS.
+               Vivian con renderCoverage / renderUnifiedTable / renderTempBadge / renderUrg /
+               renderDays (todos eliminados con el dashboard nuevo). */
 
-            /* dashboard */
-            '.qida-dash{display:flex;flex-direction:column;height:100%;min-height:0;}',
-            '.qida-dash-top{padding:16px 24px 12px;border-bottom:1px solid var(--s100);}',
-            '.qida-search{position:relative;}',
-            '.qida-search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--s400);}',
-            '.qida-search input{width:100%;padding:10px 220px 10px 38px;background:var(--s50);border:1px solid var(--s200);border-radius:6px;font-size:14px;font-family:inherit;color:var(--s900);outline:none;transition:border-color .15s,background .15s;}',
-            '.qida-search input:focus{border-color:var(--qg);background:#fff;}',
-            '.qida-search-hint{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--s400);display:inline-flex;align-items:center;gap:4px;pointer-events:none;}',
-            '.qida-chips{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap;}',
-            '.qida-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:500;border:1px solid var(--s200);background:#fff;color:var(--s700);cursor:pointer;transition:border-color .15s,background .15s;font-family:inherit;}',
-            '.qida-chip:hover{border-color:var(--s300);}',
-            '.qida-chip-count{font-size:10px;opacity:.6;}',
-            '.qida-chip.active{background:var(--qg);color:#fff;border-color:var(--qg);}',
-            '.qida-chip.active .qida-chip-count{opacity:.8;}',
-            '.qida-chip-extra{font-size:10px;color:var(--s500);font-weight:400;margin-left:4px;}',
-            '.qida-chip.active .qida-chip-extra{color:rgba(255,255,255,.75);}',
-
-            '.qida-dash-body{flex:1;overflow-y:auto;padding:16px 24px 24px;}',
-            '.qida-table-wrap{background:#fff;border:1px solid var(--s200);border-radius:6px;overflow:hidden;}',
-            '.qida-table{width:100%;font-size:14px;border-collapse:collapse;}',
-            '.qida-table thead{background:var(--s50);border-bottom:1px solid var(--s200);}',
-            '.qida-table th{text-align:left;padding:10px 14px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--s600);white-space:nowrap;}',
-            '.qida-th-sortable{cursor:pointer;user-select:none;}',
-            '.qida-th-sortable:hover{color:var(--s900);}',
-            '.qida-th-sort{display:inline-flex;align-items:center;gap:4px;}',
-            '.qida-th-sort .qa-icon{opacity:.4;}',
-            '.qida-th-sort.active .qa-icon{opacity:1;color:var(--qg);}',
-            '.qida-table tbody tr{border-bottom:1px solid var(--s100);cursor:pointer;transition:background .12s;}',
-            '.qida-table tbody tr:hover{background:var(--s50);}',
-            '.qida-table tbody tr:last-child{border-bottom:0;}',
-            '.qida-table td{padding:12px 14px;vertical-align:top;}',
-            '.qida-lead-name{font-weight:500;color:var(--s900);line-height:1.25;}',
-            '.qida-lead-meta{font-size:11px;color:var(--s500);margin-top:2px;display:flex;align-items:center;gap:6px;}',
-            '.qida-lead-reason{font-size:12px;color:var(--s600);line-height:1.4;max-width:240px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}',
-            '.qida-stage{font-size:11px;color:var(--s600);background:var(--s100);padding:2px 6px;border-radius:4px;display:inline-block;}',
-            '.qida-empty{padding:48px 16px;text-align:center;font-size:14px;color:var(--s500);}',
-            '.qida-dash-footer{display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:12px;color:var(--s500);}',
-
-            /* badges util */
-            '.qida-temp{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:6px;border:1px solid;font-size:12px;font-weight:500;line-height:1.4;white-space:nowrap;}',
-            '.qida-temp.small{padding:1px 6px;font-size:11px;gap:4px;}',
-            '.qida-temp .qa-ia{opacity:.5;display:inline-flex;}',
-            '.qida-urg{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:500;line-height:1.4;white-space:nowrap;}',
-            '.qida-urg.std{background:var(--s100);color:var(--s600);}',
-            '.qida-urg.urg{background:#fef3c7;color:#92400e;}',
-            '.qida-urg.muy{background:#fee2e2;color:#991b1b;}',
-            '.qida-service{font-size:12px;color:var(--s700);}',
-            '.qida-days{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--s500);}',
-            '.qida-days.stale{color:var(--red600);font-weight:500;}',
-            '.qida-days-dot{width:6px;height:6px;border-radius:50%;background:var(--red500);}',
-
-            /* detail layout v1.6 - 2 panes (40/60), sin head propio (shell header dinamico) */
+            /* detail layout v1.7 - 3 panes (28 / flex / 32), shell header dinamico */
+            '.qida-shell.qida-view-detail .qida-shell-header{padding:10px 16px;}',
             '.qida-detail{display:flex;flex-direction:column;height:100%;min-height:0;}',
-            '.qida-back{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:transparent;border:1px solid var(--s200);border-radius:6px;color:var(--s700);font-family:inherit;font-size:12px;cursor:pointer;}',
+            '.qida-back{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:transparent;border:0.5px solid var(--s300);border-radius:8px;color:var(--s700);font-family:inherit;font-size:12px;font-weight:500;cursor:pointer;}',
             '.qida-back:hover{border-color:var(--s400);color:var(--s900);}',
             '.qida-detail-body{flex:1;display:flex;min-height:0;overflow:hidden;}',
 
             /* Shell header dinamico - vista detail */
-            '.qida-detail-shell-head{display:flex;align-items:center;gap:12px;flex:1;min-width:0;}',
-            '.qida-dsh-name{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-size:15px;font-weight:600;color:var(--s900);line-height:1;white-space:nowrap;}',
-            '.qida-dsh-id{font-size:11px;color:var(--s500);}',
-            '.qida-dsh-meta{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:12px;flex-wrap:wrap;min-width:0;overflow:hidden;}',
+            '.qida-detail-shell-head{display:flex;align-items:center;gap:14px;flex:1;min-width:0;}',
+            '.qida-dsh-name{font-size:14px;font-weight:500;color:var(--s900);line-height:1;white-space:nowrap;}',
+            '.qida-dsh-id{font-size:12px;font-weight:400;color:var(--s500);}',
+            '.qida-dsh-meta{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:12px;font-weight:400;flex-wrap:wrap;min-width:0;overflow:hidden;}',
             '.qida-dsh-meta-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}',
             '.qida-dsh-sep{color:var(--s300);}',
-            /* Badge "Sin contacto: Nd" en shell header del detail */
-            '.qida-dsh-days{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid transparent;line-height:1.2;white-space:nowrap;}',
+            '.qida-dsh-days{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:8px;font-size:11px;font-weight:500;border:0.5px solid transparent;line-height:1.2;white-space:nowrap;}',
             '.qida-dsh-days.lvl-today{background:#ecfdf5;color:#15803d;border-color:#86efac;}',
-            '.qida-dsh-days.lvl-fresh{background:var(--qg-soft);color:var(--qg);border-color:var(--qg-soft-border);}',
+            '.qida-dsh-days.lvl-fresh{background:#E1F5EE;color:#0F6E56;border-color:#c5e8dc;}',
             '.qida-dsh-days.lvl-warn{background:#fff7ed;color:#9a3412;border-color:#fed7aa;}',
             '.qida-dsh-days.lvl-stale{background:#fef2f2;color:#991b1b;border-color:#fecaca;}',
 
             /* WhatsApp pane */
-            '.qida-pane-wa{flex:0 0 40%;border-right:1px solid var(--s200);display:flex;flex-direction:column;background:rgba(245,245,244,.4);min-height:0;min-width:0;}',
-            '.qida-pane-head{padding:10px 16px;border-bottom:1px solid var(--s200);display:flex;align-items:center;gap:6px;color:var(--s600);flex-shrink:0;}',
-            '.qida-pane-head-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;}',
-            '.qida-pane-head-aux{font-size:10px;color:var(--s400);margin-left:auto;}',
-            '.qida-pane-body{flex:1;overflow-y:auto;padding:14px 16px;}',
-            /* Input WhatsApp Web style al pie del pane */
-            '.qida-wa-input-wrap{padding:10px 12px;border-top:1px solid var(--s200);background:rgba(245,245,244,.6);flex-shrink:0;}',
-            '.qida-wa-input{display:flex;align-items:flex-end;gap:8px;background:#fff;border:1px solid var(--s200);border-radius:22px;padding:6px 8px 6px 10px;box-shadow:0 1px 2px rgba(0,0,0,.04);}',
-            '.qida-wa-input:focus-within{border-color:var(--qg);}',
+            '.qida-pane-wa{background:#ECE5DD;display:flex;flex-direction:column;min-height:0;min-width:0;}',
+            '.qida-pane-wa-head{padding:10px 14px;background:rgba(255,255,255,.6);border-bottom:0.5px solid var(--s300);display:flex;align-items:center;gap:6px;color:var(--s600);flex-shrink:0;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;}',
+            '.qida-pane-wa-body{flex:1;overflow-y:auto;padding:14px 12px;min-height:0;}',
+            '.qida-wa-input-wrap{padding:10px 12px;border-top:0.5px solid var(--s300);background:rgba(255,255,255,.35);flex-shrink:0;}',
+            '.qida-wa-input{display:flex;align-items:flex-end;gap:8px;background:#fff;border:0.5px solid var(--s300);border-radius:18px;padding:6px 8px 6px 10px;}',
+            '.qida-wa-input:focus-within{border-color:#0F6E56;}',
             '.qida-wa-clip{background:transparent;border:0;padding:6px;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}',
             '.qida-wa-clip:hover{color:var(--s900);}',
-            '.qida-wa-textarea{flex:1;min-height:24px;max-height:120px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:13px;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
+            '.qida-wa-textarea{flex:1;min-height:24px;max-height:120px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
             '.qida-wa-textarea::placeholder{color:var(--s400);}',
-            '.qida-wa-send{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:var(--qg);color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s;}',
+            '.qida-wa-send{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:#0F6E56;color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s;}',
             '.qida-wa-send:hover:not(:disabled){background:var(--qgH);}',
             '.qida-wa-send:disabled{background:var(--s300);cursor:not-allowed;}',
             '.qida-msgs{display:flex;flex-direction:column;gap:8px;}',
             '.qida-msg{display:flex;}',
             '.qida-msg.from-af{justify-content:flex-end;}',
             '.qida-msg.from-lead{justify-content:flex-start;}',
-            '.qida-msg-bubble{max-width:90%;padding:7px 10px;border-radius:10px;}',
-            '.qida-msg.from-af .qida-msg-bubble{background:#DCF8C6;color:var(--s800);}',
-            '.qida-msg.from-lead .qida-msg-bubble{background:#fff;color:var(--s800);border:1px solid var(--s200);}',
-            '.qida-msg-text{font-size:13px;line-height:1.4;margin:0;}',
-            '.qida-msg-time{font-size:10px;color:var(--s500);margin-top:3px;text-align:right;}',
-            '.qida-empty-msgs{font-size:12px;color:var(--s400);font-style:italic;padding:24px 8px;text-align:center;}',
+            '.qida-msg-bubble{max-width:90%;padding:8px 11px;}',
+            '.qida-msg.from-af .qida-msg-bubble{background:#DCF8C6;color:var(--s800);border-radius:8px 0 8px 8px;}',
+            '.qida-msg.from-lead .qida-msg-bubble{background:#fff;color:var(--s800);border:0.5px solid var(--s300);border-radius:0 8px 8px 8px;}',
+            '.qida-msg-text{font-size:12.5px;font-weight:400;line-height:1.4;margin:0;}',
+            '.qida-msg-time{font-size:10px;font-weight:400;color:var(--s500);margin-top:3px;text-align:right;}',
+            '.qida-empty-msgs{font-size:12px;color:var(--s500);font-style:italic;padding:24px 8px;text-align:center;}',
 
-            /* Center pane */
-            '.qida-pane-center{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}',
-            '.qida-center-body{flex:1;overflow-y:auto;padding:18px 24px 14px;}',
-            '.qida-block{margin-bottom:20px;}',
-            '.qida-block-h{display:flex;align-items:center;gap:8px;margin-bottom:8px;}',
-            '.qida-block-h-title{font-size:12px;font-weight:600;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;}',
-            '.qida-block-h-aux{font-size:11px;color:var(--s500);margin-left:auto;display:inline-flex;align-items:center;gap:8px;}',
-            '.qida-link-btn{background:transparent;border:0;padding:0;color:var(--qg);font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;}',
+            /* Center pane - cards sobre fondo neutro */
+            '.qida-pane-center{background:#DBE9D5;padding:14px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;min-height:0;min-width:0;}',
+            '.qida-detail-body > *:not(:last-child){border-right:0.5px solid var(--s300);}',
+            '.qida-detail-body > *:last-child{border-right:0;}',
+            '.qida-info-card{background:#fff;border:0.5px solid var(--s300);border-radius:12px;padding:12px 14px;}',
+            '.qida-info-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;}',
+            '.qida-info-card-title{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:var(--s600);display:inline-flex;align-items:center;gap:6px;}',
+            '.qida-info-card-actions{font-size:11px;font-weight:400;color:var(--s500);display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;}',
+            '.qida-info-card-body{font-size:13px;font-weight:400;line-height:1.55;color:var(--s800);}',
+            '.qida-info-card-highlight{background:#E1F5EE;border-radius:8px;padding:10px 12px;color:#143C32;font-size:13px;font-weight:400;line-height:1.55;}',
+            '.qida-link-btn{background:transparent;border:0;padding:0;color:#0F6E56;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;}',
             '.qida-link-btn:hover{color:var(--qgH);text-decoration:underline;}',
             '.qida-link-btn.muted{color:var(--s500);font-weight:400;}',
             '.qida-link-btn.muted:hover{color:var(--s700);}',
-
-            /* IA Summary */
-            '.qida-ia{background:var(--qg-soft);border:1px solid var(--qg-soft-border);border-radius:8px;padding:14px 16px;}',
-            '.qida-ia-text{font-size:13px;line-height:1.55;color:var(--s800);margin:0;white-space:pre-wrap;}',
-            '.qida-ia-empty{font-size:12px;color:var(--s500);font-style:italic;}',
-            '.qida-ia-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--qg-soft-border);font-size:11px;color:var(--s500);}',
-            '.qida-ia-meta-left{display:inline-flex;align-items:center;gap:6px;}',
-            '.qida-ia-textarea{width:100%;min-height:120px;padding:10px 12px;border:1px solid var(--qg-soft-border);border-radius:6px;font-family:inherit;font-size:13px;line-height:1.5;color:var(--s800);background:#fff;outline:none;resize:vertical;}',
-            '.qida-ia-textarea:focus{border-color:var(--qg);}',
+            '.qida-ia-text{margin:0;white-space:pre-wrap;}',
+            '.qida-ia-empty{font-size:12px;color:var(--s500);font-style:italic;margin:0;}',
+            '.qida-ia-textarea{width:100%;min-height:120px;padding:10px 12px;border:0.5px solid var(--s300);border-radius:8px;font-family:inherit;font-size:13px;font-weight:400;line-height:1.5;color:var(--s800);background:#fff;outline:none;resize:vertical;}',
+            '.qida-ia-textarea:focus{border-color:#0F6E56;}',
             '.qida-ia-actions{display:flex;gap:8px;margin-top:8px;}',
-
-            /* Care context */
-            '.qida-care{background:#fff;border:1px solid var(--s200);border-radius:8px;padding:12px 14px;}',
-            '.qida-care-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;}',
-            '.qida-care-item{display:flex;flex-direction:column;gap:2px;}',
-            '.qida-care-key{font-size:10px;color:var(--s500);text-transform:uppercase;letter-spacing:.04em;font-weight:600;}',
-            '.qida-care-val{font-size:13px;color:var(--s800);}',
-
-            /* Notes */
-            '.qida-note{background:#fffbeb;border:1px solid #fef3c7;border-radius:6px;padding:10px 12px;}',
-            '.qida-note + .qida-note{margin-top:8px;}',
+            '.qida-context-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;font-size:12.5px;}',
+            '.qida-context-item{display:flex;flex-direction:column;gap:2px;}',
+            '.qida-context-key{font-size:11px;font-weight:400;color:var(--s500);}',
+            '.qida-context-val{font-size:12.5px;font-weight:400;color:var(--s800);}',
+            '.qida-context-val.urgent{color:#993C1D;}',
+            '.qida-note{padding:8px 0;border-bottom:0.5px solid var(--s100);}',
+            '.qida-note:last-child{border-bottom:0;padding-bottom:0;}',
             '.qida-note-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}',
             '.qida-note-author{font-size:12px;font-weight:500;color:var(--s700);}',
-            '.qida-note-date{font-size:10px;color:var(--s500);}',
-            '.qida-note-text{font-size:12px;color:var(--s700);margin:0;line-height:1.45;}',
-            '.qida-add-note{background:#fff;border:1px solid var(--s200);border-radius:6px;padding:10px 12px;margin-top:8px;}',
-            '.qida-add-note textarea{width:100%;min-height:64px;border:0;outline:none;font-family:inherit;font-size:12px;color:var(--s800);resize:vertical;background:transparent;}',
+            '.qida-note-date{font-size:10px;font-weight:400;color:var(--s500);}',
+            '.qida-note-text{font-size:12.5px;font-weight:400;color:var(--s700);margin:0;line-height:1.45;}',
+            '.qida-add-note{background:var(--s50);border:0.5px solid var(--s200);border-radius:8px;padding:10px 12px;margin-top:8px;}',
+            '.qida-add-note textarea{width:100%;min-height:64px;border:0;outline:none;font-family:inherit;font-size:12.5px;font-weight:400;color:var(--s800);resize:vertical;background:transparent;}',
             '.qida-add-note-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}',
-            '.qida-empty-notes{font-size:12px;color:var(--s400);font-style:italic;padding:6px 2px;}',
-
-            /* Activities */
-            '.qida-act{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--s200);border-radius:6px;background:#fff;}',
-            '.qida-act + .qida-act{margin-top:6px;}',
-            '.qida-act.overdue{border-color:#fecaca;background:var(--red50);}',
-            '.qida-act.done .qida-act-summary{text-decoration:line-through;color:var(--s500);}',
-            '.qida-act-icon{flex-shrink:0;padding:6px;border-radius:6px;background:var(--s100);color:var(--s700);}',
-            '.qida-act.overdue .qida-act-icon{background:#fee2e2;color:var(--red600);}',
-            '.qida-act-body{flex:1;min-width:0;}',
-            '.qida-act-summary{font-size:13px;color:var(--s800);font-weight:500;line-height:1.35;}',
-            '.qida-act-meta{font-size:11px;color:var(--s500);margin-top:3px;display:flex;align-items:center;gap:6px;}',
-            '.qida-act.overdue .qida-act-meta{color:var(--red600);}',
-            '.qida-empty-act{font-size:12px;color:var(--s400);font-style:italic;padding:6px 2px;}',
-
-            /* Followers */
+            '.qida-empty-notes{font-size:12px;color:var(--s500);font-style:italic;padding:2px 0;margin:0;}',
+            '.qida-act-row{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:400;color:var(--s800);padding:6px 0;}',
+            '.qida-act-row + .qida-act-row{border-top:0.5px solid var(--s100);}',
+            '.qida-act-row.done .qida-act-row-text{text-decoration:line-through;color:var(--s500);}',
+            '.qida-act-row.overdue .qida-act-row-text{color:#993C1D;}',
+            '.qida-act-dot{width:6px;height:6px;border-radius:50%;background:#0F6E56;flex-shrink:0;}',
+            '.qida-act-row.overdue .qida-act-dot{background:#993C1D;}',
+            '.qida-act-row-text{flex:1;min-width:0;line-height:1.35;}',
+            '.qida-act-row-when{font-size:11px;font-weight:400;color:var(--s500);margin-left:auto;white-space:nowrap;}',
+            '.qida-act-row.overdue .qida-act-row-when{color:#993C1D;}',
+            '.qida-empty-act{font-size:12px;color:var(--s500);font-style:italic;padding:2px 0;margin:0;}',
             '.qida-followers{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}',
-            '.qida-follower{display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;background:var(--s50);border:1px solid var(--s200);border-radius:999px;cursor:default;}',
-            '.qida-follower-avatar{width:22px;height:22px;border-radius:50%;background:var(--qg);color:#fff;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;font-family:"Manrope";}',
-            '.qida-follower-name{font-size:12px;color:var(--s700);}',
-            '.qida-follower-role{font-size:10px;color:var(--s500);}',
+            '.qida-follower{display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;background:var(--s50);border:0.5px solid var(--s200);border-radius:999px;cursor:default;}',
+            '.qida-follower-avatar{width:22px;height:22px;border-radius:50%;background:#E1F5EE;color:#0F6E56;font-size:10px;font-weight:500;display:flex;align-items:center;justify-content:center;font-family:"Manrope";}',
+            '.qida-follower-name{font-size:12px;font-weight:400;color:var(--s700);}',
+            '.qida-follower-role{font-size:10px;font-weight:400;color:var(--s500);}',
 
             /* footer / buttons */
             '.qida-btn-primary{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;background:var(--qg);color:#fff;border:0;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s;}',
@@ -1439,40 +1247,57 @@
             '.qida-att-collapse-count{font-size:11px;color:var(--s500);font-weight:500;}',
             '.qida-att-collapse-body{padding:8px 12px 12px;border-top:1px solid var(--s100);background:var(--s50);}',
 
-            /* v1.6: Chat IA al pie del pane central */
-            '.qida-aichat{border-top:1px solid var(--s200);background:#fff;flex-shrink:0;display:flex;flex-direction:column;}',
-            '.qida-aichat-history{max-height:clamp(220px,40vh,400px);overflow-y:auto;padding:14px 24px 6px;display:flex;flex-direction:column;gap:12px;}',
+            /* v1.7: Chat IA - columna dedicada */
+            '.qida-pane-ai{background:#fff;display:flex;flex-direction:column;min-height:0;min-width:0;}',
+            /* v1.9: anchos por posicion estructural (siempre col 1 = pane-wa). El swap intercambia col 2 / col 3. */
+            '.qida-detail-body > *:nth-child(1){flex:0 0 28%;min-width:0;}',
+            '.qida-detail-body > *:nth-child(2){flex:1 1 auto;min-width:0;}',
+            '.qida-detail-body > *:nth-child(3){flex:0 0 32%;min-width:0;}',
+            '.qida-pane-ai-head{background:#F7FAF8;border-bottom:0.5px solid var(--s200);padding:10px 14px;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:#0F6E56;display:flex;align-items:center;gap:6px;flex-shrink:0;}',
+            '.qida-pane-ai-body{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:12px;min-height:0;}',
+            '.qida-pane-ai-empty{font-size:12px;font-weight:400;color:var(--s500);line-height:1.45;margin:0;}',
+            '.qida-pane-ai-foot{padding:10px 14px 14px;border-top:0.5px solid var(--s200);background:#fff;flex-shrink:0;display:flex;flex-direction:column;gap:10px;}',
             '.qida-aichat-bubble{display:flex;gap:8px;align-items:flex-start;}',
-            '.qida-aichat-bubble-icon{flex-shrink:0;width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:var(--qg-soft);color:var(--qg);}',
-            '.qida-aichat-bubble.user .qida-aichat-bubble-icon{background:var(--s100);color:var(--s600);}',
-            '.qida-aichat-bubble-body{flex:1;min-width:0;font-size:13px;line-height:1.5;color:var(--s800);}',
-            '.qida-aichat-bubble-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--s500);margin-bottom:3px;}',
-            '.qida-aichat-bubble-text{margin:0;}',
-            '.qida-aichat-bubble-intro{margin:0 0 8px;color:var(--s700);}',
-            '.qida-aichat-variant{margin-top:8px;padding:10px 12px;border:1px solid var(--s200);border-radius:8px;background:#fff;}',
+            /* v1.8: paleta sutil del chat IA - 3 capas (avatar / burbuja / card interna) */
+            '.qida-aichat-bubble-icon{flex-shrink:0;width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;}',
+            '.qida-aichat-bubble.ai .qida-aichat-bubble-icon{background:#E1F5EE;color:#0F6E56;}',
+            '.qida-aichat-bubble.user .qida-aichat-bubble-icon{background:#143C32;color:#FFEFDA;}',
+            '.qida-aichat-bubble-body{flex:1;min-width:0;font-size:12.5px;font-weight:400;line-height:1.5;color:var(--s800);}',
+            '.qida-aichat-bubble-label{font-size:11px;font-weight:500;color:var(--s600);margin-bottom:3px;}',
+            '.qida-aichat-bubble-content{padding:8px 12px;}',
+            '.qida-aichat-bubble.user .qida-aichat-bubble-content{background:#F1F8EE;border-radius:12px 12px 4px 12px;}',
+            '.qida-aichat-bubble.ai .qida-aichat-bubble-content{background:#FAFAF9;border-radius:12px 12px 12px 4px;}',
+            '.qida-aichat-bubble-text{margin:0;font-size:12.5px;font-weight:400;}',
+            '.qida-aichat-bubble-intro{margin:0 0 8px;color:var(--s700);font-size:12.5px;font-weight:400;}',
+            '.qida-aichat-variant{margin-top:8px;padding:10px 12px;border:0.5px solid var(--s200);border-radius:10px;background:#fff;}',
             '.qida-aichat-variant + .qida-aichat-variant{margin-top:8px;}',
-            '.qida-aichat-variant-label{font-size:11px;font-weight:600;color:var(--s700);margin-bottom:4px;display:inline-flex;align-items:center;gap:5px;}',
-            '.qida-aichat-variant-text{font-size:12.5px;color:var(--s800);line-height:1.5;margin:0 0 8px;white-space:pre-wrap;}',
-            '.qida-aichat-variant-action{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:var(--qg-soft);color:var(--qg);border:1px solid var(--qg-soft-border);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
-            '.qida-aichat-variant-action:hover{background:#fff;}',
-            '.qida-aichat-rationale{font-size:11.5px;color:var(--s600);font-style:italic;margin:0 0 8px;}',
-            '.qida-aichat-mat-card{margin-top:6px;padding:10px 12px;border:1px solid var(--s200);border-radius:8px;background:#fff;}',
-            '.qida-aichat-mat-title{font-size:12.5px;font-weight:600;color:var(--s800);margin-bottom:3px;}',
-            '.qida-aichat-mat-desc{font-size:11.5px;color:var(--s600);margin-bottom:6px;line-height:1.45;}',
-            '.qida-aichat-mat-action{display:inline-flex;align-items:center;gap:4px;padding:4px 9px;background:transparent;color:var(--qg);border:1px solid var(--qg-soft-border);border-radius:6px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
-            '.qida-aichat-mat-action:hover{background:var(--qg-soft);}',
-            '.qida-aichat-foot{padding:10px 24px 14px;background:#fff;}',
-            '.qida-aichat-input{display:flex;align-items:center;gap:8px;background:var(--qg-soft);border:1px solid var(--qg-soft-border);border-radius:22px;padding:8px 10px 8px 14px;transition:border-color .12s,box-shadow .12s;}',
-            '.qida-aichat-input:focus-within{border-color:var(--qg);box-shadow:0 0 0 3px rgba(14,74,58,.08);}',
-            '.qida-aichat-input-icon{color:var(--qg);flex-shrink:0;display:inline-flex;}',
-            '.qida-aichat-input-field{flex:1;min-width:0;border:0;outline:none;background:transparent;font-family:inherit;font-size:13px;color:var(--s900);padding:4px 0;}',
+            '.qida-aichat-variant-label{font-size:11px;font-weight:500;color:#0F6E56;margin-bottom:4px;}',
+            '.qida-aichat-variant-text{font-size:12.5px;font-weight:400;color:var(--s800);line-height:1.5;margin:0 0 8px;white-space:pre-wrap;}',
+            '.qida-aichat-variant-action{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:400;cursor:pointer;font-family:inherit;}',
+            '.qida-aichat-variant-action:hover{background:var(--s50);}',
+            /* v1.8: estado refine del flujo "Esta me gusta mas" */
+            '.qida-aichat-refine{margin-top:6px;}',
+            '.qida-aichat-refine-text{background:#F1F8EE;border-radius:8px;padding:8px 10px;font-size:12.5px;color:var(--s800);margin:6px 0 8px;line-height:1.5;white-space:pre-wrap;}',
+            '.qida-aichat-copy-wa{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;transition:background .15s;}',
+            '.qida-aichat-copy-wa:hover{background:#143C32;}',
+            '.qida-aichat-rationale{font-size:12px;font-weight:400;color:var(--s600);font-style:italic;margin:0 0 8px;}',
+            '.qida-aichat-mat-card{margin-top:6px;padding:10px 12px;border:0.5px solid var(--s200);border-radius:10px;background:#fff;}',
+            '.qida-aichat-mat-title{font-size:12.5px;font-weight:500;color:var(--s800);margin-bottom:3px;}',
+            '.qida-aichat-mat-desc{font-size:12px;font-weight:400;color:var(--s600);margin-bottom:6px;line-height:1.45;}',
+            '.qida-aichat-mat-action{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:400;cursor:pointer;font-family:inherit;}',
+            '.qida-aichat-mat-action:hover{background:var(--s50);}',
+            '.qida-aichat-input{display:flex;align-items:center;gap:8px;background:var(--s50);border:0.5px solid var(--s300);border-radius:8px;padding:8px 12px;}',
+            '.qida-aichat-input:focus-within{border-color:#0F6E56;}',
+            '.qida-aichat-input-icon{color:#0F6E56;flex-shrink:0;display:inline-flex;}',
+            '.qida-aichat-input-field{flex:1;min-width:0;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;color:var(--s900);padding:4px 0;}',
             '.qida-aichat-input-field::placeholder{color:var(--s500);}',
-            '.qida-aichat-send{flex-shrink:0;width:30px;height:30px;border-radius:50%;background:var(--qg);color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}',
+            '.qida-aichat-send{flex-shrink:0;width:30px;height:30px;border-radius:50%;background:#0F6E56;color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}',
             '.qida-aichat-send:hover:not(:disabled){background:var(--qgH);}',
             '.qida-aichat-send:disabled{background:var(--s300);cursor:not-allowed;}',
-            '.qida-aichat-chips{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;}',
-            '.qida-aichat-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#fff;border:1px solid var(--s200);border-radius:999px;color:var(--s700);font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;transition:border-color .12s,color .12s,background .12s;}',
-            '.qida-aichat-chip:hover{border-color:var(--qg);color:var(--qg);background:var(--qg-soft);}',
+            /* v1.8: chips siempre visibles, en fila estilo Gemini */
+            '.qida-aichat-chips{display:flex;flex-direction:row;flex-wrap:wrap;gap:6px;margin-top:4px;}',
+            '.qida-aichat-chip{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;padding:5px 10px;background:#dbe9d5;border:0.5px solid var(--s300);border-radius:8px;color:var(--s800);font-size:11px;font-weight:400;cursor:pointer;font-family:inherit;transition:border-color .12s,background .12s;}',
+            '.qida-aichat-chip:hover{border-color:#0F6E56;background:#F7FAF8;}',
 
             /* Schedule modal */
             '.qida-schedule-bg{position:absolute;inset:0;z-index:5;background:rgba(28,25,23,.45);display:flex;align-items:center;justify-content:center;padding:16px;}',
@@ -1512,143 +1337,58 @@
             '.qida-toast{position:absolute;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--s900);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 8px 20px rgba(0,0,0,.25);z-index:6;opacity:0;transition:opacity .2s,transform .2s;display:inline-flex;align-items:center;gap:8px;font-family:"Manrope",system-ui,sans-serif;pointer-events:none;}',
             '.qida-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}',
 
-            /* ============================================================
-               v1.4 DASHBOARD: container + cobertura compacta + tabla unificada + asistente header
-               ============================================================ */
-
-            /* Dashboard container centrado (max-width subido + padding lateral reducido) */
-            '.qida-dash-v2{flex:1;overflow-y:auto;background:var(--s50);}',
-            '.qida-dash-container{max-width:1480px;margin:0 auto;padding:16px 20px 24px;display:flex;flex-direction:column;gap:16px;}',
-            '.qida-section{background:#fff;border:1px solid var(--s200);border-radius:10px;}',
-
-            /* Asistente en header - Estado 1 (pill inline) */
-            '.qida-asst-anchor{display:inline-flex;align-items:center;}',
-            '.qida-asst-pill{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;background:var(--qg);color:#fff;border:0;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:0 2px 6px rgba(14,74,58,.18);transition:transform .12s,box-shadow .12s,background .12s;}',
-            '.qida-asst-pill:hover{background:var(--qgH);transform:translateY(-1px);box-shadow:0 4px 10px rgba(14,74,58,.24);}',
-            '.qida-asst-pill kbd{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.24);border-radius:4px;padding:1px 5px;font-size:10px;font-family:"Manrope",monospace;}',
-
-            /* Asistente en header - Estado 2 (input expandido inline) */
-            '.qida-asst-exp-inline{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1.5px solid var(--qg);border-radius:999px;padding:4px 6px 4px 12px;box-shadow:0 4px 12px rgba(14,74,58,.12);color:var(--qg);}',
-            '.qida-asst-input{flex:1;min-width:240px;max-width:420px;padding:6px 4px;font-family:inherit;font-size:13px;color:var(--s900);background:transparent;border:0;outline:none;}',
-            '.qida-asst-send{padding:6px 10px;background:var(--qg);color:#fff;border:0;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}',
-            '.qida-asst-send:hover{background:var(--qgH);}',
-            '.qida-asst-send:disabled{opacity:.4;cursor:not-allowed;}',
-            '.qida-asst-collapse{background:transparent;border:0;color:var(--s500);cursor:pointer;padding:6px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;}',
-            '.qida-asst-collapse:hover{background:var(--s100);color:var(--s900);}',
-
-            /* Asistente en header - Estado 3 (chip compacto cuando hay panel de resultados abierto) */
-            '.qida-asst-chip{display:inline-flex;align-items:center;gap:6px;background:var(--qg-soft);color:var(--qg);border:1px solid var(--qg-soft-border);border-radius:999px;padding:5px 6px 5px 11px;font-size:12px;font-weight:500;max-width:280px;}',
-            '.qida-asst-chip-q{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-            '.qida-asst-chip-x{background:transparent;border:0;color:var(--qg);cursor:pointer;padding:3px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;}',
-            '.qida-asst-chip-x:hover{background:rgba(14,74,58,.12);}',
-
-            /* Asistente - Estado 3 (panel lateral 30%) */
-            '.qida-asst-panel{display:flex;flex-direction:column;width:30%;min-width:340px;max-width:480px;border-left:1px solid var(--s200);background:#fff;flex-shrink:0;}',
-            '.qida-asst-panel-head{padding:14px 16px;border-bottom:1px solid var(--s200);display:flex;align-items:center;gap:8px;}',
-            '.qida-asst-panel-q{flex:1;font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:14px;color:var(--s900);line-height:1.3;}',
-            '.qida-asst-panel-close{background:transparent;border:0;padding:6px;border-radius:6px;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}',
-            '.qida-asst-panel-close:hover{background:var(--s100);color:var(--s900);}',
-            '.qida-asst-panel-body{flex:1;overflow-y:auto;padding:14px 16px;background:var(--s50);}',
-            '.qida-asst-bloque{margin-bottom:18px;}',
-            '.qida-asst-bloque-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}',
-            '.qida-asst-bloque-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--s700);display:inline-flex;align-items:center;gap:6px;}',
-            '.qida-asst-bloque-count{font-size:10px;color:var(--s500);}',
-            '.qida-asst-result{background:#fff;border:1px solid var(--s200);border-radius:8px;padding:10px 12px;margin-bottom:6px;cursor:pointer;transition:border-color .15s;}',
-            '.qida-asst-result:hover{border-color:var(--qg);}',
-            '.qida-asst-result-name{font-size:12px;font-weight:600;color:var(--s900);line-height:1.3;}',
-            '.qida-asst-result-meta{font-size:10px;color:var(--s500);margin-top:2px;display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;}',
-            '.qida-asst-result-text{font-size:12px;color:var(--s700);line-height:1.4;margin-top:4px;}',
-            '.qida-asst-empty{padding:14px;background:#fff;border:1px dashed var(--s200);border-radius:8px;text-align:center;font-size:11px;color:var(--s500);font-style:italic;}',
+            /* v1.10: bloque "v1.4 DASHBOARD" (container + cobertura + tabla unificada +
+               asistente header) ELIMINADO. Se reemplaza por el bloque del dashboard nuevo
+               (qida-cooling-*). */
 
             /* ============================================================
-               v1.4 TABLA UNIFICADA estilo Odoo Activities
+               v1.10 DASHBOARD: lista priorizada de leads enfriandose
                ============================================================ */
-            '.qida-unified{padding:12px 14px 14px;}',
-            /* Toolbar (boton Filtros + segment tag activa | chips de tipo) */
-            '.qida-unified-toolbar{display:flex;align-items:center;gap:10px;padding:0 0 12px;flex-wrap:wrap;}',
-            '.qida-unified-toolbar-left{display:inline-flex;align-items:center;gap:8px;flex:1;min-width:0;}',
-            '.qida-unified-toolbar-right{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;}',
-            '.qida-filters-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#fff;border:1px solid var(--s200);border-radius:8px;color:var(--s700);font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;transition:border-color .15s,background .15s,color .15s;}',
-            '.qida-filters-btn:hover{border-color:var(--s400);color:var(--s900);}',
-            '.qida-filters-btn.active{border-color:var(--qg);color:var(--qg);background:var(--qg-soft);}',
-            '.qida-filters-btn-count{background:var(--qg);color:#fff;border-radius:999px;padding:0 6px;font-size:10px;font-weight:600;line-height:16px;min-width:16px;text-align:center;}',
-            '.qida-active-segment-tag{display:inline-flex;align-items:center;gap:4px;background:var(--qg-soft);color:var(--qg);border:1px solid var(--qg-soft-border);padding:4px 4px 4px 10px;border-radius:999px;font-size:11px;font-weight:600;}',
-            '.qida-active-segment-x{background:transparent;border:0;color:var(--qg);cursor:pointer;padding:2px;border-radius:999px;display:inline-flex;}',
-            '.qida-active-segment-x:hover{background:rgba(14,74,58,.14);}',
-            /* Type chips (right) */
-            '.qida-type-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#fff;border:1px solid var(--s200);border-radius:999px;color:var(--s600);font-size:12px;font-weight:500;font-family:inherit;cursor:pointer;transition:border-color .15s,color .15s,background .15s;}',
-            '.qida-type-chip:hover{border-color:var(--s400);color:var(--s900);}',
-            '.qida-type-chip.active{background:var(--qg);color:#fff;border-color:var(--qg);box-shadow:0 1px 3px rgba(14,74,58,.18);}',
-            '.qida-type-chip-count{background:rgba(0,0,0,.06);color:inherit;border-radius:999px;padding:0 6px;font-size:10px;font-weight:600;line-height:16px;min-width:16px;text-align:center;}',
-            '.qida-type-chip.active .qida-type-chip-count{background:rgba(255,255,255,.22);color:#fff;}',
-            /* Segment chips (expanded row) */
-            '.qida-segment-chips{display:flex;align-items:center;gap:6px;padding:0 0 12px;flex-wrap:wrap;border-top:1px dashed var(--s200);margin-top:-6px;padding-top:10px;}',
+            '.qida-cooling-dashboard{padding:16px;position:relative;flex:1;overflow-y:auto;background:#fff;}',
+            '.qida-cooling-header{display:grid;grid-template-columns:2fr 1fr 2.5fr 1fr 0fr;gap:16px;padding:8px 16px;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--s500);font-weight:500;border-bottom:0.5px solid var(--s100);}',
+            '.qida-cooling-list{display:flex;flex-direction:column;gap:4px;margin-top:8px;}',
+            '.qida-cooling-row{display:grid;grid-template-columns:2fr 1fr 2.5fr 1fr 0fr;gap:16px;padding:12px 16px;border-radius:8px;cursor:pointer;align-items:center;transition:background-color 120ms;position:relative;}',
+            '.qida-cooling-row:hover{background:var(--s50);}',
+            '.qida-cooling-row:hover .qida-cooling-row-actions{opacity:1;}',
+            '.qida-cooling-row-actions{opacity:0;transition:opacity 120ms;}',
 
-            /* Tabla unificada */
-            '.qida-unified-table-wrap{overflow-x:auto;border:1px solid var(--s200);border-radius:8px;}',
-            '.qida-unified-table{width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;}',
-            '.qida-unified-table thead th{position:sticky;top:0;background:var(--s50);font-size:11px;font-weight:600;color:var(--s600);text-transform:uppercase;letter-spacing:.04em;padding:8px 10px;text-align:left;border-bottom:1px solid var(--s200);white-space:nowrap;}',
-            '.qida-unified-table thead .qida-uth-icon{width:34px;padding-left:14px;}',
-            '.qida-unified-table tbody td{padding:8px 10px;border-bottom:1px solid var(--s100);vertical-align:middle;}',
-            '.qida-unified-table tbody tr:last-child td{border-bottom:0;}',
+            /* Bandas de urgencia (background sutil sobre fondo blanco del dashboard) */
+            '.qida-cooling-lvl-warn   {background:rgba(245,158,11,0.05);}',
+            '.qida-cooling-lvl-orange {background:rgba(234,88,12,0.07);}',
+            '.qida-cooling-lvl-stale  {background:rgba(220,38,38,0.06);}',
+            '.qida-cooling-lvl-danger {background:rgba(220,38,38,0.10);}',
 
-            /* Fila base */
-            '.qida-urow{cursor:pointer;transition:background .12s;position:relative;}',
-            '.qida-urow:hover{background:var(--s50);}',
-            '.qida-urow td.qida-urow-icon{padding-left:14px;width:34px;}',
-            '.qida-urow-icon-wrap{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;background:var(--s100);color:var(--s500);}',
-            '.qida-urow-icon-wrap.sug{background:var(--qg-soft);color:var(--qg);}',
-            '.qida-urow-icon-wrap.act{background:#fef3c7;color:#92400e;}',
-            '.qida-urow-icon-wrap.act.overdue{background:#fee2e2;color:var(--red600);}',
-            '.qida-urow-icon-wrap.lead{background:var(--s100);color:var(--s500);}',
-            '.qida-urow-familia{min-width:220px;}',
-            '.qida-urow-name{font-weight:600;color:var(--s900);line-height:1.3;font-size:13px;}',
-            '.qida-urow-meta{font-size:11px;color:var(--s500);margin-top:1px;display:inline-flex;align-items:center;gap:5px;}',
-            /* v1.5: Tipo y Etapa con cap + ellipsis (180/140) para que el ancho extra vaya a "Por que". */
-            '.qida-urow-type{white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;}',
-            '.qida-urow-temp{white-space:nowrap;}',
-            '.qida-urow-porque{min-width:280px;max-width:320px;color:var(--s700);}',
-            '.qida-urow-porque span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35;}',
-            '.qida-urow-dias{white-space:nowrap;}',
-            '.qida-urow-proximo{white-space:nowrap;color:var(--s700);}',
-            '.qida-urow-etapa{white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;}',
-            '.qida-urow-etapa .qida-stage{display:inline-block;background:var(--s100);color:var(--s700);border-radius:4px;font-size:10px;padding:2px 7px;font-weight:500;}',
+            /* Celdas */
+            '.qida-cell-familia .qida-cell-line1{font-weight:500;font-size:13px;color:var(--s900);}',
+            '.qida-cell-familia .qida-cell-line2{font-size:12px;color:var(--s700);}',
+            '.qida-cell-tipo{font-size:13px;color:var(--s900);}',
+            '.qida-cell-porque{font-size:13px;color:var(--s700);line-height:1.4;}',
+            '.qida-cell-sincontacto .qida-cell-days{font-size:22px;font-weight:500;color:var(--s900);line-height:1.1;display:inline-flex;align-items:center;gap:4px;}',
+            '.qida-cell-sincontacto .qida-cell-date{font-size:11px;color:var(--s500);margin-top:2px;}',
+            '.qida-cooling-lvl-danger .qida-cell-days{color:var(--red600);}',
 
-            /* Tipo badges */
-            '.qida-utype-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:4px;letter-spacing:.02em;border:1px solid transparent;}',
-            '.qida-utype-badge.sug{background:var(--qg-soft);color:var(--qg);border-color:var(--qg-soft-border);}',
-            '.qida-utype-badge.sug.urgent{background:#fff7ed;color:#9a3412;border-color:#fed7aa;}',
-            '.qida-utype-badge.act{background:#fef3c7;color:#92400e;border-color:#fde68a;}',
-            '.qida-utype-badge.act-overdue{background:#fee2e2;color:#991b1b;border-color:#fecaca;}',
-            '.qida-utype-badge.act-today{background:#fef3c7;color:#92400e;border-color:#fde68a;}',
-            '.qida-utype-badge.lead{background:var(--s100);color:var(--s600);border-color:var(--s200);}',
-            '.qida-utype-sub{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:500;color:var(--s500);margin-left:6px;font-style:italic;}',
+            /* Boton "Marcar hecho" (hover) */
+            '.qida-mark-done-btn{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 10px;font-size:12px;color:#0F6E56;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;}',
+            '.qida-mark-done-btn:hover{border-color:#0F6E56;background:#F7FAF8;}',
 
-            /* Fondos sutiles por tipo de fila (estilo Odoo Activities) */
-            '.qida-urow-suggestion{background:rgba(14,74,58,.04);}',
-            '.qida-urow-suggestion:hover{background:rgba(14,74,58,.07);}',
-            '.qida-urow-suggestion.urgent{box-shadow:inset 3px 0 0 #f97316;}',
-            '.qida-urow-activity-overdue{background:rgba(220,38,38,.05);}',
-            '.qida-urow-activity-overdue:hover{background:rgba(220,38,38,.08);}',
+            /* Boton Refrescar abajo de la lista */
+            '.qida-cooling-actions{display:flex;justify-content:center;margin-top:16px;}',
+            '.qida-refresh-btn{background:transparent;border:0.5px solid var(--s200);border-radius:8px;padding:8px 14px;font-size:13px;color:var(--s900);cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:inherit;}',
+            '.qida-refresh-btn:hover{border-color:var(--s400);background:var(--s50);}',
 
-            /* Estado vacio tabla unificada */
-            '.qida-unified-empty{padding:48px 24px;text-align:center;color:var(--s500);display:flex;flex-direction:column;align-items:center;gap:10px;}',
-            '.qida-unified-empty p{font-size:13px;color:var(--s600);margin:0;max-width:480px;line-height:1.4;}',
+            /* Toast de undo (inferior, distinto al toast neutro del shell) */
+            '.qida-undo-toast{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);background:#1F2937;color:#fff;padding:10px 16px;border-radius:8px;display:flex;align-items:center;gap:6px;font-size:13px;z-index:10;box-shadow:0 8px 20px rgba(0,0,0,.25);}',
+            '.qida-undo-btn{background:transparent;border:0;color:#6EE7B7;cursor:pointer;font-weight:500;padding:0 4px;font-family:inherit;font-size:13px;}',
+            '.qida-undo-btn:hover{color:#A7F3D0;}',
 
-            /* Skeleton loaders */
-            '.qida-skel{background:linear-gradient(90deg,#e7e5e4 0%,#f5f5f4 50%,#e7e5e4 100%);background-size:200% 100%;border-radius:6px;animation:qida-skel 1.2s infinite linear;}',
-            '@keyframes qida-skel{0%{background-position:200% 0;}100%{background-position:-200% 0;}}',
-            '.qida-skel-line{height:10px;margin-bottom:6px;}',
-            '.qida-skel-card{padding:10px 12px;background:#fff;border:1px solid var(--s200);border-radius:8px;margin-bottom:6px;}',
-
-            /* Cobertura tooltip refinado */
-            '.qida-cov-hint{font-size:10px;color:var(--s500);margin-top:4px;font-style:italic;}',
+            /* Estado vacio */
+            '.qida-empty-state{display:flex;align-items:center;justify-content:center;height:200px;color:var(--s700);font-size:14px;}',
 
             /* Responsive */
-            /* v1.6: layout 2-pane (40/60). En 1100px: 38/62. En 900px: 34/66 (sin ocultar). En 760px: pane-wa oculto y center full. */
-            '@media (max-width:1100px){.qida-pane-wa{flex:0 0 38%;}.qida-asst-panel{width:34%;}.qida-asst-input{min-width:180px;max-width:280px;}}',
-            '@media (max-width:900px){.qida-pane-wa{flex:0 0 34%;}.qida-asst-panel{width:100%;position:absolute;inset:0;z-index:5;}}',
-            '@media (max-width:760px){.qida-pane-wa{display:none;}.qida-search input{padding-right:38px;}.qida-search-hint{display:none;}.qida-care-grid{grid-template-columns:1fr;}.qida-dash-container{padding:12px 14px;gap:12px;}.qida-asst-input{min-width:140px;max-width:200px;}.qida-dsh-meta{display:none;}}'
+            /* Detalle: anchos por posicion estructural. En 760px se oculta la 1ra columna (WA). */
+            '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 26%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
+            '@media (max-width:980px){.qida-detail-body > *:nth-child(3){display:none;}}',
+            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}.qida-cooling-header{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}.qida-cooling-row{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}}'
         ].join('');
 
         var style = document.createElement('style');
@@ -1658,460 +1398,168 @@
     }
 
     // ============================================================
-    // RENDER: small reusable bits
+    // RENDER: dashboard v1.10 (lista de leads enfriandose - vista unica)
     // ============================================================
-    function renderTempBadge(temp, source, small) {
-        var cfg = TEMP_CONFIG[temp];
-        if (!cfg) return '';
-        var styleAttr = 'background:' + cfg.bg + ';color:' + cfg.color + ';border-color:' + cfg.border + ';';
-        return '<span class="qida-temp' + (small ? ' small' : '') + '" style="' + styleAttr + '">'
-            + icon(cfg.icon, small ? 10 : 12)
-            + esc(cfg.label)
-            + (source === 'IA' && !small ? '<span class="qa-ia">' + icon('sparkles', 10) + '</span>' : '')
-            + '</span>';
-    }
-
-    function renderUrg(urgency) {
-        var cls = 'std', label = 'Estandar';
-        if (urgency === 'Muy urgente') { cls = 'muy'; label = 'Muy urgente'; }
-        else if (urgency === 'Urgente') { cls = 'urg'; label = 'Urgente'; }
-        return '<span class="qida-urg ' + cls + '">' + esc(label) + '</span>';
-    }
-
-    function renderDays(days, temp) {
-        if (days === 0) return '<span class="qida-days">Hoy</span>';
-        var threshold = STALE_THRESHOLD[temp] || 14;
-        var stale = days >= threshold;
-        return '<span class="qida-days' + (stale ? ' stale' : '') + '">'
-            + (stale ? '<span class="qida-days-dot"></span>' : '')
-            + days + 'd sin contacto'
-            + '</span>';
-    }
-
-    function renderSortHeader(col, label) {
-        var active = (state.sortCol === col);
-        var arrow = '';
-        if (active) {
-            arrow = icon(state.sortDir === 'asc' ? 'arrowUp' : 'arrowDown', 11);
-        }
-        return '<th class="qida-th-sortable" data-action="set-sort" data-id="' + col + '">'
-            + '<span class="qida-th-sort' + (active ? ' active' : '') + '">' + esc(label) + ' ' + arrow + '</span>'
-            + '</th>';
-    }
-
-    // ============================================================
-    // RENDER: coverage widget
-    // ============================================================
-    function renderCoverage() {
-        var pct = coveragePct();
-        var tooltip = 'El objetivo del proyecto es llevar la cobertura del 3er mensaje del 37% al ' + COVERAGE_TARGET + '%. Scope: cartera activa (entryDate < 15 dias o pausa explicita).';
-
-        function chip(bucket, labelMain, labelSub, extraRight) {
-            var n = countByCoverage(bucket);
-            var active = (state.coverageBucket === bucket);
-            return '<button class="qida-cov-chip' + (active ? ' active' : '') + '" data-action="set-coverage" data-id="' + bucket + '" data-bucket="' + bucket + '">'
-                + '<div class="qida-cov-chip-label">'
-                    + '<span class="qida-cov-chip-label-main"><span class="qida-cov-dot"></span>' + esc(labelMain) + '</span>'
-                    + '<span class="qida-cov-chip-label-sub">' + esc(labelSub) + '</span>'
-                + '</div>'
-                + '<span class="qida-cov-chip-num">' + n + (extraRight || '') + '</span>'
-            + '</button>';
-        }
-
-        return '<div class="qida-coverage" title="' + esc(tooltip) + '">'
-            + '<div class="qida-coverage-head">'
-                + '<span class="qida-coverage-title">' + icon('target', 12) + 'Tu cobertura &mdash; cartera activa (ventana 15 dias)</span>'
-                + '<span class="qida-coverage-target">Meta del 3er msg: <strong>' + COVERAGE_TARGET + '%</strong></span>'
-            + '</div>'
-            + '<div class="qida-coverage-row">'
-                + chip(0, 'Sin contactar', '0 mensajes', '')
-                + chip(1, '1 contacto',    '1 mensaje',  '')
-                + chip(2, '2 contactos',   '2 mensajes', '')
-                + chip(3, '3+ contactos',  'Cobertura completa', '<span class="qida-cov-pct">' + pct + '%</span>')
-            + '</div>'
-            + '<div class="qida-cov-hint">El objetivo del proyecto es llevar la cobertura del 3er mensaje del 37% al ' + COVERAGE_TARGET + '%.</div>'
-        + '</div>';
-    }
-
-    // ============================================================
-    // RENDER: dashboard v1.4 (cobertura compacta + tabla unificada)
-    // ============================================================
+    // v1.10: renderCoverage / renderCoverageSection / renderUnifiedTable /
+    //   renderUnifiedRow / renderSortHeader / renderDays / renderTempBadge / renderUrg /
+    //   renderAssistant{Pill,Expanded,HeaderChip,Panel} ELIMINADAS.
+    //   El dashboard pasa a una vista unica enfocada: maximo 5 leads enfriandose,
+    //   sin tabs, sin filtros, sin asistente.
     function renderDashboard() {
-        return '<div class="qida-dash-flex" style="display:flex;flex:1;min-height:0;overflow:hidden;">'
-            + '<div class="qida-dash-v2">'
-                + '<div class="qida-dash-container">'
-                    + renderCoverageSection()
-                    + renderUnifiedTable()
-                + '</div>'
-            + '</div>'
-            + (state.assistantState === 'results' ? renderAssistantPanel() : '')
-        + '</div>';
-    }
+        var feed = LeadService.getCoolingLeadsSync();
+        var visible = feed.slice(0, MAX_VISIBLE);
 
-    function renderCoverageSection() {
-        // El widget de cobertura ya tiene su propio chrome visual (gradient header). En v1.4 lo dejamos
-        // como franja plana embebida directamente (sin section card), para compactar.
-        return renderCoverage();
-    }
-
-    // ============================================================
-    // RENDER: tabla unificada estilo Odoo Activities (v1.4 - reemplaza Secciones 2/3/4 de v1.3)
-    // ============================================================
-    // TODO v1.5: estados especiales en filas (postergado de v1.3 P1, sigue vigente):
-    // - Badge "Reactiva en X dias" en fila pausa con pausaUntil < 7d
-    // - Badge "Cierra ventana en X dias" en fila lead con entryDate > 12d
-    // - Indicador de prescriptor (ESSIP, hospital, organico) como pill suave en col "Familia"
-    function renderUnifiedTable() {
-        var typeChip = state.activeTypeChip;
-        var segment  = state.activeSegmentFilter;
-
-        // Counts para los chips de tipo (universo total por tipo, sin segmento aplicado)
-        var nSug  = countUnifiedByType('suggestions');
-        var nAct  = countUnifiedByType('activities');
-        var nLead = countUnifiedByType('leads');
-
-        // Counts para los segment chips dentro del tipo activo
-        var nCaliente   = countSegmentInActiveType('caliente');
-        var nTemplado   = countSegmentInActiveType('templado');
-        var nFrio       = countSegmentInActiveType('frio-reactivar');
-        var nPausa      = countSegmentInActiveType('pausa');
-        var nUrgente    = countSegmentInActiveType('urgente');
-        var nHistorico  = countSegmentInActiveType('historico');
-
-        var rows = buildUnifiedFeed({ typeChip: typeChip, segment: segment });
-
-        function typeChipBtn(id, label, count) {
-            var cls = 'qida-type-chip' + (typeChip === id ? ' active' : '');
-            return '<button class="' + cls + '" data-action="set-type-chip" data-id="' + id + '">'
-                + esc(label) + '<span class="qida-type-chip-count">' + count + '</span>'
-            + '</button>';
+        // El estado vacio y el toast de undo son mutuamente compatibles (el toast puede
+        // estar visible incluso si la lista esta vacia, ej. la AF marco hecha la ultima fila).
+        if (visible.length === 0) {
+            return '<div class="qida-cooling-dashboard">'
+                + renderEmptyState()
+                + renderUndoToast()
+            + '</div>';
         }
 
-        function segmentChip(id, label, count) {
-            var cls = 'qida-chip' + (segment === id ? ' active' : '');
-            return '<button class="' + cls + '" data-action="set-segment" data-id="' + id + '">'
-                + esc(label) + '<span class="qida-chip-count">' + count + '</span>'
-            + '</button>';
-        }
+        var rowsHtml = '';
+        for (var i = 0; i < visible.length; i++) rowsHtml += renderCoolingRow(visible[i]);
 
-        var segmentBadgeCount = segment ? 1 : 0;
-        var segmentLabelMap = {
-            'caliente': 'Calientes', 'templado': 'Templados', 'frio-reactivar': 'Frios a reactivar',
-            'pausa': 'Pausados', 'urgente': 'Urgentes', 'historico': 'Historico'
-        };
-
-        var toolbar = '<div class="qida-unified-toolbar">'
-            + '<div class="qida-unified-toolbar-left">'
-                + '<button class="qida-filters-btn' + (state.filtersExpanded ? ' active' : '') + '" data-action="toggle-filters">'
-                    + icon('slidersHoriz', 13) + ' Filtros'
-                    + (segmentBadgeCount > 0 ? '<span class="qida-filters-btn-count">' + segmentBadgeCount + '</span>' : '')
+        return '<div class="qida-cooling-dashboard">'
+            + renderCoolingHeader()
+            + '<div class="qida-cooling-list">' + rowsHtml + '</div>'
+            + '<div class="qida-cooling-actions">'
+                + '<button class="qida-refresh-btn" data-action="refresh-cooling">'
+                    + icon('refresh-cw', 14) + ' Refrescar'
                 + '</button>'
-                + (segment
-                    ? '<span class="qida-active-segment-tag">' + esc(segmentLabelMap[segment] || segment)
-                        + '<button class="qida-active-segment-x" data-action="clear-segment" aria-label="Quitar filtro">' + icon('x', 11) + '</button>'
-                      + '</span>'
-                    : '')
             + '</div>'
-            + '<div class="qida-unified-toolbar-right">'
-                + typeChipBtn('suggestions', 'Sugerencias del dia', nSug)
-                + typeChipBtn('activities',  'Actividades',         nAct)
-                + typeChipBtn('leads',       'Leads',               nLead)
-            + '</div>'
-        + '</div>'
-        + (state.filtersExpanded
-            ? '<div class="qida-segment-chips">'
-                + segmentChip('caliente',       'Calientes',         nCaliente)
-                + segmentChip('templado',       'Templados',         nTemplado)
-                + segmentChip('frio-reactivar', 'Frios a reactivar', nFrio)
-                + segmentChip('pausa',          'Pausados',          nPausa)
-                + segmentChip('urgente',        'Urgentes',          nUrgente)
-                + segmentChip('historico',      'Historico',         nHistorico)
-              + '</div>'
-            : '');
-
-        // Estado vacio contextual
-        var bodyHtml;
-        if (rows.length === 0) {
-            var emptyCopy;
-            if (typeChip === 'suggestions') {
-                emptyCopy = "Sin seguimientos sugeridos para hoy. Cambia a 'Actividades' o 'Leads' para ver el resto de tu cartera.";
-            } else if (typeChip === 'activities') {
-                emptyCopy = 'Sin actividades agendadas hoy ni vencidas.';
-            } else if (segment) {
-                emptyCopy = 'No hay leads que coincidan con este filtro.';
-            } else {
-                emptyCopy = 'Sin leads en la cartera activa.';
-            }
-            bodyHtml = '<div class="qida-unified-empty">' + icon('check', 22) + '<p>' + esc(emptyCopy) + '</p></div>';
-        } else {
-            var trs = '';
-            for (var i = 0; i < rows.length; i++) trs += renderUnifiedRow(rows[i]);
-            bodyHtml = '<div class="qida-unified-table-wrap">'
-                + '<table class="qida-unified-table">'
-                    + '<thead><tr>'
-                        + '<th class="qida-uth-icon"></th>'
-                        + renderSortHeader('familia',  'Familia')
-                        + '<th>Tipo</th>'
-                        + renderSortHeader('temp',     'Temp.')
-                        + '<th>Por que</th>'
-                        + renderSortHeader('dias',     'Sin contacto')
-                        + renderSortHeader('proximo',  'Vence')
-                        + renderSortHeader('etapa',    'Etapa')
-                    + '</tr></thead>'
-                    + '<tbody>' + trs + '</tbody>'
-                + '</table>'
-            + '</div>';
-        }
-
-        return '<section class="qida-section qida-unified">'
-            + toolbar
-            + bodyHtml
-        + '</section>';
-    }
-
-    // Una fila de la tabla unificada. row = { type, leadId, lead, ...payload, hasActivity? }
-    function renderUnifiedRow(row) {
-        var lead = row.lead;
-        var temp = getLeadTemperature(lead);
-        var tempSource = getLeadTemperatureSource(lead);
-
-        // Icono identificador segun tipo
-        var iconHtml, rowCls, typeBadge, porQue;
-        if (row.type === 'suggestion') {
-            var sug = row.suggestion;
-            var fuLabel = sug.suggestedFollowUpNumber === 1 ? '1er msg'
-                        : sug.suggestedFollowUpNumber === 2 ? '2do msg'
-                        : sug.suggestedFollowUpNumber === 3 ? '3er msg'
-                        : sug.suggestedFollowUpNumber + 'o msg';
-            iconHtml = '<span class="qida-urow-icon-wrap sug">' + icon('zap', 13) + '</span>';
-            rowCls = 'qida-urow qida-urow-suggestion' + (sug.urgent ? ' urgent' : '');
-            typeBadge = '<span class="qida-utype-badge sug' + (sug.urgent ? ' urgent' : '') + '">' + icon('sparkles', 9) + ' Sugerencia ' + esc(fuLabel) + '</span>'
-                + (row.hasActivity ? '<span class="qida-utype-sub" title="Este lead tambien tiene una actividad agendada">' + icon('calendar', 9) + ' + actividad</span>' : '');
-            porQue = sug.reason;
-        } else if (row.type === 'activity') {
-            var act = row.activity;
-            iconHtml = '<span class="qida-urow-icon-wrap act' + (row.isOverdue ? ' overdue' : '') + '">' + icon('calendar', 13) + '</span>';
-            rowCls = 'qida-urow ' + (row.isOverdue ? 'qida-urow-activity-overdue' : (row.isToday ? 'qida-urow-activity-today' : 'qida-urow-activity'));
-            if (row.isOverdue) {
-                typeBadge = '<span class="qida-utype-badge act-overdue">' + icon('alert', 9) + ' Vencida hace ' + row.overdueDays + 'd</span>';
-            } else if (row.isToday) {
-                typeBadge = '<span class="qida-utype-badge act-today">' + icon('clock', 9) + ' Actividad hoy</span>';
-            } else {
-                typeBadge = '<span class="qida-utype-badge act">' + icon('calendar', 9) + ' Actividad</span>';
-            }
-            porQue = act.summary;
-        } else {
-            // 'lead'
-            iconHtml = '<span class="qida-urow-icon-wrap lead">' + icon('dot', 13) + '</span>';
-            rowCls = 'qida-urow qida-urow-lead';
-            typeBadge = '<span class="qida-utype-badge lead">Lead activo</span>';
-            porQue = lead.temperatureReason;
-        }
-
-        // Proximo seg
-        var nextLabel = lead.nextScheduledFollowUp ? formatDateEs(lead.nextScheduledFollowUp) : '&mdash;';
-        var nextDiff  = lead.nextScheduledFollowUp ? daysBetween(lead.nextScheduledFollowUp) : null;
-        var nextStyle = '';
-        if (nextDiff != null) {
-            if (nextDiff < 0) nextStyle = 'color:var(--red600);font-weight:500;';
-            else if (nextDiff === 0) nextStyle = 'color:var(--qg);font-weight:600;';
-        }
-
-        // v1.5: sin acciones contextuales. Toda la fila abre el detail del lead.
-        return '<tr class="' + rowCls + '" data-action="select-lead" data-id="' + esc(row.leadId) + '">'
-            + '<td class="qida-urow-icon">' + iconHtml + '</td>'
-            + '<td class="qida-urow-familia">'
-                + '<div class="qida-urow-name">' + esc(lead.contact) + ' &middot; ' + esc(lead.location) + '</div>'
-                + '<div class="qida-urow-meta">' + esc(lead.relation) + ' ' + esc(lead.caredPersonName) + ', ' + lead.age + ' anos</div>'
-            + '</td>'
-            + '<td class="qida-urow-type">' + typeBadge + '</td>'
-            + '<td class="qida-urow-temp">' + renderTempBadge(temp, tempSource, true) + '</td>'
-            + '<td class="qida-urow-porque"><span title="' + esc(porQue) + '">' + esc(porQue) + '</span></td>'
-            + '<td class="qida-urow-dias">' + renderDays(lead.daysWithoutTouch, temp) + '</td>'
-            + '<td class="qida-urow-proximo"><span style="' + nextStyle + '">' + nextLabel + '</span></td>'
-            + '<td class="qida-urow-etapa"><span class="qida-stage">' + esc(lead.stage) + '</span></td>'
-        + '</tr>';
-    }
-
-    // ============================================================
-    // RENDER: Asistente flotante (3 estados)
-    // ============================================================
-    // Estado 1 (closed): pill bottom-right "Pregunta cualquier cosa..."
-    // Estado 2 (expanded): input expandido con sugerencias
-    // Estado 3 (results): panel lateral 30% con Leads / Conversaciones / Material
-    // Estado 1: pill inline en el header (verde corporativo + Sparkles + texto + "/").
-    function renderAssistantPill() {
-        return '<button class="qida-asst-pill" data-action="assistant-open">'
-            + icon('sparkles', 13) + ' Pregunta cualquier cosa... <kbd>/</kbd>'
-        + '</button>';
-    }
-
-    // Estado 2: la pill crece a un input field anclado al header (no overlay).
-    function renderAssistantExpanded() {
-        var q = state.assistantQuery;
-        return '<div class="qida-asst-exp-inline" data-stop="1">'
-            + icon('sparkles', 13)
-            + '<input class="qida-asst-input" type="text" data-input="assistant-q" id="qida-asst-input" value="' + esc(q) + '" placeholder=\'Buscar leads, conversaciones o material...\' />'
-            + '<button class="qida-asst-send" data-action="assistant-submit"' + (q.trim() ? '' : ' disabled') + ' title="Buscar">' + icon('send', 13) + '</button>'
-            + '<button class="qida-asst-collapse" data-action="assistant-collapse" title="Cerrar busqueda">' + icon('x', 13) + '</button>'
+            + renderUndoToast()
         + '</div>';
     }
 
-    // Estado 3: en el header, chip compacto con la query truncada y X. El panel lateral
-    // sigue viviendo dentro de renderDashboard().
-    function renderAssistantHeaderChip() {
-        var q = state.assistantQuery || 'Busqueda';
-        var truncated = q.length > 32 ? q.slice(0, 30) + '...' : q;
-        return '<div class="qida-asst-chip" title="' + esc(q) + '">'
-            + icon('sparkles', 12)
-            + '<span class="qida-asst-chip-q">' + esc(truncated) + '</span>'
-            + '<button class="qida-asst-chip-x" data-action="assistant-close" aria-label="Cerrar busqueda">' + icon('x', 12) + '</button>'
+    // Header de columnas (sticky a la lista pero sin sticky CSS).
+    function renderCoolingHeader() {
+        return '<div class="qida-cooling-header">'
+            + '<div>Familia</div>'
+            + '<div>Tipo</div>'
+            + '<div>Por que</div>'
+            + '<div>Sin contacto</div>'
+            + '<div></div>'
         + '</div>';
     }
 
-    function renderAssistantPanel() {
-        var q = state.assistantQuery;
-        var results = state.assistantResults;
-        var loading = state.assistantLoading;
+    // Una fila del dashboard. row es la shape del response del backend
+    // (NO un MOCK_LEADS lead): contact, location, relation, caredPersonName, age,
+    // serviceType, daysWithoutTouch, lastMessageDate, reason, leadId.
+    function renderCoolingRow(row) {
+        var level = daysWithoutTouchLevel(row.daysWithoutTouch);
+        var dangerIcon = (row.daysWithoutTouch >= 21)
+            ? icon('alert-triangle', 14) + ' '
+            : '';
 
-        function skel(n) {
-            var s = '';
-            for (var i = 0; i < n; i++) {
-                s += '<div class="qida-skel-card">'
-                    + '<div class="qida-skel qida-skel-line" style="width:70%;"></div>'
-                    + '<div class="qida-skel qida-skel-line" style="width:90%;"></div>'
-                    + '<div class="qida-skel qida-skel-line" style="width:40%;"></div>'
-                + '</div>';
-            }
-            return s;
-        }
+        return '<div class="qida-cooling-row qida-cooling-' + level + '" '
+            +   'data-action="select-lead" data-id="' + esc(row.leadId) + '">'
 
-        function bloque(title, ico, items, render, totalKey) {
-            var count = (results && results[totalKey]) ? results[totalKey].length : 0;
-            return '<div class="qida-asst-bloque">'
-                + '<div class="qida-asst-bloque-h">'
-                    + '<span class="qida-asst-bloque-title">' + icon(ico, 11) + ' ' + esc(title) + '</span>'
-                    + '<span class="qida-asst-bloque-count">' + (loading ? '' : count + ' resultado' + (count === 1 ? '' : 's')) + '</span>'
-                + '</div>'
-                + (loading
-                    ? skel(2)
-                    : (items.length === 0
-                        ? '<div class="qida-asst-empty">Sin resultados para "' + esc(q) + '" en ' + esc(title.toLowerCase()) + '.</div>'
-                        : items.map(render).join('')
-                    )
-                )
-            + '</div>';
-        }
-
-        var body = '';
-        if (loading) {
-            body = bloque('Leads', 'users', [], function () {}, 'leads')
-                 + bloque('Conversaciones', 'msg', [], function () {}, 'conversations')
-                 + bloque('Material', 'book', [], function () {}, 'material');
-        } else if (!results || (results.leads.length === 0 && results.conversations.length === 0 && results.material.length === 0)) {
-            body = '<div class="qida-asst-empty">Sin resultados para "' + esc(q) + '". Probá con otra busqueda.</div>';
-        } else {
-            body = bloque('Leads', 'users', results.leads, function (l) {
-                return '<div class="qida-asst-result" data-action="assistant-open-lead" data-id="' + esc(l.id) + '">'
-                    + '<div class="qida-asst-result-name">' + esc(l.name) + '</div>'
-                    + '<div class="qida-asst-result-meta">' + renderTempBadge(getLeadTemperature(l), getLeadTemperatureSource(l), true)
-                        + '<span>&middot;</span><span>' + esc(l.location) + '</span>'
-                        + '<span>&middot;</span><span>' + esc(l.serviceType || '-') + '</span>'
-                    + '</div>'
-                + '</div>';
-            }, 'leads');
-
-            body += bloque('Conversaciones (WhatsApp)', 'msg', results.conversations, function (c) {
-                return '<div class="qida-asst-result" data-action="assistant-open-lead" data-id="' + esc(c.leadId) + '">'
-                    + '<div class="qida-asst-result-name">' + esc(c.leadName) + '</div>'
-                    + '<div class="qida-asst-result-meta">' + esc(c.from === 'lead' ? 'Lead' : 'AF') + ' &middot; ' + esc(c.time) + '</div>'
-                    + '<div class="qida-asst-result-text">"' + esc(c.text) + '"</div>'
-                + '</div>';
-            }, 'conversations');
-
-            body += bloque('Material', 'book', results.material, function (m) {
-                return '<div class="qida-asst-result" data-action="assistant-open-material" data-id="' + esc(m.id) + '">'
-                    + '<div class="qida-asst-result-name">' + esc(m.title) + '</div>'
-                    + '<div class="qida-asst-result-meta">' + esc(m.tag) + ' &middot; match ' + esc(m.match) + '</div>'
-                + '</div>';
-            }, 'material');
-        }
-
-        return '<aside class="qida-asst-panel">'
-            + '<div class="qida-asst-panel-head">'
-                + icon('sparkles', 13)
-                + '<span class="qida-asst-panel-q">' + esc(q || 'Busqueda asistida') + '</span>'
-                + '<button class="qida-asst-panel-close" data-action="assistant-edit" aria-label="Editar busqueda">' + icon('edit', 13) + '</button>'
-                + '<button class="qida-asst-panel-close" data-action="assistant-close" aria-label="Cerrar">' + icon('x', 14) + '</button>'
+            + '<div class="qida-cooling-cell qida-cell-familia">'
+                + '<div class="qida-cell-line1">' + esc(row.contact) + ' &middot; ' + esc(row.location) + '</div>'
+                + '<div class="qida-cell-line2">' + esc(row.relation) + ' ' + esc(row.caredPersonName) + ', ' + row.age + ' anos</div>'
             + '</div>'
-            + '<div class="qida-asst-panel-body">' + body + '</div>'
-        + '</aside>';
+
+            + '<div class="qida-cooling-cell qida-cell-tipo">'
+                + esc(row.serviceType)
+            + '</div>'
+
+            + '<div class="qida-cooling-cell qida-cell-porque">'
+                + esc(row.reason || 'Sin actividad reciente')
+            + '</div>'
+
+            + '<div class="qida-cooling-cell qida-cell-sincontacto">'
+                + '<div class="qida-cell-days">' + dangerIcon + row.daysWithoutTouch + '</div>'
+                + '<div class="qida-cell-date">' + esc(row.lastMessageDate) + '</div>'
+            + '</div>'
+
+            + '<div class="qida-cooling-row-actions">'
+                + '<button class="qida-mark-done-btn" data-action="mark-done" data-id="' + esc(row.leadId) + '" data-stop>'
+                    + icon('check', 14) + ' Marcar hecho'
+                + '</button>'
+            + '</div>'
+        + '</div>';
+    }
+
+    function renderEmptyState() {
+        return '<div class="qida-empty-state">'
+            + 'Estás al día. No hay leads enfriándose.'
+        + '</div>';
+    }
+
+    function renderUndoToast() {
+        if (!state.undoToast) return '';
+        return '<div class="qida-undo-toast">'
+            + icon('check', 16) + ' Marcado como hecho &middot; '
+            + '<button data-action="undo-mark-done" class="qida-undo-btn">Deshacer</button>'
+        + '</div>';
     }
 
     // ============================================================
-    // RENDER: detail blocks
+    // RENDER: detail blocks (v1.7 cards)
     // ============================================================
+    function infoCard(title, actionsHtml, bodyHtml) {
+        return '<div class="qida-info-card">'
+            + '<div class="qida-info-card-head">'
+                + '<span class="qida-info-card-title">' + title + '</span>'
+                + (actionsHtml ? '<span class="qida-info-card-actions">' + actionsHtml + '</span>' : '')
+            + '</div>'
+            + (bodyHtml ? '<div class="qida-info-card-body">' + bodyHtml + '</div>' : '')
+        + '</div>';
+    }
+
     function renderIaSummary(lead) {
         var s = getIaSummary(lead.id);
+        var title = icon('sparkles', 12) + ' Resumen IA';
 
         if (state.editingIaSummary && s) {
-            return '<div class="qida-block"><div class="qida-block-h">'
-                + icon('sparkles', 13) + '<span class="qida-block-h-title">Resumen IA</span>'
-                + '<span class="qida-block-h-aux">Editando manualmente</span>'
+            return infoCard(title, 'Editando manualmente',
+                '<textarea class="qida-ia-textarea" data-input="ia-summary-edit" id="qida-ia-edit">' + esc(s.text) + '</textarea>'
+                + '<div class="qida-ia-actions">'
+                    + '<button class="qida-btn-ghost" data-action="save-ia-summary">' + icon('check', 12) + ' Guardar</button>'
+                    + '<button class="qida-btn-ghost" data-action="cancel-ia-summary">Cancelar</button>'
                 + '</div>'
-                + '<div class="qida-ia">'
-                    + '<textarea class="qida-ia-textarea" data-input="ia-summary-edit" id="qida-ia-edit">' + esc(s.text) + '</textarea>'
-                    + '<div class="qida-ia-actions">'
-                        + '<button class="qida-btn-ghost" data-action="save-ia-summary">' + icon('check', 12) + ' Guardar</button>'
-                        + '<button class="qida-btn-ghost" data-action="cancel-ia-summary">Cancelar</button>'
-                    + '</div>'
-                + '</div>'
-            + '</div>';
+            );
         }
 
-        var head = '<div class="qida-block-h">'
-            + icon('sparkles', 13) + '<span class="qida-block-h-title">Resumen IA</span>'
-            + '<span class="qida-block-h-aux">';
-
+        var actions = '';
         if (s) {
-            if (s.editedBy) head += 'Editado por ' + esc(s.editedBy);
-            else head += 'Generado hace ' + esc(s.generatedAt ? s.generatedAt.replace(/^Hace\s+/i, '') : '?');
-            head += ' &middot; <button class="qida-link-btn" data-action="edit-ia-summary">' + icon('edit', 10) + ' Editar</button>'
-                 + ' &middot; <button class="qida-link-btn muted" data-action="regen-ia-summary">' + icon('refresh', 10) + ' Regenerar</button>';
+            if (s.editedBy) actions += 'Editado por ' + esc(s.editedBy);
+            else actions += 'Generado hace ' + esc(s.generatedAt ? s.generatedAt.replace(/^Hace\s+/i, '') : '?');
+            actions += ' &middot; <button class="qida-link-btn" data-action="edit-ia-summary">' + icon('edit', 10) + ' Editar</button>'
+                     + ' &middot; <button class="qida-link-btn muted" data-action="regen-ia-summary">' + icon('refresh', 10) + ' Regenerar</button>';
         }
-        head += '</span></div>';
 
         var body;
         if (s) {
-            body = '<div class="qida-ia"><p class="qida-ia-text">' + esc(s.text) + '</p></div>';
+            body = '<div class="qida-info-card-highlight"><p class="qida-ia-text">' + esc(s.text) + '</p></div>';
         } else {
-            body = '<div class="qida-ia">'
-                + '<p class="qida-ia-empty">Resumen no generado todavia para este lead.</p>'
-                + '<div class="qida-ia-actions"><button class="qida-btn-ghost" data-action="regen-ia-summary">' + icon('sparkles', 12) + ' Generar resumen</button></div>'
-            + '</div>';
+            body = '<p class="qida-ia-empty">Resumen no generado todavia para este lead.</p>'
+                + '<div class="qida-ia-actions"><button class="qida-btn-ghost" data-action="regen-ia-summary">' + icon('sparkles', 12) + ' Generar resumen</button></div>';
         }
 
-        return '<div class="qida-block">' + head + body + '</div>';
+        return infoCard(title, actions, body);
     }
 
     function renderCare(lead) {
         var c = MOCK_CARE_CONTEXT[lead.id] || {};
-        function item(key, val) {
-            return '<div class="qida-care-item"><span class="qida-care-key">' + esc(key) + '</span><span class="qida-care-val">' + esc(val || '-') + '</span></div>';
+        function item(key, val, urgent) {
+            var valCls = 'qida-context-val' + (urgent ? ' urgent' : '');
+            return '<div class="qida-context-item"><span class="qida-context-key">' + esc(key) + '</span><span class="' + valCls + '">' + esc(val || '-') + '</span></div>';
         }
-        return '<div class="qida-block">'
-            + '<div class="qida-block-h">' + icon('users', 13) + '<span class="qida-block-h-title">Contexto del cuidado</span></div>'
-            + '<div class="qida-care"><div class="qida-care-grid">'
-                + item('Persona cuidada', lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos')
-                + item('Relacion',        c.relationship)
-                + item('Condicion principal', c.mainCondition)
-                + item('Ubicacion',       lead.location)
-                + item('Tipo de servicio', lead.serviceType)
-                + item('Urgencia',        lead.urgency)
-                + item('Vive solo',       c.livesAlone == null ? '-' : (c.livesAlone ? 'Si' : 'No'))
-                + item('Prescriptor',     lead.prescriptor)
-            + '</div></div>'
+        var urgencyUrgent = lead.urgency && /muy\s+urgente/i.test(lead.urgency);
+        var grid = '<div class="qida-context-grid">'
+            + item('Persona cuidada', lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos')
+            + item('Relacion', c.relationship)
+            + item('Condicion principal', c.mainCondition)
+            + item('Ubicacion', lead.location)
+            + item('Tipo de servicio', lead.serviceType)
+            + item('Urgencia', lead.urgency, urgencyUrgent)
+            + item('Vive solo', c.livesAlone == null ? '-' : (c.livesAlone ? 'Si' : 'No'))
+            + item('Prescriptor', lead.prescriptor)
         + '</div>';
+        return infoCard(icon('users', 12) + ' Contexto del cuidado', '', grid);
     }
 
     function renderInternalNotes(lead) {
@@ -2140,15 +1588,8 @@
             + '</div>';
         }
 
-        return '<div class="qida-block">'
-            + '<div class="qida-block-h">' + icon('file', 13) + '<span class="qida-block-h-title">Notas internas</span>'
-                + '<span class="qida-block-h-aux">'
-                + (state.addingNote ? '' : '<button class="qida-link-btn" data-action="start-add-note">' + icon('plus', 11) + ' Anadir nota</button>')
-                + '</span>'
-            + '</div>'
-            + notesHtml
-            + add
-        + '</div>';
+        var actions = state.addingNote ? '' : '<button class="qida-link-btn" data-action="start-add-note">' + icon('plus', 11) + ' Anadir nota</button>';
+        return infoCard(icon('file', 12) + ' Notas internas', actions, notesHtml + add);
     }
 
     function renderActivities(lead) {
@@ -2177,24 +1618,19 @@
             for (var j = 0; j < acts.length; j++) {
                 var a = acts[j];
                 var st = a.state || activityStateFromDeadline(a.deadline);
-                var cls = 'qida-act' + (st === 'overdue' ? ' overdue' : '') + (a.done ? ' done' : '');
+                var cls = 'qida-act-row' + (st === 'overdue' ? ' overdue' : '') + (a.done ? ' done' : '');
                 var deadlineLabel = a.deadline ? formatDateEs(a.deadline) : 'sin fecha';
                 if (st === 'today') deadlineLabel = 'Hoy';
                 else if (st === 'overdue') deadlineLabel = 'Vencida (' + deadlineLabel + ')';
                 html += '<div class="' + cls + '">'
-                    + '<div class="qida-act-icon">' + icon(a.type === 'Llamada' ? 'phone' : (a.type === 'Recordatorio' ? 'clock' : 'check'), 13) + '</div>'
-                    + '<div class="qida-act-body">'
-                        + '<div class="qida-act-summary">' + esc(a.summary) + '</div>'
-                        + '<div class="qida-act-meta">' + icon('calendar', 10) + ' ' + esc(deadlineLabel) + ' &middot; ' + esc(a.assignee) + '</div>'
-                    + '</div>'
+                    + '<span class="qida-act-dot"></span>'
+                    + '<span class="qida-act-row-text">' + esc(a.summary) + '</span>'
+                    + '<span class="qida-act-row-when">' + esc(deadlineLabel) + '</span>'
                 + '</div>';
             }
         }
 
-        return '<div class="qida-block">'
-            + '<div class="qida-block-h">' + icon('clock', 13) + '<span class="qida-block-h-title">Actividades planificadas</span></div>'
-            + html
-        + '</div>';
+        return infoCard(icon('clock', 12) + ' Proximas actividades', '', html);
     }
 
     function renderFollowers(lead) {
@@ -2209,11 +1645,7 @@
                 + (p.role ? '<span class="qida-follower-role">&middot; ' + esc(p.role) + '</span>' : '')
             + '</span>';
         }
-        return '<div class="qida-block">'
-            + '<div class="qida-block-h">' + icon('users', 13) + '<span class="qida-block-h-title">Equipo siguiendo</span>'
-            + '<span class="qida-block-h-aux">Hover para email</span></div>'
-            + '<div class="qida-followers">' + html + '</div>'
-        + '</div>';
+        return infoCard(icon('users', 12) + ' Equipo siguiendo', 'Hover para email', '<div class="qida-followers">' + html + '</div>');
     }
 
     // v1.6: renderTemplatesPanel/renderMaterialPanel eliminadas. Plantillas y Material como
@@ -2262,8 +1694,27 @@
     }
 
     // TODO[ai]: replace with real AIService.chat(leadId, prompt) call.
-    // Mock catch-all para queries libres del chat IA. Devuelve un payload free-text.
+    // Mock catch-all para queries libres del chat IA.
+    // v1.8: detecta contexto refine leyendo el ultimo mensaje IA del historial. Si el ultimo
+    //   payload IA es kind:'refine', devuelve otro refine con prefijo "[Mock: ajuste pedido
+    //   aplicado] " sobre el texto previo (simula iteracion). En cualquier otro caso devuelve
+    //   el free-text generico de v1.7.
     function mockAIResponse(query, lead) {
+        var leadId = lead && lead.id;
+        var history = (leadId && state.aiChatHistory && state.aiChatHistory[leadId]) || [];
+        // Buscar el ultimo mensaje IA del historial (sin .find/.reverse mutating).
+        var lastAi = null;
+        for (var i = history.length - 1; i >= 0; i--) {
+            if (history[i] && history[i].from === 'ai') { lastAi = history[i]; break; }
+        }
+        if (lastAi && lastAi.payload && lastAi.payload.kind === 'refine') {
+            // Estamos iterando un mensaje propuesto. Devolvemos otro refine con texto "ajustado" mock.
+            return {
+                kind: 'refine',
+                intro: 'Aca va una version ajustada:',
+                text: '[Mock: ajuste pedido aplicado] ' + lastAi.payload.text
+            };
+        }
         return {
             kind: 'free',
             intro: 'Entiendo. Para este caso de ' + (lead ? lead.name : 'este lead') + ', basado en el contexto:',
@@ -2311,78 +1762,84 @@
         }
 
         var chevIcon = expanded ? 'chevDown' : 'chevRight';
-        return '<div class="qida-block">'
-            + '<div class="qida-att-collapse">'
-                + '<button class="qida-att-collapse-head" data-action="toggle-attachments" aria-expanded="' + (expanded ? 'true' : 'false') + '">'
-                    + '<span class="qida-att-collapse-head-title">' + icon('paperclip', 13)
-                        + '<span>Adjuntos</span>'
-                        + '<span class="qida-att-collapse-count">(' + count + ')</span>'
-                    + '</span>'
-                    + icon(chevIcon, 14)
-                + '</button>'
-                + (expanded ? '<div class="qida-att-collapse-body">' + bodyHtml + '</div>' : '')
-            + '</div>'
+        var collapse = '<div class="qida-att-collapse">'
+            + '<button class="qida-att-collapse-head" data-action="toggle-attachments" aria-expanded="' + (expanded ? 'true' : 'false') + '">'
+                + '<span class="qida-att-collapse-head-title">' + icon('paperclip', 12)
+                    + '<span>Adjuntos</span>'
+                    + '<span class="qida-att-collapse-count">(' + count + ')</span>'
+                + '</span>'
+                + icon(chevIcon, 14)
+            + '</button>'
+            + (expanded ? '<div class="qida-att-collapse-body">' + bodyHtml + '</div>' : '')
         + '</div>';
+        return infoCard(icon('paperclip', 12) + ' Adjuntos', '', collapse);
     }
 
-    // Chat IA al pie del pane central. Reemplaza el botón "Agendar próximo seguimiento" v1.5.
+    // v1.7: Chat IA en columna dedicada (.qida-pane-ai).
+    // v1.8: chips siempre visibles debajo del input (fila estilo Gemini). Avatars con icono
+    //   propio (Tu = inicial "T", IA = sparkles). Contenido de las burbujas envuelto en
+    //   .qida-aichat-bubble-content para aplicar el fondo sutil por rol.
     function renderAiChat(lead) {
         var history = (state.aiChatHistory && state.aiChatHistory[lead.id]) || [];
         var hasConversation = history.length > 0;
         var draft = state.aiChatDraft || '';
 
-        var historyHtml = '';
+        var bodyHtml = '';
         if (hasConversation) {
-            historyHtml = '<div class="qida-aichat-history" id="qida-aichat-history">';
             for (var i = 0; i < history.length; i++) {
                 var item = history[i];
                 if (item.from === 'user') {
-                    historyHtml += '<div class="qida-aichat-bubble user">'
-                        + '<div class="qida-aichat-bubble-icon">' + icon('sparkles', 12) + '</div>'
+                    bodyHtml += '<div class="qida-aichat-bubble user">'
+                        + '<div class="qida-aichat-bubble-icon">T</div>'
                         + '<div class="qida-aichat-bubble-body">'
                             + '<div class="qida-aichat-bubble-label">Tu</div>'
-                            + '<p class="qida-aichat-bubble-text">' + esc(item.payload && item.payload.text || '') + '</p>'
+                            + '<div class="qida-aichat-bubble-content">'
+                                + '<p class="qida-aichat-bubble-text">' + esc(item.payload && item.payload.text || '') + '</p>'
+                            + '</div>'
                         + '</div>'
                     + '</div>';
                 } else {
-                    historyHtml += '<div class="qida-aichat-bubble ai">'
+                    bodyHtml += '<div class="qida-aichat-bubble ai">'
                         + '<div class="qida-aichat-bubble-icon">' + icon('sparkles', 12) + '</div>'
                         + '<div class="qida-aichat-bubble-body">'
                             + '<div class="qida-aichat-bubble-label">IA</div>'
-                            + renderAiPayload(item.payload, lead)
+                            + '<div class="qida-aichat-bubble-content">'
+                                + renderAiPayload(item.payload, lead)
+                            + '</div>'
                         + '</div>'
                     + '</div>';
                 }
             }
-            historyHtml += '</div>';
+        } else {
+            bodyHtml = '<p class="qida-pane-ai-empty">Pregunta sobre este lead o usa uno de los atajos.</p>';
         }
 
-        var chipsHtml = '';
-        if (!hasConversation) {
-            chipsHtml = '<div class="qida-aichat-chips">'
-                + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="material-marketing">' + icon('book', 12) + ' Material marketing</button>'
-                + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="sugerir-mensaje">' + icon('msg', 12) + ' Sugerir mensaje</button>'
-                + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="reactivar-sin-presionar">' + icon('refresh', 12) + ' Reactivar sin presionar</button>'
-            + '</div>';
-        }
+        // v1.8: chips SIEMPRE visibles (no se ocultan al haber conversacion).
+        var chipsHtml = '<div class="qida-aichat-chips">'
+            + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="material-marketing">' + icon('book', 12) + ' Material marketing</button>'
+            + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="sugerir-mensaje">' + icon('msg', 12) + ' Sugerir mensaje</button>'
+            + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="reactivar-sin-presionar">' + icon('refresh', 12) + ' Reactivar sin presionar</button>'
+        + '</div>';
 
-        var placeholder = hasConversation ? 'Pregunta de seguimiento...' : 'Preguntale a la IA sobre este lead...';
+        var placeholder = hasConversation ? 'Pregunta de seguimiento...' : 'Pregunta sobre este lead...';
         var sendDisabled = draft.trim() ? '' : ' disabled';
 
-        return '<div class="qida-aichat">'
-            + historyHtml
-            + '<div class="qida-aichat-foot">'
+        return ''
+            + '<div class="qida-pane-ai-head">' + icon('sparkles', 12) + ' Asistente IA</div>'
+            + '<div class="qida-pane-ai-body" id="qida-pane-ai-body">' + bodyHtml + '</div>'
+            + '<div class="qida-pane-ai-foot">'
                 + '<div class="qida-aichat-input">'
                     + '<span class="qida-aichat-input-icon">' + icon('sparkles', 14) + '</span>'
                     + '<input type="text" class="qida-aichat-input-field" id="qida-aichat-input" data-input="ai-chat-input" placeholder="' + esc(placeholder) + '" value="' + esc(draft) + '" />'
                     + '<button class="qida-aichat-send" data-action="ai-chat-send"' + sendDisabled + ' aria-label="Enviar">' + icon('arrowRight', 14) + '</button>'
                 + '</div>'
                 + chipsHtml
-            + '</div>'
-        + '</div>';
+            + '</div>';
     }
-
-    // Render del payload de un mensaje IA segun su tipo (variants / material / approaches / free).
+    // Render del payload de un mensaje IA segun su tipo (variants / material / approaches / free / refine).
+    // v1.8: el boton de variantes y approaches pasa de "Usar este mensaje" (data-action="ai-use-message")
+    //   a "Esta me gusta mas" (data-action="ai-pick-variant" + data-label) para activar el flujo
+    //   conversacional refine. Material marketing queda intacto.
     function renderAiPayload(payload, lead) {
         if (!payload) return '';
         var html = '';
@@ -2393,9 +1850,9 @@
                 var v = payload.variants[i];
                 var resolved = resolveAiPlaceholders(v.text, lead);
                 html += '<div class="qida-aichat-variant">'
-                    + '<div class="qida-aichat-variant-label">' + icon('sparkles', 10) + ' Variante ' + (i + 1) + ' - ' + esc(v.label) + '</div>'
+                    + '<div class="qida-aichat-variant-label">' + esc(v.label) + '</div>'
                     + '<p class="qida-aichat-variant-text">' + esc(resolved) + '</p>'
-                    + '<button class="qida-aichat-variant-action" data-action="ai-use-message" data-text="' + esc(resolved) + '">' + icon('arrowRight', 11) + ' Usar este mensaje</button>'
+                    + '<button class="qida-aichat-variant-action" data-action="ai-pick-variant" data-label="' + esc(v.label) + '" data-text="' + esc(resolved) + '">' + icon('arrowRight', 11) + ' Esta me gusta mas</button>'
                 + '</div>';
             }
         } else if (payload.kind === 'material' && payload.items) {
@@ -2415,9 +1872,17 @@
                     + '<div class="qida-aichat-variant-label">' + icon('sparkles', 10) + ' ' + esc(ap.title) + '</div>'
                     + '<p class="qida-aichat-rationale">' + esc(ap.rationale) + '</p>'
                     + '<p class="qida-aichat-variant-text">' + esc(resolvedEx) + '</p>'
-                    + '<button class="qida-aichat-variant-action" data-action="ai-use-message" data-text="' + esc(resolvedEx) + '">' + icon('arrowRight', 11) + ' Usar este mensaje</button>'
+                    + '<button class="qida-aichat-variant-action" data-action="ai-pick-variant" data-label="' + esc(ap.title) + '" data-text="' + esc(resolvedEx) + '">' + icon('arrowRight', 11) + ' Esta me gusta mas</button>'
                 + '</div>';
             }
+        } else if (payload.kind === 'refine' && payload.text) {
+            // v1.8: respuesta IA al elegir una variante. Muestra el texto propuesto en una card
+            //   destacada y ofrece el boton final "Copiar al WhatsApp". La AF puede iterar
+            //   escribiendo texto libre en el input del chat (mockAIResponse detecta el contexto).
+            html += '<div class="qida-aichat-refine">'
+                + '<div class="qida-aichat-refine-text">' + esc(payload.text) + '</div>'
+                + '<button class="qida-aichat-copy-wa" data-action="ai-copy-to-wa" data-text="' + esc(payload.text) + '">' + icon('check', 11) + ' Copiar al WhatsApp</button>'
+            + '</div>';
         } else if (payload.kind === 'free' && payload.text) {
             html += '<p class="qida-aichat-bubble-text">' + esc(payload.text) + '</p>';
         }
@@ -2430,16 +1895,29 @@
         if (!state.aiChatHistory[leadId]) state.aiChatHistory[leadId] = [];
         if (userText) state.aiChatHistory[leadId].push({ from: 'user', payload: { text: userText } });
         if (aiPayload) state.aiChatHistory[leadId].push({ from: 'ai', payload: aiPayload });
+        // v1.9.1: cualquier append al historial dispara scroll al fondo post-rerender.
+        if (userText || aiPayload) state.__aiNeedsScroll = true;
+    }
+
+    // v1.8: la AF elige una variante propuesta por la IA (sugerir mensaje o reactivar). Empujamos
+    //   al historial como par user("<label> - esta me gusta mas") -> ai(kind: 'refine', text).
+    //   La burbuja IA con kind:'refine' muestra el texto propuesto + boton "Copiar al WhatsApp"
+    //   y permite iterar via texto libre en el input del chat (mockAIResponse detecta el contexto).
+    function pushAiPickVariant(leadId, label, text) {
+        if (!leadId || !text) return;
+        var userMsg = (label ? label + ' - ' : '') + 'esta me gusta mas';
+        var refinePayload = {
+            kind: 'refine',
+            intro: 'Genial. Te gusta asi o quieres ajustar algo? (mas corto, otro tono, agregar algo especifico).',
+            text: text
+        };
+        pushAiChat(leadId, userMsg, refinePayload);
     }
 
     // ============================================================
-    // RENDER: detail (full) - v1.6: 2 paneles (40/60), sin head propio (shell header dinamico)
+    // RENDER: detail (full) - v1.7: 3 paneles (WA / info / IA)
     // ============================================================
-    function renderDetail() {
-        var lead = getLead(state.currentLeadId);
-        if (!lead) return renderDashboard();
-
-        // WhatsApp pane (left)
+    function renderWhatsAppPane(lead) {
         var msgs = MOCK_WHATSAPP[lead.id] || [];
         var msgsHtml;
         if (msgs.length === 0) {
@@ -2461,38 +1939,46 @@
         var draft = state.draftMessage || '';
         var sendDisabled = draft.trim() ? '' : ' disabled';
 
-        return '<div class="qida-detail">'
-            // Body: 2 panes
-            + '<div class="qida-detail-body">'
-                // Left: WhatsApp (conversacion + input estilo WhatsApp Web al pie)
-                + '<div class="qida-pane-wa">'
-                    + '<div class="qida-pane-head">' + icon('msg', 13) + '<span class="qida-pane-head-label">Conversacion WhatsApp</span></div>'
-                    + '<div class="qida-pane-body" id="qida-wa-body">' + msgsHtml + '</div>'
-                    + '<div class="qida-wa-input-wrap">'
-                        + '<div class="qida-wa-input">'
-                            + '<button class="qida-wa-clip" data-action="wa-clip" aria-label="Adjuntar">' + icon('paperclip', 15) + '</button>'
-                            + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1" placeholder="Escribe un mensaje...">' + esc(draft) + '</textarea>'
-                            + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + icon('send', 14) + '</button>'
-                        + '</div>'
-                    + '</div>'
+        return ''
+            + '<div class="qida-pane-wa-head">' + icon('msg', 12) + ' Conversacion</div>'
+            + '<div class="qida-pane-wa-body" id="qida-wa-body">' + msgsHtml + '</div>'
+            + '<div class="qida-wa-input-wrap">'
+                + '<div class="qida-wa-input">'
+                    + '<button class="qida-wa-clip" data-action="wa-clip" aria-label="Adjuntar">' + icon('paperclip', 15) + '</button>'
+                    + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1" placeholder="Escribe un mensaje...">' + esc(draft) + '</textarea>'
+                    + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + icon('send', 14) + '</button>'
                 + '</div>'
+            + '</div>';
+    }
 
-                // Right: contenido del lead + chat IA al pie
-                + '<div class="qida-pane-center">'
-                    + '<div class="qida-center-body">'
-                        + renderIaSummary(lead)
-                        + renderCare(lead)
-                        + renderInternalNotes(lead)
-                        + renderActivities(lead)
-                        + renderFollowers(lead)
-                        + renderAttachmentsCollapsable(lead)
-                    + '</div>'
-                    + renderAiChat(lead)
-                + '</div>'
+    function renderCenterPane(lead) {
+        return ''
+            + renderIaSummary(lead)
+            + renderCare(lead)
+            + renderInternalNotes(lead)
+            + renderActivities(lead)
+            + renderFollowers(lead)
+            + renderAttachmentsCollapsable(lead);
+    }
+
+    function renderDetail() {
+        var lead = getLead(state.currentLeadId);
+        if (!lead) return renderDashboard();
+
+        // v1.8: el toggle "Swap" del shell header intercambia el orden centro/derecha.
+        //   false -> WA | Info | IA   (default)
+        //   true  -> WA | IA   | Info
+        var centerHtml = '<div class="qida-pane-center">' + renderCenterPane(lead) + '</div>';
+        var aiHtml = '<div class="qida-pane-ai">' + renderAiChat(lead) + '</div>';
+        var middleAndRight = state.detailLayoutSwapped ? (aiHtml + centerHtml) : (centerHtml + aiHtml);
+
+        return '<div class="qida-detail">'
+            + '<div class="qida-detail-body">'
+                + '<div class="qida-pane-wa">' + renderWhatsAppPane(lead) + '</div>'
+                + middleAndRight
             + '</div>'
         + '</div>';
     }
-
     // ============================================================
     // RENDER: schedule modal
     // ============================================================
@@ -2602,13 +2088,21 @@
     // ============================================================
     // RERENDER + side overlays
     // ============================================================
+    function syncShellSizing() {
+        var shell = document.getElementById('qida-shell');
+        if (!shell) return;
+        if (state.view === 'detail') shell.classList.add('qida-view-detail');
+        else shell.classList.remove('qida-view-detail');
+    }
+
     function rerenderContent() {
         var content = document.getElementById('qida-content');
         if (!content) return;
         content.innerHTML = renderContent();
+        syncShellSizing();
         syncShellHeader();
         syncScheduleModal();
-        syncAssistantHeader();
+        // v1.10: syncAssistantHeader eliminada (junto con todo el bloque del asistente).
         syncToast();
         // v1.6: auto-scroll del pane WhatsApp post-rerender si el flag esta seteado.
         if (state.__waNeedsScroll) {
@@ -2619,6 +2113,15 @@
                 setTimeout(scrollWaToBottom, 16);
             }
         }
+        // v1.9.1: idem para el pane Chat IA. Se setea en pushAiChat y al entrar al detalle.
+        if (state.__aiNeedsScroll) {
+            state.__aiNeedsScroll = false;
+            if (typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(scrollAiToBottom);
+            } else {
+                setTimeout(scrollAiToBottom, 16);
+            }
+        }
     }
 
     function scrollWaToBottom() {
@@ -2626,16 +2129,23 @@
         if (body) body.scrollTop = body.scrollHeight;
     }
 
-    // v1.6: helper de nivel del badge "Sin contacto" del shell header del detail.
-    //   0       -> Hoy en verde vivo
-    //   1-3     -> verde sutil
-    //   4-7     -> naranja
-    //   8+      -> rojo
+    function scrollAiToBottom() {
+        var body = document.getElementById('qida-pane-ai-body');
+        if (body) body.scrollTop = body.scrollHeight;
+    }
+
+    // v1.6: helper de nivel para colores degradados por "dias sin contacto".
+    // v1.10: extendido de 4 a 6 niveles para soportar las 5 bandas del dashboard nuevo
+    //   (warn / orange / stale / danger) + el caso especial today + el caso fresh.
+    //   El shell header del detalle solo lee today/fresh/warn/stale (los CSS existentes).
+    //   El dashboard nuevo (qida-cooling-*) consume las 6 bandas.
     function daysWithoutTouchLevel(days) {
         if (days === 0) return 'lvl-today';
         if (days <= 3)  return 'lvl-fresh';
         if (days <= 7)  return 'lvl-warn';
-        return 'lvl-stale';
+        if (days <= 14) return 'lvl-orange';
+        if (days <= 20) return 'lvl-stale';
+        return 'lvl-danger';
     }
 
     // v1.6: shell header dinamico. En dashboard mantiene el bloque Sparkles + Seguimientos +
@@ -2672,50 +2182,33 @@
                     + '<button class="qida-back" data-action="back-to-dashboard">' + icon('arrowLeft', 12) + ' Volver</button>'
                 + '</div>';
             }
+            // v1.8: boton swap entre el qida-asst-anchor y qida-esc. Active feedback cuando swapped.
+            var swapActiveCls = state.detailLayoutSwapped ? ' active' : '';
+            var swapIcons = icon('arrowLeft', 11) + icon('arrowRight', 11);
             header.innerHTML = titleHtml
                 + '<div class="qida-shell-actions">'
                     + '<div id="qida-asst-anchor" class="qida-asst-anchor"></div>'
+                    + '<button class="qida-shell-swap' + swapActiveCls + '" data-action="toggle-detail-layout" title="Cambiar orden de columnas">' + swapIcons + ' Swap</button>'
+                    + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
         } else {
+            // v1.10: shell header minimo en dashboard. Sin Sparkles + titulo + sub, sin
+            // anchor del asistente. Solo "Esc para cerrar" + X. Toda la atencion va a la
+            // lista de leads enfriandose en el contenido.
             header.innerHTML = ''
-                + '<div class="qida-shell-title">'
-                    + '<div class="qida-shell-mark">' + icon('sparkles', 14) + '</div>'
-                    + '<div>'
-                        + '<div class="qida-shell-tt-main">Seguimientos</div>'
-                        + '<div class="qida-shell-tt-sub">Tu workspace operativo, sobre Odoo</div>'
-                    + '</div>'
-                + '</div>'
                 + '<div class="qida-shell-actions">'
-                    + '<div id="qida-asst-anchor" class="qida-asst-anchor"></div>'
                     + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
         }
     }
 
-    // v1.4: el asistente ya no flota. Vive en #qida-asst-anchor dentro del header del shell.
-    //   - closed   -> pill inline
-    //   - expanded -> input field inline (crece in-place a la izquierda gracias al flex del header)
-    //   - results  -> chip compacto con la query truncada (el panel lateral 30% sale dentro de
-    //                renderDashboard porque shrinkea el content)
-    //   En el detail no mostramos nada (no aplica al flujo de detail).
-    function syncAssistantHeader() {
-        var anchor = document.getElementById('qida-asst-anchor');
-        if (!anchor) return;
-        if (state.view !== 'dashboard') { anchor.innerHTML = ''; return; }
-        if (state.assistantState === 'closed') {
-            anchor.innerHTML = renderAssistantPill();
-        } else if (state.assistantState === 'expanded') {
-            anchor.innerHTML = renderAssistantExpanded();
-            setTimeout(function () {
-                var inp = document.getElementById('qida-asst-input');
-                if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
-            }, 30);
-        } else if (state.assistantState === 'results') {
-            anchor.innerHTML = renderAssistantHeaderChip();
-        }
-    }
+    // v1.10: syncAssistantHeader ELIMINADA junto con todo el bloque del asistente del
+    //   dashboard. El anchor qida-asst-anchor sigue vivo SOLO en la rama detail de
+    //   syncShellHeader (queda como hueco vacio para no romper la geometria de la fila
+    //   del header del detalle - mantiene el espaciado entre el meta del lead y el boton
+    //   swap). No hay renderAssistantPill/Expanded/HeaderChip/Panel ya.
 
     function syncScheduleModal() {
         var shell = document.getElementById('qida-shell');
@@ -2777,29 +2270,11 @@
 
     function handleClick(e) {
         var target = findActionTarget(e.target);
-        var shouldRerender = false;
 
-        // Click-outside del asistente expandido: colapsar si el click no fue dentro del anchor.
-        // El switch debajo procesara la accion del target normalmente (en este flow el siguiente
-        // setState() del case ya hace el rerender; si no hay case, el shouldRerender lo dispara).
-        if (state.assistantState === 'expanded') {
-            var isInsideExp = false;
-            var n = e.target;
-            while (n && n.nodeType === 1) {
-                if (n.id === 'qida-asst-anchor') { isInsideExp = true; break; }
-                n = n.parentNode;
-            }
-            if (!isInsideExp) {
-                state.assistantState = 'closed';
-                state.assistantQuery = '';
-                shouldRerender = true;
-            }
-        }
+        // v1.10: el click-outside del asistente expandido se elimino junto con el bloque
+        //   del asistente del dashboard. No quedan estados intermedios que cerrar.
 
-        if (!target) {
-            if (shouldRerender) rerenderContent();
-            return;
-        }
+        if (!target) return;
         var action = target.getAttribute('data-action');
         var id = target.getAttribute('data-id');
 
@@ -2811,6 +2286,7 @@
             case 'select-lead':
                 // v1.6: inicializamos draftMessage='' y attachmentsExpanded=false. NO tocar aiChatHistory.
                 state.__waNeedsScroll = true;
+                state.__aiNeedsScroll = true;  // v1.9.1: scroll inicial al fondo del chat IA si hay historial.
                 setState({ view: 'detail', currentLeadId: id, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false });
                 return;
             case 'back-to-dashboard':
@@ -2818,66 +2294,46 @@
                 setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false });
                 return;
 
-            case 'set-coverage':
-                var bucket = parseInt(id, 10);
-                var newBucket = (state.coverageBucket === bucket) ? null : bucket;
-                setState({ coverageBucket: newBucket });
+            // --- v1.10: dashboard de leads enfriandose ---
+            case 'mark-done': {
+                // Marca el lead como "hecho hoy" en sesion y programa un toast de undo
+                // por 4 segundos. Si la AF ya tenia un undo activo de OTRA fila, lo
+                // sobreescribimos (clearTimeout previo + asignacion nueva). El lead
+                // anterior queda permanentemente marcado en sesion.
+                if (!id) return;
+                state.completedTodayIds.add(id);
+                state.undoToast = { leadId: id, expiresAt: Date.now() + 4000 };
+                if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
+                state.undoTimeoutId = setTimeout(function () {
+                    // Si el toast cambio de fila desde que se programo, no hacemos nada
+                    // (el setTimeout nuevo ya escribio sobre el state).
+                    state.undoToast = null;
+                    state.undoTimeoutId = null;
+                    rerenderContent();
+                }, 4000);
+                rerenderContent();
                 return;
-            case 'set-sort':
-                handleSetSort(id);
+            }
+            case 'undo-mark-done': {
+                if (state.undoToast) {
+                    state.completedTodayIds["delete"](state.undoToast.leadId);
+                    state.undoToast = null;
+                    if (state.undoTimeoutId) {
+                        clearTimeout(state.undoTimeoutId);
+                        state.undoTimeoutId = null;
+                    }
+                }
+                rerenderContent();
                 return;
-
-            // --- v1.4: toolbar tabla unificada ---
-            case 'toggle-filters':
-                setState({ filtersExpanded: !state.filtersExpanded });
+            }
+            case 'refresh-cooling': {
+                // Re-render llama a getCoolingLeadsSync() nuevamente. Los completados
+                // en sesion quedan filtrados naturalmente. Cuando esto se cablee a Odoo,
+                // este handler dispara LeadService.getCoolingLeads().then(...) y refresca
+                // el cache.
+                rerenderContent();
                 return;
-            case 'set-type-chip':
-                setState({ activeTypeChip: id });
-                return;
-            case 'set-segment':
-                setState({ activeSegmentFilter: state.activeSegmentFilter === id ? null : id });
-                return;
-            case 'clear-segment':
-                setState({ activeSegmentFilter: null });
-                return;
-
-            // v1.5: las acciones "suggestion-done", "suggestion-postpone-*" y "scheduled-done"
-            // se eliminaron del hover de las filas. Toda la fila abre el detail del lead.
-            // Las funciones openScheduleFromSuggestion / openScheduleFromActivity siguen vivas
-            // (ver TODO v1.6+) pero sin invocador en v1.5.0.
-
-            // --- v1.3: asistente flotante ---
-            case 'assistant-open':
-                setState({ assistantState: 'expanded' });
-                return;
-            case 'assistant-close':
-                setState({ assistantState: 'closed', assistantQuery: '', assistantResults: null, assistantLoading: false });
-                return;
-            case 'assistant-collapse':
-                // X dentro del input expanded: vuelve a la pill (state 'closed') sin perder nada importante.
-                setState({ assistantState: 'closed', assistantQuery: '' });
-                return;
-            case 'assistant-edit':
-                setState({ assistantState: 'expanded' });
-                return;
-            case 'assistant-hint':
-                state.assistantQuery = target.getAttribute('data-q') || '';
-                runAssistantSearch();
-                return;
-            case 'assistant-submit':
-                // Leemos del input si esta en expanded
-                var inp = document.getElementById('qida-asst-input');
-                if (inp) state.assistantQuery = inp.value;
-                runAssistantSearch();
-                return;
-            case 'assistant-open-lead':
-                // v1.6: misma politica que select-lead. NO tocar aiChatHistory.
-                state.__waNeedsScroll = true;
-                setState({ view: 'detail', currentLeadId: id, draftMessage: '', attachmentsExpanded: false, assistantState: 'closed', assistantResults: null, assistantQuery: '', editingIaSummary: false, addingNote: false });
-                return;
-            case 'assistant-open-material':
-                showToast('Abriendo material "' + id + '" (mock)');
-                return;
+            }
 
             // v1.6: handlers set-panel / toggle-edit-temp / set-temp / copy-tpl eliminados.
             // El pane derecho (tabs) ya no existe y la temperatura del lead deja de ser editable
@@ -2938,7 +2394,19 @@
                 var aiInp = document.getElementById('qida-aichat-input');
                 handleAiChatSend(aiInp ? aiInp.value : (state.aiChatDraft || ''));
                 return;
-            case 'ai-use-message':
+            // v1.8: la AF elige una variante (sugerir mensaje o reactivar) -> push al chat
+            //   como user message + respuesta IA tipo refine. Material marketing mantiene su
+            //   propio handler ai-material-action (sin tocar).
+            case 'ai-pick-variant':
+                var pickLabel = target.getAttribute('data-label') || 'Esta opcion';
+                var pickText = target.getAttribute('data-text') || '';
+                pushAiPickVariant(state.currentLeadId, pickLabel, pickText);
+                state.aiChatDraft = '';
+                rerenderContent();
+                return;
+            // v1.8: copia el texto refinado al textarea de WhatsApp. La AF revisa, edita si
+            //   quiere, y clickea send. Principio rector: IA propone, AF envia.
+            case 'ai-copy-to-wa':
                 var msgText = target.getAttribute('data-text') || '';
                 state.draftMessage = msgText;
                 rerenderContent();
@@ -2948,13 +2416,21 @@
                     if (ta) {
                         ta.focus();
                         try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (err) {}
+                        // v1.9: expandir el textarea para mostrar el mensaje completo (3-5 lineas)
+                        // sin obligar a scrollear. El input handler de wa-draft no se dispara
+                        // cuando seteamos draftMessage por codigo.
+                        autoResizeTextarea(ta);
                     }
                 }, 30);
-                showToast('Mensaje copiado al textarea. Editalo y envialo.');
+                showToast('Mensaje copiado al campo de WhatsApp. Editalo y envialo.');
                 return;
             case 'ai-material-action':
                 var matTitle = target.getAttribute('data-title') || 'material';
                 showToast('"' + matTitle + '" listo (mock)');
+                return;
+            // v1.8: toggle del orden de columnas centro/derecha en el detail.
+            case 'toggle-detail-layout':
+                setState({ detailLayoutSwapped: !state.detailLayoutSwapped });
                 return;
 
             case 'open-schedule':
@@ -3051,32 +2527,8 @@
         });
     }
 
-    function runAssistantSearch() {
-        var q = (state.assistantQuery || '').trim();
-        if (!q) {
-            showToast('Escribi una busqueda primero');
-            return;
-        }
-        setState({ assistantState: 'results', assistantLoading: true, assistantResults: null });
-        SearchService.all(q).then(function (results) {
-            // Solo aplicar si el usuario sigue en results y la query no cambio
-            if (state.assistantState !== 'results') return;
-            state.assistantLoading = false;
-            state.assistantResults = results;
-            rerenderContent();
-        });
-    }
-
-    function handleSetSort(col) {
-        if (state.sortCol !== col) {
-            setState({ sortCol: col, sortDir: 'asc' });
-        } else if (state.sortDir === 'asc') {
-            setState({ sortDir: 'desc' });
-        } else {
-            // 3er click: vuelve al default v1.4 (sort compuesto inteligente, sortCol=null).
-            setState({ sortCol: null, sortDir: 'desc' });
-        }
-    }
+    // v1.10: runAssistantSearch y handleSetSort ELIMINADAS junto con sus consumidores
+    //   (asistente del dashboard y headers sorteables de la tabla unificada).
 
     function handleScheduleConfirm() {
         if (!state.scheduleDate) {
@@ -3089,10 +2541,11 @@
 
         ActivityService.schedule(lead.id, state.scheduleDate, state.scheduleNote, state.scheduleMarkPause);
 
-        // Si vinimos de Sugerencias del dia o de Actividades agendadas, marcamos hecho.
-        if (state.scheduleOrigin === 'suggestion' && state.__pendingSuggestionDoneId) {
-            SuggestionsService.markDone(state.__pendingSuggestionDoneId);
-        }
+        // v1.10: las ramas scheduleOrigin === 'suggestion' / 'activity' quedaron sin
+        //   invocador despues de eliminar el dashboard de sugerencias y la tabla unificada.
+        //   Solo subsiste scheduleOrigin === 'detail' (Schedule modal viva como reserva
+        //   v1.7+ desde el detalle del lead). Si en alguna iteracion futura se vuelven a
+        //   activar, hay que reintroducir SuggestionsService.markDone() y la rama activity.
         if (state.scheduleOrigin === 'activity' && state.__pendingActivityDoneId) {
             ActivityService.markDone(state.__pendingActivityDoneId);
         }
@@ -3111,10 +2564,7 @@
         var leadId = state.scheduleLeadIdOverride || state.currentLeadId;
         LeadService.close(leadId, sel.value);
 
-        // Marcar sugerencia/actividad como hecha si aplica.
-        if (state.scheduleOrigin === 'suggestion' && state.__pendingSuggestionDoneId) {
-            SuggestionsService.markDone(state.__pendingSuggestionDoneId);
-        }
+        // v1.10: idem comentario en handleScheduleConfirm. Rama 'suggestion' sin invocador.
         if (state.scheduleOrigin === 'activity' && state.__pendingActivityDoneId) {
             ActivityService.markDone(state.__pendingActivityDoneId);
         }
@@ -3131,15 +2581,8 @@
         var node = e.target;
         if (!node || !node.getAttribute) return;
         var input = node.getAttribute('data-input');
-        if (input === 'assistant-q') {
-            state.assistantQuery = node.value;
-            // No re-render completo: solo togglear disabled del send button.
-            var sendBtn = document.querySelector('.qida-asst-send');
-            if (sendBtn) {
-                if (node.value.trim()) sendBtn.removeAttribute('disabled');
-                else sendBtn.setAttribute('disabled', '');
-            }
-        } else if (input === 'schedule-date') {
+        // v1.10: branch 'assistant-q' eliminado junto con el asistente del dashboard.
+        if (input === 'schedule-date') {
             state.scheduleDate = node.value || null;
             // Si la fecha custom dispara > 21 dias, auto-tildar Pausa
             var diff = daysBetween(node.value);
@@ -3211,7 +2654,7 @@
     // ============================================================
     function injectBadge() {
         if (document.querySelector('.qida-badge')) return;
-        var urgent = countByOperational('urgente');
+        var urgent = countLeadsUrgent();
         var badge = document.createElement('div');
         badge.className = 'qida-badge';
         badge.setAttribute('data-action', 'open-modal');
@@ -3282,47 +2725,19 @@
         }
     }
 
-    // Keyboard global: prioridad schedule modal -> assistant -> main modal.
-    // "/" abre el asistente cuando el modal esta abierto y el dashboard activo.
-    // "Enter" dentro del input del asistente dispara la busqueda.
+    // Keyboard global: prioridad schedule modal -> main modal.
+    // v1.10: el atajo "/" para abrir el asistente y el branch Enter del input del
+    //   asistente fueron eliminados (el asistente del dashboard ya no existe).
     document.addEventListener('keydown', function (e) {
         var overlay = document.querySelector('.qida-overlay.active');
         if (!overlay) return;
 
-        var isEsc   = (e.key === 'Escape' || e.keyCode === 27);
-        var isSlash = (e.key === '/' || e.keyCode === 191);
-        var isEnter = (e.key === 'Enter' || e.keyCode === 13);
+        var isEsc = (e.key === 'Escape' || e.keyCode === 27);
 
         if (isEsc) {
-            if (state.showScheduleModal) {
-                closeScheduleModal();
-            } else if (state.assistantState === 'results') {
-                setState({ assistantState: 'closed', assistantQuery: '', assistantResults: null });
-            } else if (state.assistantState === 'expanded') {
-                setState({ assistantState: 'closed', assistantQuery: '' });
-            } else {
-                closeModal();
-            }
+            if (state.showScheduleModal) closeScheduleModal();
+            else closeModal();
             return;
-        }
-
-        if (isSlash && state.view === 'dashboard' && state.assistantState === 'closed' && !state.showScheduleModal) {
-            // Solo si el foco no esta en un input/textarea/etc (para no robar "/" de search en otros campos)
-            var tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
-            if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') {
-                e.preventDefault();
-                setState({ assistantState: 'expanded' });
-            }
-            return;
-        }
-
-        if (isEnter) {
-            var inp = document.getElementById('qida-asst-input');
-            if (inp && document.activeElement === inp) {
-                e.preventDefault();
-                state.assistantQuery = inp.value;
-                runAssistantSearch();
-            }
         }
     });
 
@@ -3338,7 +2753,7 @@
     function closeModal() {
         var overlay = document.querySelector('.qida-overlay');
         if (overlay) overlay.className = 'qida-overlay';
-        // Reset transient state. Mantengo filter/sort/coverage por si vuelven al modal.
+        // Reset transient state.
         state.view = 'dashboard';
         state.currentLeadId = null;
         state.editingIaSummary = false;
@@ -3351,23 +2766,23 @@
         state.scheduleLeadIdOverride = null;
         state.__pendingSuggestionDoneId = null;
         state.__pendingActivityDoneId = null;
-        state.assistantState = 'closed';
-        state.assistantQuery = '';
-        state.assistantResults = null;
-        state.assistantLoading = false;
-        // v1.4: reset toolbar de la tabla unificada a defaults
-        state.activeTypeChip = 'suggestions';
-        state.activeSegmentFilter = null;
-        state.filtersExpanded = false;
-        state.sortCol = null;
-        state.sortDir = 'desc';
-        state.coverageBucket = null;
+        // v1.10: limpieza del dashboard de leads enfriandose.
+        //   completedTodayIds PERSISTE durante toda la sesion del page load (NO se vacia
+        //   aqui). Solo limpiamos el toast de undo y cancelamos cualquier timeout activo.
+        state.undoToast = null;
+        if (state.undoTimeoutId) {
+            clearTimeout(state.undoTimeoutId);
+            state.undoTimeoutId = null;
+        }
         // v1.6: limpiamos draft del WhatsApp y del chat IA, y attachmentsExpanded.
         // aiChatHistory PERSISTE durante toda la sesion del page load: NO se vacia aqui.
         state.draftMessage = '';
         state.aiChatDraft = '';
         state.attachmentsExpanded = false;
         state.__waNeedsScroll = false;
+        state.__aiNeedsScroll = false;  // v1.9.1
+        // v1.9: reset del toggle al default operativo (chat IA al centro, info a la derecha).
+        state.detailLayoutSwapped = true;
         rerenderContent();
         log('closeModal()');
     }

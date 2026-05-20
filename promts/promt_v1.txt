@@ -1,468 +1,654 @@
-# Prompt para Cursor — Rediseño visual del detalle del lead v1.7.0
+# Prompt para Cursor — Dashboard simplificado v1.8.0 (solo UI)
 
-Bump `v1.6.0 → v1.7.0`. Cambio mayor de layout y sistema visual del detalle del lead. **No toca el dashboard** (eso queda para una iteración separada).
+Iteración de UI del dashboard. Pivote de "workspace multi-pieza" a **una sola vista enfocada: lista priorizada de leads enfriándose**. Bump `v1.7.0 → v1.8.0`.
 
-## Contexto
+**Alcance estricto: solo UI**. El frontend consume un mock estático que simula la respuesta del backend. Toda la lógica de criterio, filtrado y ordenamiento queda en backend (documentada al final como especificación). No agregar fórmulas, umbrales ni cómputos de negocio al cliente.
 
-El detalle del lead v1.6.0 quedó funcionalmente bien, pero visualmente débil: todo el contenido del pane central (resumen, contexto, notas, actividades, adjuntos, chat IA) flota sobre el mismo fondo, sin separación visual entre secciones. El chat IA al pie compite por espacio vertical con el contenido informativo: cuando se expande, "come" la información del lead.
+Asume que v1.7.0 (rediseño visual del detalle a 3 columnas) ya está aplicado. **Este prompt no toca el detalle del lead**.
 
-**La iteración corrige esto con dos cambios combinados**:
+## Decisiones cerradas (UI)
 
-1. **Cambio de layout**: de 2 a 3 columnas. WhatsApp a la izquierda, información del lead al centro, chat IA en una columna dedicada a la derecha.
-2. **Sistema visual**: cards con identidad propia, jerarquía clara, contraste sutil entre columnas. Sin multicolor.
+1. Eliminar tabs "Actividades" y "Leads". Vista única.
+2. Eliminar bloque "Tu cobertura" completo.
+3. Eliminar botón "Filtros" y todo el state asociado.
+4. Eliminar pill "Pregunta cualquier cosa..." y todo el bloque del asistente del dashboard.
+5. Header del shell mínimo: solo "Esc para cerrar" + X.
+6. Tabla simplificada a 4 columnas:
+   - **Familia** — contacto + ubicación arriba, relación + persona cuidada + edad abajo
+   - **Tipo** — tipo de servicio del lead
+   - **Por qué** — razón concreta del enfriamiento
+   - **Sin contacto** — días grande + fecha del último mensaje pequeño debajo
+7. Tope visual: **5 leads** (`MAX_VISIBLE = 5`, constante de UI).
+8. Botón "Refrescar" debajo de la lista. Click → vuelve a llamar al servicio. Los completados en sesión quedan filtrados client-side.
+9. Estado vacío / al día: `"Estás al día. No hay leads enfriándose."`
+10. Degradación de color por urgencia (presentational, basado en `daysWithoutTouch`):
+    - 0-3: normal
+    - 4-7: amarillo muy sutil
+    - 8-14: naranja sutil
+    - 15-20: rojo sutil
+    - 21+: rojo + ícono `alert-triangle` antes del número
+11. Acciones por fila:
+    - Click en celda (excepto botón) → abre el detalle del lead
+    - Hover muestra botón "Marcar hecho" → click ejecuta directo + toast inferior `"Marcado como hecho · Deshacer"` durante 4s
 
-**Va adjunta una imagen del mockup que validamos con Alejandro**. Tu trabajo es implementarlo lo más fiel posible respetando los detalles técnicos de este prompt.
+## Mapa del código a tocar
 
-## Decisiones cerradas
-
-1. **Modal del detalle a 96vw × 96vh**, sin max-width, padding lateral mínimo. Corrige la desviación 2 de v1.6.0 (donde se conservaron `max-width: 1400px` / `max-height: 90vh`). Esto sí o sí — el layout de 3 columnas necesita el ancho.
-2. **Tres columnas dentro del `.qida-detail-body`**:
-   - **Pane WhatsApp** a la izquierda (~28%)
-   - **Pane Información del lead** al centro (~40%)
-   - **Pane Chat IA** a la derecha (~32%)
-3. **El chat IA deja de estar al pie del pane central**. Pasa a tener su propia columna dedicada. En estado colapsado muestra header + 3 chips + input. En estado activo, los chips desaparecen y la conversación llena la columna verticalmente.
-4. **Información del lead estructurada en cards independientes**: cada sección (Resumen IA, Contexto del cuidado, Notas internas, Próximas actividades, Adjuntos colapsable) en su propia card con borde sutil. Adjuntos sigue colapsable como en v1.6.0.
-5. **Sin multicolor**: una sola paleta — blanco, grises sutiles, verde Qida para acentos. WhatsApp mantiene su crema típico solo en su columna porque las AFs lo esperan.
-6. **Tipografía sin negritas heavy**: regular (400) para contenido, medium (500) solo para títulos y acentos. Nunca 600 o 700.
-
-## Sistema visual con valores exactos
-
-### Paleta
-
-| Uso | Variable / Hex |
-|---|---|
-| Fondo principal superficies | `var(--color-background-primary)` (blanco) |
-| Fondo neutro columna info | `#FAFAF9` |
-| Fondo crema WhatsApp | `#ECE5DD` |
-| Fondo burbuja WhatsApp lead | `#FFFFFF` |
-| Fondo burbuja WhatsApp AF | `#DCF8C6` |
-| Fondo resumen IA highlight | `#E1F5EE` |
-| Texto sobre resumen IA | `#143C32` |
-| Acento Qida verde principal | `#0F6E56` |
-| Acento Qida verde soft (badges, avatars IA) | `#E1F5EE` |
-| Border principal sutil | `0.5px solid var(--color-border-tertiary)` |
-| Border destacado | `0.5px solid var(--color-border-secondary)` |
-| Texto principal | `var(--color-text-primary)` |
-| Texto secundario | `var(--color-text-secondary)` |
-| Texto terciario / hints | `var(--color-text-tertiary)` |
-| Urgencia destacada (color texto) | `#993C1D` |
-
-Si el sistema de variables CSS actual no tiene equivalentes para `var(--color-text-secondary)` etc., usar los grises del sistema existente (`s400`, `s500`, `s600`) o mantener consistencia con lo que ya hay.
-
-### Tipografía
-
-| Elemento | Tamaño | Peso | Color |
-|---|---|---|---|
-| Nombre lead en shell header | 14px | 500 | principal |
-| ID lead en shell header | 12px | 400 | terciario |
-| Badge "Sin contacto" en shell | 11px | 500 | según umbral |
-| Datos compactos shell header | 12px | 400 | secundario |
-| Título de sección (uppercase) | 11px | 500 | secundario, letter-spacing 0.05em |
-| Contenido principal de cards | 12.5-13px | 400 | principal |
-| Labels en grid de contexto | 11px | 400 | terciario |
-| Valores en grid de contexto | 12.5px | 400 | principal |
-| Mensajes WhatsApp | 12.5px | 400 | principal |
-| Timestamps WhatsApp | 10px | 400 | terciario |
-| Mensajes chat IA | 12.5px | 400 | principal |
-| Label variante en respuesta IA | 11px | 500 | verde Qida `#0F6E56` |
-| Botón "Usar este mensaje" | 11px | 400 | verde Qida `#0F6E56` |
-
-Sentence case en todo. Sin ALL CAPS excepto en los títulos de sección uppercase.
-
-### Espaciado
-
-- Padding interno de cards: `12px 14px`
-- Gap entre cards en el pane central: `10px`
-- Padding general de cada columna: `14px 12px`
-- Padding del shell header: `10px 16px`
-- Gap entre items del shell header: `14px`
-- Border radius cards: `var(--border-radius-lg)` (12px)
-- Border radius badges/chips: `var(--border-radius-md)` (8px)
-- Border radius burbujas WhatsApp: `0 8px 8px 8px` (lead) / `8px 0 8px 8px` (AF)
-- Border radius input WhatsApp: `18px` (pill)
-
-## Mapa del código actual a tocar
-
-Identificadores verificados contra v1.6.0:
+Identificadores reales verificados contra v1.7.0:
 
 | Componente | Línea aprox. | Acción |
 |---|---|---|
-| `.qida-shell` CSS rules | varias | Agregar override con clase `.qida-view-detail` cuando `state.view === 'detail'` para que sea 96vw × 96vh (ver punto 1 de Cambios concretos) |
-| `renderDetail()` | ~2126 | Cambiar a 3 columnas en lugar de 2 |
-| Estructura HTML de `.qida-detail-body` con `.qida-pane-wa` + `.qida-pane-center` | ~2211-2231 | Agregar tercera columna `.qida-pane-ai`, mover `renderAiChat` ahí |
-| `renderAiChat(lead)` | 2329 | Adaptar para vivir en su columna (no al pie del centro). Mantener estado colapsado/activo. |
-| `renderAttachmentsCollapsable(lead)` | nueva v1.6 | Sigue en el pane central como una card más |
-| `injectStyles` o donde estén los estilos | ~1100+ | Reescribir reglas de `.qida-pane-wa`, agregar `.qida-pane-ai`, ajustar `.qida-pane-center` para flex 1.3 |
-| Media queries del detalle | 1503-1505 | Ajustar para nueva distribución 3 columnas. En viewport chico: stack vertical o ocultar pane-wa |
-| `syncShellHeader` rama `view === 'detail'` | 2644 | Sin cambios funcionales, queda como está |
+| `renderCoverage` + `renderCoverageSection` | ~1751 | Eliminar |
+| `renderUnifiedTable` | 1764 | Eliminar y reemplazar por `renderCoolingList` |
+| `buildUnifiedFeed`, `countUnifiedByType`, `countSegmentInActiveType` | ~928, 1070, 1075 | Eliminar |
+| `ActivityService.getUnifiedFeedSync` | ~877 | Eliminar |
+| `renderAssistantPill`, `renderAssistantExpanded`, `renderAssistantHeaderChip`, `renderAssistantPanel`, `syncAssistantHeader` | 1943+, 2703 | Eliminar todas |
+| `SearchService` completo | ~1078 | Eliminar |
+| `MOCK_DAILY_SUGGESTIONS`, `MOCK_SCHEDULED_ACTIVITIES`, `MOCK_MATERIAL_SEARCHABLE` | ~434, 443, 464 | Eliminar |
+| `LeadService` | 807 | Agregar `getCoolingLeads()` que consume mock estático |
+| `daysWithoutTouchLevel(days)` | 2634 | Extender de 4 a 5 bandas (presentational) |
+| `state` | 518 | Eliminar fields obsoletos + agregar 3 nuevos |
+| `syncShellHeader` rama `view === 'dashboard'` | ~2681-2693 | Reescribir mínimo |
+| `renderDashboard` | 1739 | Estructura nueva |
 
-## Cambios concretos en `qida-widget.v1.js`
+## Cambios concretos
 
-### 1. Modal a 96vw × 96vh cuando es detalle
+### 1. Header del archivo
 
-Hoy `.qida-shell` está limitado a `max-width: 1400px` y `max-height: 90vh`. Hay que agregar un override cuando el modal está en vista detalle. Una forma limpia:
+- Bump `VERSION = '1.7.0' → '1.8.0'`.
+- Bloque "Cambios v1.8.0" en el docstring con los 11 puntos UI.
+- Bloque "DEFAULTS QUE TOMÉ EN v1.8.0" debajo del de v1.7.0.
 
-```javascript
-// En syncShellHeader o en una nueva syncShellSizing()
-var shell = document.getElementById('qida-shell');
-if (!shell) return;
-if (state.view === 'detail') {
-    shell.classList.add('qida-view-detail');
-} else {
-    shell.classList.remove('qida-view-detail');
-}
-```
-
-Y agregar al CSS:
-
-```css
-.qida-shell.qida-view-detail {
-    max-width: none;
-    max-height: none;
-    width: 96vw;
-    height: 96vh;
-}
-```
-
-Esto NO afecta al dashboard, solo al detalle. Cuando se vuelve al dashboard con `back-to-dashboard`, la clase se quita y el shell vuelve a sus dimensiones originales.
-
-### 2. Estructura HTML del detalle (3 columnas)
-
-Reemplazar el contenido de `renderDetail()` para que use 3 paneles en lugar de 2:
+### 2. Mock estático que simula la respuesta del backend
 
 ```javascript
-function renderDetail() {
-    var lead = getLead(state.currentLeadId);
-    if (!lead) return renderDashboard();
-    return '<div class="qida-detail">'
-        + '<div class="qida-detail-body">'
-            + '<div class="qida-pane-wa">' + renderWhatsAppPane(lead) + '</div>'
-            + '<div class="qida-pane-center">' + renderCenterPane(lead) + '</div>'
-            + '<div class="qida-pane-ai">' + renderAiChat(lead) + '</div>'
-        + '</div>'
-    + '</div>';
+// TODO[odoo]: cuando esté el endpoint real GET /api/me/leads/cooling, este mock
+// se reemplaza por la llamada al backend. Especificación del endpoint al final.
+// El array está YA filtrado (solo enfriándose), YA priorizado (orden por urgencia),
+// y YA excluye leads con seguimiento agendado futuro (lógica del backend).
+var MOCK_COOLING_LEADS_RESPONSE = [
+    {
+        leadId: 'L121399',
+        contact: 'Marta Ortiz',
+        location: 'Madrid',
+        relation: 'Madre',
+        caredPersonName: 'Concepción',
+        age: 86,
+        serviceType: 'Interno',
+        daysWithoutTouch: 22,
+        lastMessageDate: '27-abr',
+        reason: 'Pidió pensarlo en familia, sin respuesta'
+    },
+    {
+        leadId: 'L121547',
+        contact: 'María Jesús Sánchez',
+        location: 'Madrid',
+        relation: 'Madre',
+        caredPersonName: 'Dolores',
+        age: 88,
+        serviceType: 'Fin de semana',
+        daysWithoutTouch: 17,
+        lastMessageDate: '02-may',
+        reason: 'No responde desde la propuesta hace 17 días'
+    },
+    {
+        leadId: 'L121708',
+        contact: 'David Campos',
+        location: 'Alcalá de Henares',
+        relation: 'Madre',
+        caredPersonName: 'Pilar',
+        age: 84,
+        serviceType: 'Interno',
+        daysWithoutTouch: 11,
+        lastMessageDate: '08-may',
+        reason: 'Dijo que llamaría, hace 11 días sin respuesta'
+    },
+    {
+        leadId: 'L122055',
+        contact: 'José María Recio',
+        location: 'Collado Villalba',
+        relation: 'Madre',
+        caredPersonName: 'Mercedes',
+        age: 85,
+        serviceType: 'Externo',
+        daysWithoutTouch: 9,
+        lastMessageDate: '10-may',
+        reason: 'No contesta WhatsApp ni llamadas hace 9 días'
+    },
+    {
+        leadId: 'L122278',
+        contact: 'Marina Ruben',
+        location: 'Madrid',
+        relation: 'Padre',
+        caredPersonName: 'Manuel',
+        age: 83,
+        serviceType: 'Por horas',
+        daysWithoutTouch: 5,
+        lastMessageDate: '14-may',
+        reason: 'Esperando respuesta tras enviarle el presupuesto'
+    },
+    {
+        leadId: 'L121656',
+        contact: 'Teresa Parellada',
+        location: "Sant Sadurni d'Anoia",
+        relation: 'Padre',
+        caredPersonName: 'Joan',
+        age: 79,
+        serviceType: 'Externo',
+        daysWithoutTouch: 6,
+        lastMessageDate: '13-may',
+        reason: 'Familia comparando con otras dos opciones'
+    },
+    {
+        leadId: 'L122613',
+        contact: 'Jordi Vidal',
+        location: 'Barcelona',
+        relation: 'Madre',
+        caredPersonName: 'Carmen',
+        age: 82,
+        serviceType: 'Interno',
+        daysWithoutTouch: 4,
+        lastMessageDate: '15-may',
+        reason: 'Pidió pensarlo en familia, han pasado 4 días'
+    }
+    // Cubre los 5 rangos de urgencia: warn (4-7), orange (8-14), stale (15-20), danger (21+)
+];
+```
+
+### 3. Servicio: `LeadService.getCoolingLeads`
+
+```javascript
+// TODO[odoo]: GET /api/me/leads/cooling
+// El backend devuelve la cohorte ya filtrada y priorizada.
+// El frontend solo:
+//   1. Consume el response
+//   2. Filtra client-side los que están en state.completedTodayIds (UX local de sesión)
+getCoolingLeads: function () {
+    return simulateLatency(function () {
+        return MOCK_COOLING_LEADS_RESPONSE.filter(function (row) {
+            return !state.completedTodayIds.has(row.leadId);
+        });
+    }, 200);
 }
 ```
 
-Donde `renderCenterPane(lead)` agrupa el contenido informativo (Resumen IA, Contexto, Notas, Actividades, Followers si aplica, Adjuntos colapsable) sin incluir el chat IA al final.
+**El frontend no aplica ningún criterio de negocio**. Solo el filtro de "completados en sesión".
 
-### 3. Layout flex de las 3 columnas
+### 4. Constante de UI
+
+```javascript
+var MAX_VISIBLE = 5;  // Tope visual.
+```
+
+No agregar `COOLING_THRESHOLD_DAYS` ni `WINDOW_DAYS` — son decisiones de backend.
+
+### 5. Shell header mínimo
+
+Modificar la rama `view === 'dashboard'` de `syncShellHeader`:
+
+```javascript
+if (state.view === 'dashboard') {
+    header.innerHTML = ''
+        + '<div class="qida-shell-actions">'
+            + '<span class="qida-esc">Esc para cerrar</span>'
+            + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' 
+                + icon('x', 18) 
+            + '</button>'
+        + '</div>';
+}
+```
+
+Eliminar: bloque `<div class="qida-shell-title">` con Sparkles + título + subtítulo. Anchor del asistente. La rama `view === 'detail'` queda intacta.
+
+### 6. Extender `daysWithoutTouchLevel` a 5 bandas
+
+```javascript
+function daysWithoutTouchLevel(days) {
+    if (days === 0)  return 'lvl-today';
+    if (days <= 3)   return 'lvl-fresh';
+    if (days <= 7)   return 'lvl-warn';
+    if (days <= 14)  return 'lvl-orange';
+    if (days <= 20)  return 'lvl-stale';
+    return 'lvl-danger';
+}
+```
+
+Verificar coherencia con el uso existente en el shell header del detalle (v1.7). Ajustar CSS si hace falta.
+
+### 7. State
+
+Eliminar:
+- `activeTypeChip`, `activeSegmentFilter`, `filtersExpanded`
+- `sortCol`, `sortDir`
+- `searchQuery`
+- `assistantState`, `assistantQuery`, `assistantLoading`, `assistantResults`
+- `coverageBucket`
+
+Agregar:
+```javascript
+completedTodayIds: new Set(),  // Set<leadId>, persiste durante la sesión
+undoToast: null,               // { leadId, expiresAt } | null
+undoTimeoutId: null            // ID del setTimeout activo
+```
+
+Resetear `undoToast`, `undoTimeoutId` al cerrar el modal. **No resetear `completedTodayIds`** — persiste durante la sesión.
+
+### 8. Estructura nueva del dashboard
+
+```javascript
+function renderDashboard() {
+    var feed = LeadService.getCoolingLeadsSync 
+        ? LeadService.getCoolingLeadsSync() 
+        : []; // adaptarlo al patrón async actual si corresponde
+    
+    var visible = feed.slice(0, MAX_VISIBLE);
+    
+    if (visible.length === 0) {
+        return renderEmptyState() + renderUndoToast();
+    }
+    
+    return ''
+        + '<div class="qida-cooling-dashboard">'
+            + renderCoolingHeader()
+            + '<div class="qida-cooling-list">'
+                + visible.map(renderCoolingRow).join('')
+            + '</div>'
+            + '<div class="qida-cooling-actions">'
+                + '<button class="qida-refresh-btn" data-action="refresh-cooling">'
+                    + icon('refresh-cw', 14) + ' Refrescar'
+                + '</button>'
+            + '</div>'
+            + renderUndoToast()
+        + '</div>';
+}
+```
+
+### 9. Headers de columnas
+
+```javascript
+function renderCoolingHeader() {
+    return ''
+        + '<div class="qida-cooling-header">'
+            + '<div>Familia</div>'
+            + '<div>Tipo</div>'
+            + '<div>Por qué</div>'
+            + '<div>Sin contacto</div>'
+            + '<div></div>'
+        + '</div>';
+}
+```
+
+### 10. Fila con 4 columnas
+
+```javascript
+function renderCoolingRow(row) {
+    var level = daysWithoutTouchLevel(row.daysWithoutTouch);
+    var dangerIcon = (row.daysWithoutTouch >= 21) 
+        ? icon('alert-triangle', 14) + ' ' 
+        : '';
+    
+    return ''
+        + '<div class="qida-cooling-row qida-cooling-' + level + '" '
+        +   'data-action="select-lead" data-id="' + esc(row.leadId) + '">'
+            
+            + '<div class="qida-cooling-cell qida-cell-familia">'
+                + '<div class="qida-cell-line1">' + esc(row.contact) + ' · ' + esc(row.location) + '</div>'
+                + '<div class="qida-cell-line2">' + esc(row.relation) + ' ' + esc(row.caredPersonName) + ', ' + row.age + ' años</div>'
+            + '</div>'
+            
+            + '<div class="qida-cooling-cell qida-cell-tipo">'
+                + esc(row.serviceType)
+            + '</div>'
+            
+            + '<div class="qida-cooling-cell qida-cell-porque">'
+                + esc(row.reason || 'Sin actividad reciente')
+            + '</div>'
+            
+            + '<div class="qida-cooling-cell qida-cell-sincontacto">'
+                + '<div class="qida-cell-days">' + dangerIcon + row.daysWithoutTouch + '</div>'
+                + '<div class="qida-cell-date">' + esc(row.lastMessageDate) + '</div>'
+            + '</div>'
+            
+            + '<div class="qida-cooling-row-actions">'
+                + '<button class="qida-mark-done-btn" data-action="mark-done" data-id="' + esc(row.leadId) + '" data-stop>'
+                    + icon('check', 14) + ' Marcar hecho'
+                + '</button>'
+            + '</div>'
+        + '</div>';
+}
+```
+
+Reglas:
+- Click en cualquier parte de la fila (excepto botón) → dispara `select-lead`.
+- Botón "Marcar hecho" con `data-stop` para prevenir propagación.
+- Botón oculto por default, visible al hover.
+
+### 11. Handlers nuevos
+
+```javascript
+case 'mark-done': {
+    state.completedTodayIds.add(id);
+    
+    state.undoToast = {
+        leadId: id,
+        expiresAt: Date.now() + 4000
+    };
+    
+    if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
+    state.undoTimeoutId = setTimeout(function () {
+        state.undoToast = null;
+        rerenderContent();
+    }, 4000);
+    
+    rerenderContent();
+    return;
+}
+
+case 'undo-mark-done': {
+    if (state.undoToast) {
+        state.completedTodayIds.delete(state.undoToast.leadId);
+        state.undoToast = null;
+        if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
+    }
+    rerenderContent();
+    return;
+}
+
+case 'refresh-cooling': {
+    // Re-render llama a getCoolingLeads() nuevamente.
+    // Los completados quedan filtrados naturalmente.
+    rerenderContent();
+    return;
+}
+```
+
+### 12. Toast de undo
+
+```javascript
+function renderUndoToast() {
+    if (!state.undoToast) return '';
+    return ''
+        + '<div class="qida-undo-toast">'
+            + icon('check', 16) + ' Marcado como hecho · '
+            + '<button data-action="undo-mark-done" class="qida-undo-btn">Deshacer</button>'
+        + '</div>';
+}
+```
+
+### 13. Estado vacío
+
+```javascript
+function renderEmptyState() {
+    return ''
+        + '<div class="qida-empty-state">'
+            + 'Estás al día. No hay leads enfriándose.'
+        + '</div>';
+}
+```
+
+Sin emojis. Sin frases motivacionales.
+
+### 14. CSS
 
 ```css
-.qida-detail-body {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
+.qida-cooling-dashboard {
+    padding: 16px;
+    position: relative;
 }
 
-.qida-pane-wa {
-    flex: 0 0 28%;
-    background: #ECE5DD;
-    border-right: 0.5px solid var(--color-border-secondary);
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-
-.qida-pane-center {
-    flex: 1 1 auto;
-    background: #FAFAF9;
-    border-right: 0.5px solid var(--color-border-secondary);
-    padding: 14px 12px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    min-height: 0;
-}
-
-.qida-pane-ai {
-    flex: 0 0 32%;
-    background: var(--color-background-primary);
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-```
-
-Media queries (mantener tres columnas en desktop, degradar elegantemente):
-
-```css
-@media (max-width: 1200px) {
-    .qida-pane-wa { flex: 0 0 26%; }
-    .qida-pane-ai { flex: 0 0 30%; }
-}
-
-@media (max-width: 980px) {
-    /* Ocultar el chat IA en pantallas muy chicas */
-    .qida-pane-ai { display: none; }
-}
-
-@media (max-width: 760px) {
-    /* Mantener solo el pane central */
-    .qida-pane-wa { display: none; }
-}
-```
-
-### 4. Pane WhatsApp
-
-Hoy el pane WhatsApp ya tiene la conversación + input. Solo refinamientos visuales:
-
-- Fondo de la columna: `#ECE5DD`
-- Header pequeño arriba con "Conversación" en uppercase 11px (siguiendo el patrón de las cards del centro):
-
-```html
-<div class="qida-pane-wa-head">
-    <i class="lucide-icon" data-icon="message-circle"></i> Conversación
-</div>
-```
-
-Fondo del header del pane: `rgba(255, 255, 255, 0.6)`, padding `10px 14px`, border-bottom 0.5px sutil.
-
-- Burbujas: fondo blanco (lead) o `#DCF8C6` (AF). Padding `8px 11px`. Font-size `12.5px`.
-- Input al pie estilo WhatsApp: clip + input pill + send circle.
-
-### 5. Pane Información del lead (centro) — cards independientes
-
-Cada sección como una card con esta estructura base:
-
-```html
-<div class="qida-info-card">
-    <div class="qida-info-card-head">
-        <span class="qida-info-card-title">RESUMEN IA</span>
-        <span class="qida-info-card-actions">Editar · Regenerar</span>
-    </div>
-    <div class="qida-info-card-body">
-        ...contenido...
-    </div>
-</div>
-```
-
-Estilos:
-
-```css
-.qida-info-card {
-    background: var(--color-background-primary);
-    border: 0.5px solid var(--color-border-tertiary);
-    border-radius: var(--border-radius-lg);
-    padding: 12px 14px;
-}
-
-.qida-info-card-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 8px;
-}
-
-.qida-info-card-title {
+.qida-cooling-header {
+    display: grid;
+    grid-template-columns: 2fr 1fr 2.5fr 1fr 0fr;
+    gap: 16px;
+    padding: 8px 16px;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--color-text-secondary);
+    color: var(--color-text-tertiary);
     font-weight: 500;
+    border-bottom: 0.5px solid var(--color-border-tertiary);
 }
 
-.qida-info-card-actions {
+.qida-cooling-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.qida-cooling-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr 2.5fr 1fr 0fr;
+    gap: 16px;
+    padding: 12px 16px;
+    border-radius: var(--border-radius-md);
+    cursor: pointer;
+    align-items: center;
+    transition: background-color 120ms;
+    position: relative;
+}
+
+.qida-cooling-row:hover {
+    background: var(--color-background-secondary);
+}
+
+.qida-cooling-row:hover .qida-cooling-row-actions {
+    opacity: 1;
+}
+
+.qida-cooling-row-actions {
+    opacity: 0;
+    transition: opacity 120ms;
+}
+
+/* Bandas de urgencia (background sutil) */
+.qida-cooling-lvl-warn   { background: rgba(245, 158, 11, 0.05); }
+.qida-cooling-lvl-orange { background: rgba(234, 88, 12, 0.07); }
+.qida-cooling-lvl-stale  { background: rgba(220, 38, 38, 0.06); }
+.qida-cooling-lvl-danger { background: rgba(220, 38, 38, 0.10); }
+
+.qida-cell-familia .qida-cell-line1 {
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--color-text-primary);
+}
+.qida-cell-familia .qida-cell-line2 {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+.qida-cell-tipo {
+    font-size: 13px;
+    color: var(--color-text-primary);
+}
+
+.qida-cell-porque {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    line-height: 1.4;
+}
+
+.qida-cell-sincontacto .qida-cell-days {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+}
+.qida-cell-sincontacto .qida-cell-date {
     font-size: 11px;
     color: var(--color-text-tertiary);
 }
-```
 
-**Secciones a renderizar dentro del pane central, en este orden**:
-
-1. **Resumen IA** — card con highlight verde sutil para el texto del resumen:
-   ```html
-   <div class="qida-info-card-body" style="background: #E1F5EE; border-radius: 8px; padding: 10px 12px; color: #143C32; font-size: 13px; line-height: 1.55;">
-       [texto del resumen]
-   </div>
-   ```
-   Header con título "Resumen IA" + acciones "Editar · Regenerar".
-
-2. **Contexto del cuidado** — card con grid de 2 columnas:
-   ```css
-   .qida-context-grid {
-       display: grid;
-       grid-template-columns: 1fr 1fr;
-       gap: 10px 16px;
-       font-size: 12.5px;
-   }
-   ```
-   Items: Persona cuidada / Relación / Condición / Ubicación / Tipo de servicio / Urgencia. Cada item con label arriba (11px terciario) y valor abajo (12.5px principal).
-   Urgencia destacada en `#993C1D` cuando es "Muy urgente".
-
-3. **Notas internas** — card simple con texto + opción "+ Añadir" en el header.
-
-4. **Próximas actividades** — card con items horizontales:
-   ```html
-   <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px;">
-       <span style="width: 6px; height: 6px; border-radius: 50%; background: #0F6E56;"></span>
-       Llamar para confirmar fecha de inicio
-       <span style="color: terciario; margin-left: auto; font-size: 11px;">Hoy</span>
-   </div>
-   ```
-
-5. **Followers** — si aplica, manteniendo el render actual de v1.6.
-
-6. **Adjuntos colapsable** — el `renderAttachmentsCollapsable` actual de v1.6, sigue exactamente igual. Card con header clickeable y body expandible.
-
-### 6. Pane Chat IA (columna derecha)
-
-Estructura:
-
-```html
-<div class="qida-pane-ai">
-    <div class="qida-pane-ai-head">
-        <i class="lucide-icon" data-icon="sparkles"></i> Asistente IA
-    </div>
-    <div class="qida-pane-ai-body">
-        [conversación si hay aiChatHistory, sino vacío]
-    </div>
-    <div class="qida-pane-ai-foot">
-        [si !hay conversación: chips arriba del input]
-        [input siempre presente al pie]
-    </div>
-</div>
-```
-
-Estilos del header del pane:
-
-```css
-.qida-pane-ai-head {
-    background: #F7FAF8;
-    border-bottom: 0.5px solid var(--color-border-tertiary);
-    padding: 10px 14px;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+.qida-mark-done-btn {
+    background: white;
+    border: 0.5px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md);
+    padding: 6px 10px;
+    font-size: 12px;
     color: #0F6E56;
-    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.qida-cooling-actions {
     display: flex;
+    justify-content: center;
+    margin-top: 16px;
+}
+
+.qida-refresh-btn {
+    background: transparent;
+    border: 0.5px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md);
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    display: inline-flex;
     align-items: center;
     gap: 6px;
 }
+
+.qida-undo-toast {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1F2937;
+    color: white;
+    padding: 10px 16px;
+    border-radius: var(--border-radius-md);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    z-index: 10;
+}
+
+.qida-undo-btn {
+    background: transparent;
+    border: none;
+    color: #6EE7B7;
+    cursor: pointer;
+    font-weight: 500;
+    padding: 0 4px;
+}
+
+.qida-empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    color: var(--color-text-secondary);
+    font-size: 14px;
+}
 ```
-
-#### Estado colapsado (sin conversación)
-
-Cuando `state.aiChatHistory[leadId]` está vacío o ausente:
-
-- El body del pane queda vacío (puede mostrar un microcopy gris claro tipo "Pregunta sobre este lead o usa un atajo abajo").
-- En el footer del pane, **arriba del input**, los 3 chips fijos:
-  - `Material marketing` (icono `book-open` o similar)
-  - `Sugerir mensaje` (icono `message-square`)
-  - `Reactivar sin presionar` (icono `seedling` o `leaf`)
-- Estilos de los chips: pill rounded, fondo blanco, border 0.5px secundario, hover ligero, padding `6px 10px`, font-size `12px`, color principal.
-
-#### Estado activo (con conversación)
-
-- Los 3 chips desaparecen.
-- El body del pane se llena con el historial:
-  - Mensajes del usuario: avatar circular `var(--color-background-secondary)` con texto "Tú" 11px medium secundario, mensaje a la derecha en regular sin background.
-  - Mensajes de la IA: avatar circular `#E1F5EE` con icono `sparkles` color `#0F6E56`, mensaje a la derecha sin background, padding-top sutil.
-
-#### Respuestas estructuradas según tipo
-
-Para `sugerir-mensaje`: variantes en cards con fondo `var(--color-background-secondary)`:
-
-```html
-<div style="background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 10px 12px; margin-bottom: 8px;">
-    <div style="font-size: 11px; color: #0F6E56; font-weight: 500; margin-bottom: 4px;">
-        Más cálida
-    </div>
-    <div style="font-size: 12.5px; color: principal; line-height: 1.5; margin-bottom: 8px;">
-        [texto de la variante]
-    </div>
-    <button style="background: white; border: 0.5px solid secundario; border-radius: var(--border-radius-md); padding: 4px 10px; font-size: 11px; cursor: pointer; color: #0F6E56;">
-        Usar este mensaje
-    </button>
-</div>
-```
-
-Para `material-marketing`: cards con título + descripción + acción (Adjuntar al próximo mensaje / Compartir link), siguiendo el mismo patrón visual.
-
-Para `reactivar-sin-presionar`: cards con título del enfoque + racional + ejemplo de mensaje + botón "Usar este mensaje".
-
-#### Input del footer del chat IA
-
-Container con fondo `var(--color-background-secondary)`, border-radius `var(--border-radius-md)`, padding `8px 12px`. Estructura: icono `sparkles` verde + input plano + botón send con flecha.
-
-```html
-<div class="qida-ai-input">
-    <i class="lucide-icon sparkles" style="color: #0F6E56"></i>
-    <input type="text" placeholder="Pregunta sobre este lead..." />
-    <button class="qida-ai-send"><i class="lucide-icon arrow-right"></i></button>
-</div>
-```
-
-### 7. Botón "Usar este mensaje" — comportamiento
-
-Sin cambios respecto a v1.6.0: copia el texto resuelto (con placeholders aplicados al lead activo) al `state.draftMessage` del pane WhatsApp y el textarea se actualiza. La AF puede editar antes de enviar.
 
 ## Cleanup
 
-Eliminar:
-- El render del chat IA al pie del `qida-pane-center` (en v1.6 vivía dentro del pane central, ahora vive en su columna propia).
-- La regla CSS de `.qida-center-foot` si existía como contenedor del chat IA al pie.
+**Funciones**: `renderCoverage`, `renderCoverageSection`, `renderUnifiedTable` y sus helpers, `buildUnifiedFeed`, `countUnifiedByType`, `countSegmentInActiveType`, `ActivityService.getUnifiedFeedSync`, `ActivityService.getDailySuggestions`, `ActivityService.getScheduledForToday` (verificar sin otros consumidores), `renderAssistantPill`, `renderAssistantExpanded`, `renderAssistantHeaderChip`, `renderAssistantPanel`, `syncAssistantHeader`, `SearchService` completo, `renderSortHeader`, handlers de sort.
 
-Conservar (no tocar):
-- `state.aiChatHistory`, `state.aiChatDraft`, `state.draftMessage`, `state.attachmentsExpanded`, `state.__waNeedsScroll`
-- `pushAiChat`, `handleAiChip`, `renderAiPayload`, `renderAiChat` (refactorizar internamente, no eliminar)
-- `sendWhatsAppMock`, `scrollWaToBottom`, `autoResizeTextarea`
-- `renderAttachmentsCollapsable`
-- `syncShellHeader` (ambas ramas)
-- Persistencia de `aiChatHistory` por leadId (sin cambios respecto a v1.6.0)
-- Schedule modal y sus funciones de reserva
-- Todo el dashboard
+**State**: ver punto 7.
 
-## Layout final del detalle
+**Handlers**: `toggle-filters`, `set-type-chip`, `set-segment`, `clear-segment`, `sort-column`, `open-assistant`, `close-assistant`, `submit-search`, atajo `/`.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│ [Volver] Familia Roge Barcelo  L122131  [Sin contacto: 2d]  Marido Albert · 76a · BCN  [X] │
-├─────────────────────┬───────────────────────────────────┬──────────────────────────────────┤
-│ Pane WhatsApp 28%   │ Pane Información del lead 40%     │ Pane Chat IA 32%                 │
-│                     │                                   │                                  │
-│ Conversación        │ Resumen IA (card destacada)       │ Asistente IA (header verde sutil)│
-│ (mensajes)          │ Contexto del cuidado (card grid)  │                                  │
-│                     │ Notas internas (card)             │ [conversación si hay]            │
-│                     │ Próximas actividades (card)       │                                  │
-│                     │ Adjuntos (card colapsable)        │                                  │
-│ ─────────────────   │                                   │                                  │
-│ [input WA]          │ scroll vertical                   │ ── footer ──                     │
-│                     │                                   │ [3 chips si vacío]               │
-│                     │                                   │ [input al pie]                   │
-└─────────────────────┴───────────────────────────────────┴──────────────────────────────────┘
+**Mocks**: `MOCK_DAILY_SUGGESTIONS`, `MOCK_SCHEDULED_ACTIVITIES`, `MOCK_MATERIAL_SEARCHABLE`.
 
-Modal: 96vw × 96vh sobre fondo overlay oscuro
-```
+**CSS**: estilos de cobertura, toolbar, asistente.
+
+## Conservar (no tocar)
+
+- Todo el detalle del lead v1.7 (3 columnas, chat IA, etc.)
+- State del detalle (`draftMessage`, `attachmentsExpanded`, `aiChatHistory`, `aiChatDraft`, `__waNeedsScroll`)
+- `syncShellHeader` rama `view === 'detail'`
+- Clase condicional `.qida-view-detail` para modal 96vw × 96vh
+- Schedule modal completo, funciones de reserva
+- `EDITS.temperatures`, getters/setters relacionados
+- `MOCK_LEADS` (se consume al abrir el detalle), `MOCK_WHATSAPP`, `MOCK_ATTACHMENTS`, `MOCK_CARE_CONTEXT`
+- `LeadService` resto de métodos
+- Handlers `select-lead`, `back-to-dashboard`, `close-modal`
 
 ## Validación post-cambio
 
 - `node --check qida-widget.v1.js`
-- Confirmar log `[QidaAssistant] Assistant loaded (v1.7.0)` en consola.
-- Smoke visual contra el mockup adjunto:
-  - Modal del detalle ocupa 96vw × 96vh.
-  - Tres columnas claramente delimitadas con borders sutiles.
-  - WhatsApp con fondo crema, info del lead con fondo `#FAFAF9`, chat IA con fondo blanco.
-  - Pane info: cada sección es una card blanca independiente con border sutil.
-  - Resumen IA con highlight verde claro (`#E1F5EE`) en el body de la card.
-  - Header del pane chat IA en verde Qida sutil (`#F7FAF8` con texto `#0F6E56`).
-  - Sin conversación IA: 3 chips visibles arriba del input.
-  - Con conversación IA: chips desaparecen, mensajes con avatars (Tú / IA).
-  - "Usar este mensaje" sigue copiando el texto al textarea del pane WhatsApp.
-  - Al volver al dashboard, las dimensiones del modal vuelven a las originales (max-width 1400px / 90vh) — el dashboard no debe cambiar de tamaño.
-  - El chat IA persiste por leadId al cerrar/reabrir el detalle del mismo lead (comportamiento ya validado en v1.6.0).
+- Confirmar log `[QidaAssistant] Assistant loaded (v1.8.0)` en consola.
+- Smoke visual:
+  - Shell header solo muestra "Esc para cerrar" + X.
+  - Sin cobertura, sin toolbar, sin tabs, sin filtros.
+  - Tabla muestra 4 columnas: Familia, Tipo, Por qué, Sin contacto.
+  - Headers de columnas visibles arriba.
+  - Máximo 5 filas según `MAX_VISIBLE`.
+  - Background sutil por urgencia (verificable cubriendo los 5 rangos con el mock).
+  - Lead con 21+ días muestra ícono warning.
+  - Hover muestra botón "Marcar hecho" a la derecha.
+  - Click en celda (no en botón) → abre detalle v1.7.
+  - Click en "Marcar hecho" → fila desaparece + toast inferior 4s + opción Deshacer.
+  - Click en "Deshacer" → fila vuelve.
+  - Sin Deshacer pasados los 4s → permanente en sesión.
+  - Click en "Refrescar" → llama nuevamente al servicio, los completados quedan filtrados.
+  - Si todas marcadas: "Estás al día. No hay leads enfriándose."
+  - Detalle v1.7 sigue funcionando intacto.
 
-## Output esperado
+## Riesgos a vigilar
 
-1. `qida-widget.v1.js` v1.7.0 con el detalle rediseñado a 3 columnas y el sistema visual aplicado.
-2. Bloque "Cambios v1.7.0" en el docstring + bloque "DEFAULTS QUE TOMÉ EN v1.7.0" con cualquier decisión visual que hayas tenido que tomar (ej: ajustes específicos del border radius si el sistema actual usa otros valores, etc.).
-3. Cleanup completo del chat IA al pie del pane central (ya no vive ahí).
-4. Validación OK, smoke test contra el mockup adjunto.
-5. Sin tocar el dashboard, sin tocar el Schedule modal, sin tocar las funciones de reserva v1.7+.
+- **Click en fila vs botón "Marcar hecho"**: usar `data-stop` + `event.stopPropagation()`.
+- **Race condition de undoToast**: `clearTimeout(state.undoTimeoutId)` antes de programar el siguiente.
+- **`completedTodayIds` persiste durante la sesión** sin localStorage. Al recargar página se vacía.
 
-## Nota sobre la imagen adjunta
+---
 
-La imagen que va junto a este prompt muestra el layout final con un caso real (Familia Roge Barcelo). Úsala como referencia visual pero respetá los valores técnicos especificados en este prompt cuando haya discrepancia (ej: si la imagen muestra un color levemente distinto al hex especificado acá, usa el hex de este prompt).
+## TODOs para backend (especificación, NO implementar en frontend)
+
+Esta sección documenta las decisiones de negocio que el endpoint debe cumplir cuando se cablee. **No agregar esta lógica al frontend en esta iteración.**
+
+### Endpoint
+
+`GET /api/me/leads/cooling`
+
+### Cohorte (criterio operativo de "enfriándose")
+
+A confirmar con Pablo Rodrigo + Adriana Barro:
+- Lead dentro de ventana de **15 días** desde la primera llamada (`entryDate`).
+- `daysWithoutTouch >= 4` (umbral configurable).
+- **NO tiene `nextScheduledFollowUp` con fecha futura** (si la AF ya agendó próximo contacto, el lead no está enfriándose por inacción, está "esperando por diseño" — ej: lead con interna que arranca dentro de un mes).
+- NO histórico, NO convertido.
+- NO filtrar por `temperature` del lead.
+
+### Orden
+
+- Primario: `daysWithoutTouch` descendente.
+- Secundario: proximidad a salida de ventana de 15 días.
+
+### Forma del response
+
+```json
+[
+    {
+        "leadId": "L121399",
+        "contact": "Marta Ortiz",
+        "location": "Madrid",
+        "relation": "Madre",
+        "caredPersonName": "Concepción",
+        "age": 86,
+        "serviceType": "Interno",
+        "daysWithoutTouch": 22,
+        "lastMessageDate": "27-abr",
+        "reason": "Pidió pensarlo en familia, sin respuesta"
+    }
+]
+```
+
+Notas:
+- `reason` puede ser derivado de la actividad de Odoo o ser una columna agregada manualmente por la AF.
+- `lastMessageDate` viene formateado para visualización ("27-abr"). Si el backend prefiere ISO, el frontend formatea — pero agrega lógica que se prefiere evitar.
+- `daysWithoutTouch` viene calculado del backend.
+
+### Endpoint de "marcar hecho" (futuro)
+
+`POST /api/leads/:leadId/mark-done` (sugerido).
+
+Cuando esté disponible, el handler `mark-done` del frontend hace la llamada **después del undo de 4s** (optimistic UI con confirmación post-undo-window). Si falla, se restaura la fila y se muestra error. Por ahora en MVP solo state local de sesión.
+
+### Endpoint de "refrescar"
+
+No requiere endpoint adicional. `Refrescar` simplemente vuelve a llamar a `GET /api/me/leads/cooling`.
