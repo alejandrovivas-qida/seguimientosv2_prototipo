@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Qida Assistant — Dev Loader
 // @namespace    qida-seguimientos
-// @version      1.0
+// @version      1.1
 // @description  Carga el widget de Qida en Odoo durante desarrollo
 // @match        https://erp.qida.es/*
+// @require      https://cdn.jsdelivr.net/npm/dompurify@3.2.0/dist/purify.min.js
 // @grant        none
 // ==/UserScript==
 

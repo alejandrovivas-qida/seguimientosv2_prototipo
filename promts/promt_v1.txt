@@ -1,654 +1,445 @@
-# Prompt para Cursor — Dashboard simplificado v1.8.0 (solo UI)
-
-Iteración de UI del dashboard. Pivote de "workspace multi-pieza" a **una sola vista enfocada: lista priorizada de leads enfriándose**. Bump `v1.7.0 → v1.8.0`.
-
-**Alcance estricto: solo UI**. El frontend consume un mock estático que simula la respuesta del backend. Toda la lógica de criterio, filtrado y ordenamiento queda en backend (documentada al final como especificación). No agregar fórmulas, umbrales ni cómputos de negocio al cliente.
-
-Asume que v1.7.0 (rediseño visual del detalle a 3 columnas) ya está aplicado. **Este prompt no toca el detalle del lead**.
-
-## Decisiones cerradas (UI)
-
-1. Eliminar tabs "Actividades" y "Leads". Vista única.
-2. Eliminar bloque "Tu cobertura" completo.
-3. Eliminar botón "Filtros" y todo el state asociado.
-4. Eliminar pill "Pregunta cualquier cosa..." y todo el bloque del asistente del dashboard.
-5. Header del shell mínimo: solo "Esc para cerrar" + X.
-6. Tabla simplificada a 4 columnas:
-   - **Familia** — contacto + ubicación arriba, relación + persona cuidada + edad abajo
-   - **Tipo** — tipo de servicio del lead
-   - **Por qué** — razón concreta del enfriamiento
-   - **Sin contacto** — días grande + fecha del último mensaje pequeño debajo
-7. Tope visual: **5 leads** (`MAX_VISIBLE = 5`, constante de UI).
-8. Botón "Refrescar" debajo de la lista. Click → vuelve a llamar al servicio. Los completados en sesión quedan filtrados client-side.
-9. Estado vacío / al día: `"Estás al día. No hay leads enfriándose."`
-10. Degradación de color por urgencia (presentational, basado en `daysWithoutTouch`):
-    - 0-3: normal
-    - 4-7: amarillo muy sutil
-    - 8-14: naranja sutil
-    - 15-20: rojo sutil
-    - 21+: rojo + ícono `alert-triangle` antes del número
-11. Acciones por fila:
-    - Click en celda (excepto botón) → abre el detalle del lead
-    - Hover muestra botón "Marcar hecho" → click ejecuta directo + toast inferior `"Marcado como hecho · Deshacer"` durante 4s
-
-## Mapa del código a tocar
-
-Identificadores reales verificados contra v1.7.0:
-
-| Componente | Línea aprox. | Acción |
-|---|---|---|
-| `renderCoverage` + `renderCoverageSection` | ~1751 | Eliminar |
-| `renderUnifiedTable` | 1764 | Eliminar y reemplazar por `renderCoolingList` |
-| `buildUnifiedFeed`, `countUnifiedByType`, `countSegmentInActiveType` | ~928, 1070, 1075 | Eliminar |
-| `ActivityService.getUnifiedFeedSync` | ~877 | Eliminar |
-| `renderAssistantPill`, `renderAssistantExpanded`, `renderAssistantHeaderChip`, `renderAssistantPanel`, `syncAssistantHeader` | 1943+, 2703 | Eliminar todas |
-| `SearchService` completo | ~1078 | Eliminar |
-| `MOCK_DAILY_SUGGESTIONS`, `MOCK_SCHEDULED_ACTIVITIES`, `MOCK_MATERIAL_SEARCHABLE` | ~434, 443, 464 | Eliminar |
-| `LeadService` | 807 | Agregar `getCoolingLeads()` que consume mock estático |
-| `daysWithoutTouchLevel(days)` | 2634 | Extender de 4 a 5 bandas (presentational) |
-| `state` | 518 | Eliminar fields obsoletos + agregar 3 nuevos |
-| `syncShellHeader` rama `view === 'dashboard'` | ~2681-2693 | Reescribir mínimo |
-| `renderDashboard` | 1739 | Estructura nueva |
-
-## Cambios concretos
-
-### 1. Header del archivo
-
-- Bump `VERSION = '1.7.0' → '1.8.0'`.
-- Bloque "Cambios v1.8.0" en el docstring con los 11 puntos UI.
-- Bloque "DEFAULTS QUE TOMÉ EN v1.8.0" debajo del de v1.7.0.
-
-### 2. Mock estático que simula la respuesta del backend
-
-```javascript
-// TODO[odoo]: cuando esté el endpoint real GET /api/me/leads/cooling, este mock
-// se reemplaza por la llamada al backend. Especificación del endpoint al final.
-// El array está YA filtrado (solo enfriándose), YA priorizado (orden por urgencia),
-// y YA excluye leads con seguimiento agendado futuro (lógica del backend).
-var MOCK_COOLING_LEADS_RESPONSE = [
-    {
-        leadId: 'L121399',
-        contact: 'Marta Ortiz',
-        location: 'Madrid',
-        relation: 'Madre',
-        caredPersonName: 'Concepción',
-        age: 86,
-        serviceType: 'Interno',
-        daysWithoutTouch: 22,
-        lastMessageDate: '27-abr',
-        reason: 'Pidió pensarlo en familia, sin respuesta'
-    },
-    {
-        leadId: 'L121547',
-        contact: 'María Jesús Sánchez',
-        location: 'Madrid',
-        relation: 'Madre',
-        caredPersonName: 'Dolores',
-        age: 88,
-        serviceType: 'Fin de semana',
-        daysWithoutTouch: 17,
-        lastMessageDate: '02-may',
-        reason: 'No responde desde la propuesta hace 17 días'
-    },
-    {
-        leadId: 'L121708',
-        contact: 'David Campos',
-        location: 'Alcalá de Henares',
-        relation: 'Madre',
-        caredPersonName: 'Pilar',
-        age: 84,
-        serviceType: 'Interno',
-        daysWithoutTouch: 11,
-        lastMessageDate: '08-may',
-        reason: 'Dijo que llamaría, hace 11 días sin respuesta'
-    },
-    {
-        leadId: 'L122055',
-        contact: 'José María Recio',
-        location: 'Collado Villalba',
-        relation: 'Madre',
-        caredPersonName: 'Mercedes',
-        age: 85,
-        serviceType: 'Externo',
-        daysWithoutTouch: 9,
-        lastMessageDate: '10-may',
-        reason: 'No contesta WhatsApp ni llamadas hace 9 días'
-    },
-    {
-        leadId: 'L122278',
-        contact: 'Marina Ruben',
-        location: 'Madrid',
-        relation: 'Padre',
-        caredPersonName: 'Manuel',
-        age: 83,
-        serviceType: 'Por horas',
-        daysWithoutTouch: 5,
-        lastMessageDate: '14-may',
-        reason: 'Esperando respuesta tras enviarle el presupuesto'
-    },
-    {
-        leadId: 'L121656',
-        contact: 'Teresa Parellada',
-        location: "Sant Sadurni d'Anoia",
-        relation: 'Padre',
-        caredPersonName: 'Joan',
-        age: 79,
-        serviceType: 'Externo',
-        daysWithoutTouch: 6,
-        lastMessageDate: '13-may',
-        reason: 'Familia comparando con otras dos opciones'
-    },
-    {
-        leadId: 'L122613',
-        contact: 'Jordi Vidal',
-        location: 'Barcelona',
-        relation: 'Madre',
-        caredPersonName: 'Carmen',
-        age: 82,
-        serviceType: 'Interno',
-        daysWithoutTouch: 4,
-        lastMessageDate: '15-may',
-        reason: 'Pidió pensarlo en familia, han pasado 4 días'
-    }
-    // Cubre los 5 rangos de urgencia: warn (4-7), orange (8-14), stale (15-20), danger (21+)
-];
-```
-
-### 3. Servicio: `LeadService.getCoolingLeads`
-
-```javascript
-// TODO[odoo]: GET /api/me/leads/cooling
-// El backend devuelve la cohorte ya filtrada y priorizada.
-// El frontend solo:
-//   1. Consume el response
-//   2. Filtra client-side los que están en state.completedTodayIds (UX local de sesión)
-getCoolingLeads: function () {
-    return simulateLatency(function () {
-        return MOCK_COOLING_LEADS_RESPONSE.filter(function (row) {
-            return !state.completedTodayIds.has(row.leadId);
-        });
-    }, 200);
-}
-```
-
-**El frontend no aplica ningún criterio de negocio**. Solo el filtro de "completados en sesión".
-
-### 4. Constante de UI
-
-```javascript
-var MAX_VISIBLE = 5;  // Tope visual.
-```
-
-No agregar `COOLING_THRESHOLD_DAYS` ni `WINDOW_DAYS` — son decisiones de backend.
-
-### 5. Shell header mínimo
-
-Modificar la rama `view === 'dashboard'` de `syncShellHeader`:
-
-```javascript
-if (state.view === 'dashboard') {
-    header.innerHTML = ''
-        + '<div class="qida-shell-actions">'
-            + '<span class="qida-esc">Esc para cerrar</span>'
-            + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' 
-                + icon('x', 18) 
-            + '</button>'
-        + '</div>';
-}
-```
-
-Eliminar: bloque `<div class="qida-shell-title">` con Sparkles + título + subtítulo. Anchor del asistente. La rama `view === 'detail'` queda intacta.
-
-### 6. Extender `daysWithoutTouchLevel` a 5 bandas
-
-```javascript
-function daysWithoutTouchLevel(days) {
-    if (days === 0)  return 'lvl-today';
-    if (days <= 3)   return 'lvl-fresh';
-    if (days <= 7)   return 'lvl-warn';
-    if (days <= 14)  return 'lvl-orange';
-    if (days <= 20)  return 'lvl-stale';
-    return 'lvl-danger';
-}
-```
-
-Verificar coherencia con el uso existente en el shell header del detalle (v1.7). Ajustar CSS si hace falta.
-
-### 7. State
-
-Eliminar:
-- `activeTypeChip`, `activeSegmentFilter`, `filtersExpanded`
-- `sortCol`, `sortDir`
-- `searchQuery`
-- `assistantState`, `assistantQuery`, `assistantLoading`, `assistantResults`
-- `coverageBucket`
-
-Agregar:
-```javascript
-completedTodayIds: new Set(),  // Set<leadId>, persiste durante la sesión
-undoToast: null,               // { leadId, expiresAt } | null
-undoTimeoutId: null            // ID del setTimeout activo
-```
-
-Resetear `undoToast`, `undoTimeoutId` al cerrar el modal. **No resetear `completedTodayIds`** — persiste durante la sesión.
-
-### 8. Estructura nueva del dashboard
-
-```javascript
-function renderDashboard() {
-    var feed = LeadService.getCoolingLeadsSync 
-        ? LeadService.getCoolingLeadsSync() 
-        : []; // adaptarlo al patrón async actual si corresponde
-    
-    var visible = feed.slice(0, MAX_VISIBLE);
-    
-    if (visible.length === 0) {
-        return renderEmptyState() + renderUndoToast();
-    }
-    
-    return ''
-        + '<div class="qida-cooling-dashboard">'
-            + renderCoolingHeader()
-            + '<div class="qida-cooling-list">'
-                + visible.map(renderCoolingRow).join('')
-            + '</div>'
-            + '<div class="qida-cooling-actions">'
-                + '<button class="qida-refresh-btn" data-action="refresh-cooling">'
-                    + icon('refresh-cw', 14) + ' Refrescar'
-                + '</button>'
-            + '</div>'
-            + renderUndoToast()
-        + '</div>';
-}
-```
-
-### 9. Headers de columnas
-
-```javascript
-function renderCoolingHeader() {
-    return ''
-        + '<div class="qida-cooling-header">'
-            + '<div>Familia</div>'
-            + '<div>Tipo</div>'
-            + '<div>Por qué</div>'
-            + '<div>Sin contacto</div>'
-            + '<div></div>'
-        + '</div>';
-}
-```
-
-### 10. Fila con 4 columnas
-
-```javascript
-function renderCoolingRow(row) {
-    var level = daysWithoutTouchLevel(row.daysWithoutTouch);
-    var dangerIcon = (row.daysWithoutTouch >= 21) 
-        ? icon('alert-triangle', 14) + ' ' 
-        : '';
-    
-    return ''
-        + '<div class="qida-cooling-row qida-cooling-' + level + '" '
-        +   'data-action="select-lead" data-id="' + esc(row.leadId) + '">'
-            
-            + '<div class="qida-cooling-cell qida-cell-familia">'
-                + '<div class="qida-cell-line1">' + esc(row.contact) + ' · ' + esc(row.location) + '</div>'
-                + '<div class="qida-cell-line2">' + esc(row.relation) + ' ' + esc(row.caredPersonName) + ', ' + row.age + ' años</div>'
-            + '</div>'
-            
-            + '<div class="qida-cooling-cell qida-cell-tipo">'
-                + esc(row.serviceType)
-            + '</div>'
-            
-            + '<div class="qida-cooling-cell qida-cell-porque">'
-                + esc(row.reason || 'Sin actividad reciente')
-            + '</div>'
-            
-            + '<div class="qida-cooling-cell qida-cell-sincontacto">'
-                + '<div class="qida-cell-days">' + dangerIcon + row.daysWithoutTouch + '</div>'
-                + '<div class="qida-cell-date">' + esc(row.lastMessageDate) + '</div>'
-            + '</div>'
-            
-            + '<div class="qida-cooling-row-actions">'
-                + '<button class="qida-mark-done-btn" data-action="mark-done" data-id="' + esc(row.leadId) + '" data-stop>'
-                    + icon('check', 14) + ' Marcar hecho'
-                + '</button>'
-            + '</div>'
-        + '</div>';
-}
-```
-
-Reglas:
-- Click en cualquier parte de la fila (excepto botón) → dispara `select-lead`.
-- Botón "Marcar hecho" con `data-stop` para prevenir propagación.
-- Botón oculto por default, visible al hover.
-
-### 11. Handlers nuevos
-
-```javascript
-case 'mark-done': {
-    state.completedTodayIds.add(id);
-    
-    state.undoToast = {
-        leadId: id,
-        expiresAt: Date.now() + 4000
-    };
-    
-    if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
-    state.undoTimeoutId = setTimeout(function () {
-        state.undoToast = null;
-        rerenderContent();
-    }, 4000);
-    
-    rerenderContent();
-    return;
-}
-
-case 'undo-mark-done': {
-    if (state.undoToast) {
-        state.completedTodayIds.delete(state.undoToast.leadId);
-        state.undoToast = null;
-        if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
-    }
-    rerenderContent();
-    return;
-}
-
-case 'refresh-cooling': {
-    // Re-render llama a getCoolingLeads() nuevamente.
-    // Los completados quedan filtrados naturalmente.
-    rerenderContent();
-    return;
-}
-```
-
-### 12. Toast de undo
-
-```javascript
-function renderUndoToast() {
-    if (!state.undoToast) return '';
-    return ''
-        + '<div class="qida-undo-toast">'
-            + icon('check', 16) + ' Marcado como hecho · '
-            + '<button data-action="undo-mark-done" class="qida-undo-btn">Deshacer</button>'
-        + '</div>';
-}
-```
-
-### 13. Estado vacío
-
-```javascript
-function renderEmptyState() {
-    return ''
-        + '<div class="qida-empty-state">'
-            + 'Estás al día. No hay leads enfriándose.'
-        + '</div>';
-}
-```
-
-Sin emojis. Sin frases motivacionales.
-
-### 14. CSS
-
-```css
-.qida-cooling-dashboard {
-    padding: 16px;
-    position: relative;
-}
-
-.qida-cooling-header {
-    display: grid;
-    grid-template-columns: 2fr 1fr 2.5fr 1fr 0fr;
-    gap: 16px;
-    padding: 8px 16px;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--color-text-tertiary);
-    font-weight: 500;
-    border-bottom: 0.5px solid var(--color-border-tertiary);
-}
-
-.qida-cooling-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 8px;
-}
-
-.qida-cooling-row {
-    display: grid;
-    grid-template-columns: 2fr 1fr 2.5fr 1fr 0fr;
-    gap: 16px;
-    padding: 12px 16px;
-    border-radius: var(--border-radius-md);
-    cursor: pointer;
-    align-items: center;
-    transition: background-color 120ms;
-    position: relative;
-}
-
-.qida-cooling-row:hover {
-    background: var(--color-background-secondary);
-}
-
-.qida-cooling-row:hover .qida-cooling-row-actions {
-    opacity: 1;
-}
-
-.qida-cooling-row-actions {
-    opacity: 0;
-    transition: opacity 120ms;
-}
-
-/* Bandas de urgencia (background sutil) */
-.qida-cooling-lvl-warn   { background: rgba(245, 158, 11, 0.05); }
-.qida-cooling-lvl-orange { background: rgba(234, 88, 12, 0.07); }
-.qida-cooling-lvl-stale  { background: rgba(220, 38, 38, 0.06); }
-.qida-cooling-lvl-danger { background: rgba(220, 38, 38, 0.10); }
-
-.qida-cell-familia .qida-cell-line1 {
-    font-weight: 500;
-    font-size: 13px;
-    color: var(--color-text-primary);
-}
-.qida-cell-familia .qida-cell-line2 {
-    font-size: 12px;
-    color: var(--color-text-secondary);
-}
-
-.qida-cell-tipo {
-    font-size: 13px;
-    color: var(--color-text-primary);
-}
-
-.qida-cell-porque {
-    font-size: 13px;
-    color: var(--color-text-secondary);
-    line-height: 1.4;
-}
-
-.qida-cell-sincontacto .qida-cell-days {
-    font-size: 18px;
-    font-weight: 500;
-    color: var(--color-text-primary);
-}
-.qida-cell-sincontacto .qida-cell-date {
-    font-size: 11px;
-    color: var(--color-text-tertiary);
-}
-
-.qida-mark-done-btn {
-    background: white;
-    border: 0.5px solid var(--color-border-secondary);
-    border-radius: var(--border-radius-md);
-    padding: 6px 10px;
-    font-size: 12px;
-    color: #0F6E56;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-}
-
-.qida-cooling-actions {
-    display: flex;
-    justify-content: center;
-    margin-top: 16px;
-}
-
-.qida-refresh-btn {
-    background: transparent;
-    border: 0.5px solid var(--color-border-secondary);
-    border-radius: var(--border-radius-md);
-    padding: 8px 14px;
-    font-size: 13px;
-    color: var(--color-text-primary);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.qida-undo-toast {
-    position: absolute;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #1F2937;
-    color: white;
-    padding: 10px 16px;
-    border-radius: var(--border-radius-md);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    z-index: 10;
-}
-
-.qida-undo-btn {
-    background: transparent;
-    border: none;
-    color: #6EE7B7;
-    cursor: pointer;
-    font-weight: 500;
-    padding: 0 4px;
-}
-
-.qida-empty-state {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 200px;
-    color: var(--color-text-secondary);
-    font-size: 14px;
-}
-```
-
-## Cleanup
-
-**Funciones**: `renderCoverage`, `renderCoverageSection`, `renderUnifiedTable` y sus helpers, `buildUnifiedFeed`, `countUnifiedByType`, `countSegmentInActiveType`, `ActivityService.getUnifiedFeedSync`, `ActivityService.getDailySuggestions`, `ActivityService.getScheduledForToday` (verificar sin otros consumidores), `renderAssistantPill`, `renderAssistantExpanded`, `renderAssistantHeaderChip`, `renderAssistantPanel`, `syncAssistantHeader`, `SearchService` completo, `renderSortHeader`, handlers de sort.
-
-**State**: ver punto 7.
-
-**Handlers**: `toggle-filters`, `set-type-chip`, `set-segment`, `clear-segment`, `sort-column`, `open-assistant`, `close-assistant`, `submit-search`, atajo `/`.
-
-**Mocks**: `MOCK_DAILY_SUGGESTIONS`, `MOCK_SCHEDULED_ACTIVITIES`, `MOCK_MATERIAL_SEARCHABLE`.
-
-**CSS**: estilos de cobertura, toolbar, asistente.
-
-## Conservar (no tocar)
-
-- Todo el detalle del lead v1.7 (3 columnas, chat IA, etc.)
-- State del detalle (`draftMessage`, `attachmentsExpanded`, `aiChatHistory`, `aiChatDraft`, `__waNeedsScroll`)
-- `syncShellHeader` rama `view === 'detail'`
-- Clase condicional `.qida-view-detail` para modal 96vw × 96vh
-- Schedule modal completo, funciones de reserva
-- `EDITS.temperatures`, getters/setters relacionados
-- `MOCK_LEADS` (se consume al abrir el detalle), `MOCK_WHATSAPP`, `MOCK_ATTACHMENTS`, `MOCK_CARE_CONTEXT`
-- `LeadService` resto de métodos
-- Handlers `select-lead`, `back-to-dashboard`, `close-modal`
-
-## Validación post-cambio
-
-- `node --check qida-widget.v1.js`
-- Confirmar log `[QidaAssistant] Assistant loaded (v1.8.0)` en consola.
-- Smoke visual:
-  - Shell header solo muestra "Esc para cerrar" + X.
-  - Sin cobertura, sin toolbar, sin tabs, sin filtros.
-  - Tabla muestra 4 columnas: Familia, Tipo, Por qué, Sin contacto.
-  - Headers de columnas visibles arriba.
-  - Máximo 5 filas según `MAX_VISIBLE`.
-  - Background sutil por urgencia (verificable cubriendo los 5 rangos con el mock).
-  - Lead con 21+ días muestra ícono warning.
-  - Hover muestra botón "Marcar hecho" a la derecha.
-  - Click en celda (no en botón) → abre detalle v1.7.
-  - Click en "Marcar hecho" → fila desaparece + toast inferior 4s + opción Deshacer.
-  - Click en "Deshacer" → fila vuelve.
-  - Sin Deshacer pasados los 4s → permanente en sesión.
-  - Click en "Refrescar" → llama nuevamente al servicio, los completados quedan filtrados.
-  - Si todas marcadas: "Estás al día. No hay leads enfriándose."
-  - Detalle v1.7 sigue funcionando intacto.
-
-## Riesgos a vigilar
-
-- **Click en fila vs botón "Marcar hecho"**: usar `data-stop` + `event.stopPropagation()`.
-- **Race condition de undoToast**: `clearTimeout(state.undoTimeoutId)` antes de programar el siguiente.
-- **`completedTodayIds` persiste durante la sesión** sin localStorage. Al recargar página se vacía.
+# Widget de Seguimientos — Fase A: Lead Detail desde Odoo
+
+> **Audiencia**: agente de código.
+> **Objetivo**: reemplazar los mocks de datos del lead por llamadas reales a Odoo desde el widget (Tampermonkey, same-origin con `erp.qida.es`).
+> **NO toca UI**: el HTML/CSS y la estructura de paneles del widget ya están. Solo se cablea la lógica de fetch + se popula el modelo de datos del widget.
+> **Backend**: NO requerido en esta fase.
+> **Plan global**:
+> - **Fase A** (este doc): Lead Detail desde Odoo
+> - **Fase B**: BFF mínimo + Panel WhatsApp
+> - **Fase C**: Endurecer auth/logs/errors/cache
+> - **Fase D**: Dashboard cooling
+> - **Fase E**: Gemini / panel central IA
 
 ---
 
-## TODOs para backend (especificación, NO implementar en frontend)
+## 1. Contexto mínimo
 
-Esta sección documenta las decisiones de negocio que el endpoint debe cumplir cuando se cablee. **No agregar esta lógica al frontend en esta iteración.**
+Qida coordina cuidado de personas dependientes. Las AFs (Asesoras Familiares) gestionan leads (familias). El widget vive embedded en Odoo y muestra un modal de Lead Detail con datos de la familia, persona cuidada, notas, actividades, etc.
 
-### Endpoint
+Hoy esos datos están **mockeados** en el widget. Fase A los reemplaza por datos reales pegándole directo a Odoo.
 
-`GET /api/me/leads/cooling`
+---
 
-### Cohorte (criterio operativo de "enfriándose")
+## 2. Modo de deploy
 
-A confirmar con Pablo Rodrigo + Adriana Barro:
-- Lead dentro de ventana de **15 días** desde la primera llamada (`entryDate`).
-- `daysWithoutTouch >= 4` (umbral configurable).
-- **NO tiene `nextScheduledFollowUp` con fecha futura** (si la AF ya agendó próximo contacto, el lead no está enfriándose por inacción, está "esperando por diseño" — ej: lead con interna que arranca dentro de un mes).
-- NO histórico, NO convertido.
-- NO filtrar por `temperature` del lead.
+- Pilotos (3 champions): widget inyectado vía **Tampermonkey** sobre `erp.qida.es`.
+- Same-origin con Odoo → cookie `session_id` viaja automática en cada fetch.
+- Sin CORS, sin CSRF, sin backend en esta fase.
 
-### Orden
+---
 
-- Primario: `daysWithoutTouch` descendente.
-- Secundario: proximidad a salida de ventana de 15 días.
+## 3. Arquitectura de Fase A
 
-### Forma del response
-
-```json
-[
-    {
-        "leadId": "L121399",
-        "contact": "Marta Ortiz",
-        "location": "Madrid",
-        "relation": "Madre",
-        "caredPersonName": "Concepción",
-        "age": 86,
-        "serviceType": "Interno",
-        "daysWithoutTouch": 22,
-        "lastMessageDate": "27-abr",
-        "reason": "Pidió pensarlo en familia, sin respuesta"
-    }
-]
+```
+Widget (Tampermonkey, sobre erp.qida.es)
+    │
+    └──→ Odoo (same-origin)
+         JSON-RPC vía /web/dataset/call_kw/<model>/<method>
 ```
 
-Notas:
-- `reason` puede ser derivado de la actividad de Odoo o ser una columna agregada manualmente por la AF.
-- `lastMessageDate` viene formateado para visualización ("27-abr"). Si el backend prefiere ISO, el frontend formatea — pero agrega lógica que se prefiere evitar.
-- `daysWithoutTouch` viene calculado del backend.
+Solo lectura del CRM. No se escribe nada en esta fase.
 
-### Endpoint de "marcar hecho" (futuro)
+---
 
-`POST /api/leads/:leadId/mark-done` (sugerido).
+## 4. Helpers únicos
 
-Cuando esté disponible, el handler `mark-done` del frontend hace la llamada **después del undo de 4s** (optimistic UI con confirmación post-undo-window). Si falla, se restaura la fila y se muestra error. Por ahora en MVP solo state local de sesión.
+```js
+// Módulo del widget: contexto base de la sesión.
+// Se inicializa una vez (sección 5) y se mergea en cada llamada.
+let _baseContext = {};
 
-### Endpoint de "refrescar"
+async function odooCall(model, method, args = [], kwargs = {}) {
+  const url = `/web/dataset/call_kw/${model}/${method}`;
 
-No requiere endpoint adicional. `Refrescar` simplemente vuelve a llamar a `GET /api/me/leads/cooling`.
+  // Mergeo de contexto: el base (lang, tz, allowed_company_ids) + el que pase el caller
+  const mergedContext = { ..._baseContext, ...(kwargs.context || {}) };
+  const finalKwargs = { ...kwargs, context: mergedContext };
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "call",
+        params: { model, method, args, kwargs: finalKwargs }
+      })
+    });
+  } catch (networkErr) {
+    throw new Error(`Odoo ${model}/${method}: network error — ${networkErr.message}`);
+  }
+
+  // Defensivo: si la sesión expiró Odoo puede devolver HTML del login (no JSON)
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`Odoo session expired (HTTP ${res.status}). Redirigir a /web/login.`);
+    }
+    throw new Error(`Odoo ${model}/${method}: HTTP ${res.status}`);
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    // Probablemente HTML del login
+    throw new Error(`Odoo ${model}/${method}: respuesta no-JSON (sesión probablemente expirada).`);
+  }
+
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(`Odoo ${model}/${method}: ${data.error.data?.message || data.error.message}`);
+  }
+  return data.result;
+}
+
+async function odooSession() {
+  const res = await fetch('/web/session/get_session_info', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "call", params: {} })
+  });
+
+  if (!res.ok) {
+    throw new Error(`Odoo session_info: HTTP ${res.status}`);
+  }
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(`Odoo session_info: respuesta no-JSON (sesión probablemente expirada).`);
+  }
+  const data = await res.json();
+  return data.result;
+}
+```
+
+Toda llamada a Odoo pasa por estos dos helpers. No hacer `fetch` sueltos.
+
+---
+
+## 5. Identidad del usuario (init del widget, una vez)
+
+```js
+const session = await odooSession();
+// session.uid          → 818
+// session.username     → "alejandro.vivas@qida.es"
+// session.name         → "alejandro vivas"
+// session.partner_id   → 259181
+// session.user_context → { lang: "es_ES", tz: "Europe/Madrid", uid: 818 }
+// session.user_companies → { current_company, allowed_companies }
+
+// Setear el contexto base que se mergeará en cada odooCall
+_baseContext = {
+  ...(session.user_context || {}),
+  // Si más adelante hace falta multi-company:
+  // allowed_company_ids: Object.keys(session.user_companies?.allowed_companies || {}).map(Number)
+};
+```
+
+Guardar `session` en memoria del módulo del widget. **No persistir en localStorage**.
+
+---
+
+## 6. Detalle del lead
+
+```js
+const [lead] = await odooCall('crm.lead', 'read', [[LEAD_ID]], {
+  fields: [
+    // Estándar
+    "id", "name", "partner_id", "user_id", "team_id", "company_id",
+    "email_from", "phone", "mobile",
+    "stage_id", "active", "probability", "type",
+    "priority", "tag_ids",
+    "create_date", "write_date", "date_deadline",
+    "description",
+    "message_follower_ids",
+    // Custom Qida
+    "cared_person_ids",
+    "family_unit_id",
+    "urgency", "urgency_helper", "urgent_service", "vip_service",
+    "original_service_id", "service_duration", "service_goal",
+    "principal_activity_ids",
+    "recurring_plan", "planned_start_date",
+    "default_whatsapp_template_id"
+  ]
+});
+```
+
+⚠️ **Nunca usar `fields: []`** (todos los campos). Un computed roto en `crm.lead` de Qida tira `Odoo Server Error`. Siempre lista explícita.
+
+---
+
+## 7. Persona cuidada (`crm.lead.cared.person`)
+
+Si `lead.cared_person_ids` no está vacío:
+
+```js
+const caredPersons = await odooCall(
+  'crm.lead.cared.person',
+  'read',
+  [lead.cared_person_ids],
+  { fields: [
+    "id", "name",
+    "main_need",
+    "reduced_mobility", "cognitive_decline", "behavioral_disorder",
+    "chronich_illness",   // typo en el modelo Odoo de Qida (sic, no corregir)
+    "requires_trained_caregivers", "support_type", "has_support_material",
+    "weight", "complex_treatment_ids"
+  ]}
+);
+```
+
+⚠️ **`age` y `relation` no existen** en el modelo. Donde el widget hoy muestra esos campos, pasar **`null`** (no `"Dummy"`). El render del widget debe omitir la línea o mostrar placeholder sutil ("—" o similar). Si la UI hoy requiere string, usar `""`. Nunca mostrar literal `"Dummy"` a la AF. Más adelante se valida si vienen de `family_unit_id` o se agregan como campos custom en Odoo.
+
+---
+
+## 8. Notas internas (`mail.message`)
+
+```js
+const notes = await odooCall('mail.message', 'search_read', [], {
+  domain: [
+    ["model", "=", "crm.lead"],
+    ["res_id", "=", LEAD_ID],
+    ["subtype_id.internal", "=", true]
+  ],
+  fields: ["id", "author_id", "date", "body", "message_type", "subject"],
+  order: "date desc",
+  limit: 50
+});
+```
+
+⚠️ `body` viene como **HTML** pre-renderizado por Odoo (tablas, divs, mentions). **NUNCA hacer `innerHTML` directo**. Sanitizar siempre. Helper defensivo:
+
+```js
+function sanitizeOdooHtml(rawHtml) {
+  if (!rawHtml) return '';
+
+  // 1) Preferí DOMPurify si está disponible
+  if (typeof window.DOMPurify !== 'undefined') {
+    return window.DOMPurify.sanitize(rawHtml, {
+      ALLOWED_TAGS: ['p', 'br', 'b', 'strong', 'i', 'em', 'u', 'a', 'ul', 'ol', 'li', 'span', 'div'],
+      ALLOWED_ATTR: ['href', 'target', 'rel'],
+      ALLOW_DATA_ATTR: false
+    });
+  }
+
+  // 2) Fallback defensivo sin DOMPurify: pasar por un DOM detached y eliminar script/style/event handlers
+  const tpl = document.createElement('template');
+  tpl.innerHTML = rawHtml;
+
+  // Eliminar tags peligrosos
+  tpl.content.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach(el => el.remove());
+
+  // Eliminar atributos on* y href javascript:
+  tpl.content.querySelectorAll('*').forEach(el => {
+    [...el.attributes].forEach(attr => {
+      const name = attr.name.toLowerCase();
+      const value = attr.value.toLowerCase();
+      if (name.startsWith('on')) el.removeAttribute(attr.name);
+      if ((name === 'href' || name === 'src') && value.startsWith('javascript:')) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+
+  return tpl.innerHTML;
+}
+
+// Uso:
+noteEl.innerHTML = sanitizeOdooHtml(note.body);
+```
+
+Si DOMPurify no está cargado en el ambiente Tampermonkey, considerar agregarlo vía `@require` en el header del userscript.
+
+---
+
+## 9. Equipo siguiendo (`mail.followers`)
+
+```js
+const followers = await odooCall('mail.followers', 'read', [lead.message_follower_ids], {
+  fields: ["id", "partner_id", "subtype_ids"]
+});
+// followers[i].partner_id viene como [id, "nombre"], suficiente para mostrar.
+// Si necesitás email o avatar: segundo read sobre res.partner con esos partner IDs.
+```
+
+---
+
+## 10. Adjuntos (`ir.attachment`)
+
+```js
+const attachments = await odooCall('ir.attachment', 'search_read', [], {
+  domain: [["res_model", "=", "crm.lead"], ["res_id", "=", LEAD_ID]],
+  fields: ["id", "name", "mimetype", "file_size", "create_date", "create_uid"],
+  order: "create_date desc"
+});
+
+// Descarga: GET /web/content/<attachment_id>?download=true
+// Same-origin, la cookie viaja sola, no requiere call adicional.
+```
+
+---
+
+## 11. Actividades del lead (`mail.activity`)
+
+```js
+const activities = await odooCall('mail.activity', 'search_read', [], {
+  domain: [["res_model", "=", "crm.lead"], ["res_id", "=", LEAD_ID]],
+  fields: [
+    "id", "activity_type_id", "summary", "note",
+    "date_deadline", "state", "user_id"
+  ],
+  order: "date_deadline asc",
+  limit: 50
+});
+
+// activity.state: 'overdue' | 'today' | 'planned'
+```
+
+⚠️ Se usa **`search_read`** (estándar) en lugar de `web_search_read` para consistencia con el resto del doc y shape de respuesta predecible. Si en algún caso `search_read` no devuelve algún campo que `web_search_read` sí, hacer fallback puntual.
+
+---
+
+## 12. Mapping semántico campo Odoo → dato del widget
+
+El agente debe matchear estos datos con las variables/keys que el widget ya usa para los mocks. **No cambiar la estructura de datos del widget**, solo poblarla con valores reales.
+
+### Datos del lead
+
+| Dato semántico | Origen Odoo | Notas |
+|---|---|---|
+| ID del lead | `lead.id` | |
+| Nombre del lead / familia | `lead.name` o `lead.partner_id[1]` | `partner_id` es tuple `[id, "nombre"]` |
+| Teléfono | `lead.mobile \|\| lead.phone` | Para mostrar dejar como está. Para Fase B normalizar quitando espacios |
+| Email | `lead.email_from` | |
+| AF responsable (nombre) | `lead.user_id[1]` | |
+| Etapa | `lead.stage_id[1]` | |
+| Tipo de servicio | `lead.original_service_id[1]` | |
+| Urgencia | `lead.urgency`, `lead.urgent_service` | Combinar según UX existente |
+| Fecha planificada de arranque | `lead.planned_start_date` | |
+| Fecha de creación | `lead.create_date` | |
+
+### Persona cuidada
+
+| Dato semántico | Origen | Notas |
+|---|---|---|
+| Nombre | `caredPersons[0].name` | |
+| Relación con la familia | `null` | Campo no existe en Odoo. UI: omitir o "—" |
+| Edad | `null` | Campo no existe en Odoo. UI: omitir o "—" |
+| Condición/necesidad principal | `caredPersons[0].main_need` | |
+| Movilidad reducida | `caredPersons[0].reduced_mobility` | Boolean |
+| Deterioro cognitivo | `caredPersons[0].cognitive_decline` | Boolean |
+| Trastorno conductual | `caredPersons[0].behavioral_disorder` | Boolean |
+| Enfermedad crónica | `caredPersons[0].chronich_illness` | Boolean. **OJO con el typo** |
+| Requiere cuidador entrenado | `caredPersons[0].requires_trained_caregivers` | Boolean |
+| Tipo de apoyo | `caredPersons[0].support_type` | |
+| Tratamientos complejos | `caredPersons[0].complex_treatment_ids` | m2m, hacer read sobre `crm.complex.treatment` si se quiere mostrar nombre |
+
+### Notas internas
+
+| Dato semántico | Origen |
+|---|---|
+| Texto de la nota (HTML sanitizado) | `sanitizeOdooHtml(notes[i].body)` |
+| Autor | `notes[i].author_id[1]` |
+| Fecha | `notes[i].date` |
+
+### Equipo siguiendo
+
+| Dato semántico | Origen |
+|---|---|
+| Nombre del follower | `followers[i].partner_id[1]` |
+
+### Adjuntos
+
+| Dato semántico | Origen |
+|---|---|
+| Nombre del archivo | `attachments[i].name` |
+| Tipo MIME | `attachments[i].mimetype` |
+| Tamaño | `attachments[i].file_size` |
+| URL de descarga | `/web/content/${attachments[i].id}?download=true` |
+| Autor | `attachments[i].create_uid[1]` |
+| Fecha | `attachments[i].create_date` |
+
+### Actividades
+
+| Dato semántico | Origen |
+|---|---|
+| Título | `activities[i].summary` |
+| Tipo | `activities[i].activity_type_id[1]` |
+| Vencimiento | `activities[i].date_deadline` |
+| Estado | `activities[i].state` (`'overdue' \| 'today' \| 'planned'`) |
+| Responsable | `activities[i].user_id[1]` |
+| Nota / detalle | `activities[i].note` |
+
+---
+
+## 13. Lead de prueba
+
+```
+LEAD_ID = 123333
+Name: "L123333 Jerónimo Goyarrola Ugalde"
+```
+
+Lead real validado en producción durante el discovery. Usalo como fixture inicial.
+
+---
+
+## 14. Gotchas técnicos
+
+1. **Teléfonos con espacios**: Odoo devuelve `"+34 911 22 33 44"`. Para mostrar en UI está OK. Para Fase B (Timelines) normalizar con `tel.replace(/\s+/g, '').replace(/-/g, '')`.
+2. **HTML en notas (`mail.message.body`)**: pre-renderizado por Odoo. SIEMPRE pasar por `sanitizeOdooHtml()` antes de `innerHTML`. Nunca raw.
+3. **Sesión expirada → respuesta HTML, no JSON**. El helper `odooCall` lo detecta vía `content-type` y `response.ok`. Capturar el error y redirigir a `/web/login`.
+4. **`fields: []`**: rompe por computed fields rotos de Qida. Siempre lista explícita.
+5. **Multi-company**: el `_baseContext` se inicializa con `session.user_context` desde el init. Si en algún caso faltan leads esperados, agregar `allowed_company_ids` específico en `kwargs.context` de esa llamada.
+6. **Endpoints `/agency/*`**: custom Qida fuera de servicio. **No usar**. Solo `/web/dataset/call_kw/...` y `/web/session/get_session_info`.
+7. **Tampermonkey + CSP**: si Odoo tiene Content Security Policy estricto, podría bloquear scripts. Probar primero. Si pasa, usar `@grant` apropiados o cargar el widget desde un CDN propio.
+8. **Tuples Odoo**: campos relacionales (`partner_id`, `user_id`, `stage_id`, etc.) vienen como `[id, "nombre"]`. Para mostrar texto usar `[1]`, para query usar `[0]`. Si el campo es vacío puede venir como `false` (no `null`).
+9. **`chronich_illness`**: typo en el modelo de Odoo de Qida. Respetar el typo en el código, sino la llamada falla.
+10. **DOMPurify**: si no está disponible, agregarlo via `@require https://cdn.jsdelivr.net/npm/dompurify@3.x/dist/purify.min.js` en el header del userscript de Tampermonkey. El fallback defensivo de `sanitizeOdooHtml` cubre lo básico, pero DOMPurify es la opción correcta.
+
+---
+
+## 15. Lo que NO entra en esta fase
+
+| Bloque | Fase futura |
+|---|---|
+| Panel WhatsApp (read + send) | B |
+| Resumen IA del lead | E |
+| Chat IA contextual | E |
+| Dashboard de leads enfriándose | D |
+| "Marcar hecho" / Undo en dashboard | D |
+| Autenticación/logs/errors endurecidos | C |
+| Persistir state propio (Postgres) | B+ |
+
+Esos bloques quedan con los mocks existentes del widget (`MOCK_WHATSAPP`, etc.). No tocar.
+
+---
+
+## 16. Plan de ataque sugerido
+
+1. Leer este doc completo.
+2. Confirmar acceso vía Tampermonkey al ambiente de Qida con la cuenta de Alejandro o un champion.
+3. Cargar DOMPurify en el header del userscript (`@require`).
+4. Probar el helper `odooCall` con `crm.lead/read` del lead `123333` desde la consola del navegador. Validar que la response trae los campos esperados.
+5. Identificar en el código del widget las variables/keys donde hoy se asignan los mocks de los datos del lead.
+6. Reemplazar cada mock por la llamada Odoo correspondiente, usando el mapping semántico de la sección 12.
+7. Validar manejo de errores: forzar sesión expirada cerrando sesión en otra pestaña y abriendo el modal, verificar que tira el error correcto.
+8. Validar sanitización: probar con una nota que tenga `<script>` o `onclick` y verificar que no se ejecuta.
+9. Probar con 2-3 leads reales distintos (no solo el 123333).
+10. Mantener intactos los mocks de Fase B (WhatsApp) y Fase E (IA).
+
+**Estimación**: 1 día de trabajo focalizado para un dev con contexto del widget actual.
+
+---
+
+## 17. Pendientes que NO bloquean Fase A
+
+| Item | Quién | Cuándo se necesita |
+|---|---|---|
+| `phone` vs `mobile` cuál usa cada AF para WhatsApp | Marina/Eva | Fase B |
+| Confirmación de "vive solo" / "prescriptor" como campos Odoo | Pablo/Odoo team | Cuando se quiera pintar bien (no bloquea) |
+| Subdominio del BFF | Pablo/IT | Fase C+ |
+
+Ninguno bloquea Fase A.
+
+---
+
+**Fin del documento.**

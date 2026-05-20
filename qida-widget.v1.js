@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.10.0
+ * QIDA ASSISTANT v1.11.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,71 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.11.0 (Fase A - cablear datos reales del detalle del lead desde Odoo):
+ *   - Feature flag automatico por host: IS_ODOO_MODE = (location.host === 'erp.qida.es').
+ *     Cuando true, el detalle del lead se hidrata desde Odoo via JSON-RPC same-origin
+ *     (/web/dataset/call_kw/...). Cuando false (index.html, dev local), comportamiento
+ *     identico a v1.10.0 (datos mock). El feature flag se evalua una vez en init() y
+ *     se hace fallback graceful a modo mock si odooSession() falla.
+ *   - Helpers Odoo nuevos: odooCall(model, method, args, kwargs) (POST JSON-RPC con
+ *     manejo de 401/403/no-JSON/error en payload), odooSession() (GET session_info para
+ *     hidratar _baseContext con uid/lang/etc), sanitizeOdooHtml(rawHtml) (DOMPurify con
+ *     allowlist conservadora + fallback defensivo template-based si DOMPurify no esta
+ *     cargado), tName(tuple) / tId(tuple) (helpers para los tuples [id, "Name"] | false
+ *     que Odoo devuelve para campos relacionales).
+ *   - Constantes nuevas con listas explicitas de fields para evitar el anti-pattern
+ *     fields:[] (que descarga todo y es lento + frangil): LEAD_FIELDS, CARED_FIELDS,
+ *     NOTES_FIELDS, ACTIVITY_FIELDS, ATTACHMENT_FIELDS, FOLLOWER_FIELDS. CARED_FIELDS
+ *     incluye 'chronich_illness' (typo del modelo Odoo - sic).
+ *   - Service nuevo: LeadDetailService.fetchAll(leadId) orquesta 1+5 llamadas a Odoo
+ *     en paralelo. El primer fetch es crm.lead.read; si falla, error global. Si ok,
+ *     dispara los 5 secundarios con Promise.allSettled (no Promise.all) para que un
+ *     fallo parcial no tire los 4 restantes. Los datasets fallidos quedan marcados en
+ *     cached._errors[idx] (idx: 0=cared, 1=notes, 2=activities, 3=attachments, 4=followers).
+ *     LeadDetailService.getFromCache(leadId) devuelve el entry o null.
+ *   - Mappers Odoo -> shape interno del widget: mapLead, mapCared, mapNote, mapActivity,
+ *     mapAttachment, mapFollower. Preservan los keys que ya consumen los renderers actuales
+ *     (lead.contact, lead.location, lead.phone, c.relationship, etc.) para no tocar UI.
+ *     Notas pasan por sanitizeOdooHtml y se marcan con isHtml:true (los renderers usan
+ *     innerHTML controlado SOLO para notas con ese flag; el resto via esc() texto plano).
+ *   - Funcion nueva: mockHydrate(leadId). En modo mock, popula state.leadDetailCache[leadId]
+ *     con el MISMO shape que en modo Odoo (claves: lead, caredPerson, notes, activities,
+ *     attachments, followers, _loadedAt, _loading, _error, _errors). Asi los renderers
+ *     funcionan identicos en ambos modos. El handler select-lead llama SIEMPRE a
+ *     LeadDetailService.fetchAll(leadIdNum) (incluso en modo mock - el service detecta
+ *     IS_ODOO_MODE false y hace mockHydrate sync), para que el cache siempre tenga la
+ *     entrada del lead activo.
+ *   - State nuevo: state.leadDetailCache = {} { [leadId]: { lead, caredPerson, notes,
+ *     activities, attachments, followers, _loadedAt, _loading, _error, _errors } }. Persiste
+ *     durante la sesion del page load (no se vacia en closeModal, igual politica que
+ *     aiChatHistory).
+ *   - Renderers del detalle (renderCare, renderInternalNotes, renderActivities,
+ *     renderFollowers, renderAttachmentsCollapsable) reciben segundo arg opcional `cached`
+ *     y dibujan skeleton si cached._loading === true. Si cached.<dataset> === null se
+ *     muestra microcopy local "No se pudo cargar esta sección" en la card. Si no hay cache
+ *     aun (cached === null), fallback a lectura directa de mocks (compat con dev local
+ *     antes de que fetchAll corra). renderCenterPane recibe `cached` y lo propaga.
+ *     renderDetail tambien lee de cache (var lead = cached.lead || getLead(leadId)).
+ *   - Handler select-lead: normaliza leadId a number cuando es numerico (parseInt antes
+ *     del setState), llama LeadDetailService.fetchAll(leadIdNum) fire-and-forget si no
+ *     hay cache aun (o esta en error). Race-guard en .then() compara state.currentLeadId
+ *     === leadId con === exacto (sin coercion) antes de rerenderear.
+ *   - MOCK_COOLING_LEADS_RESPONSE: todos los leadIds cambiados a 123333 (number) para
+ *     apuntar al unico lead validado en prod (Jeronimo Goyarrola Ugalde). El resto del
+ *     row (nombres, ubicaciones, fechas, reasons) se mantiene como mock visual - sirve
+ *     para testear el flow end-to-end con un lead real. Estructura HTML/CSS y handlers
+ *     del dashboard NO se tocan.
+ *   - Skeleton CSS nuevo en injectStyles: .qida-skeleton-line con shimmer animation
+ *     (1.4s ease-in-out infinite). Cada card de info en estado loading muestra 3 lineas.
+ *   - tempermonkey.js: @require DOMPurify (jsdelivr CDN, v3.2.0) + bump @version 1.0 -> 1.1.
+ *     gtm-loader.html NO se toca todavia (se actualiza cuando Pablo cablee DOMPurify en
+ *     GTM o desde el sitio Odoo).
+ *   - NO se tocan: WhatsApp pane (Fase B), Resumen IA / Chat IA (Fase E), dashboard
+ *     cooling estructura/handlers/MAX_VISIBLE (solo cambian los leadIds del mock),
+ *     Schedule modal, MOCK_LEADS / MOCK_WHATSAPP / MOCK_IA_SUMMARIES / MOCK_AI_RESPONSES
+ *     (siguen siendo fuente de verdad en modo mock + fallback). EDITS sigue siendo
+ *     overrides locales mergeados sobre datos reales (sync a Odoo es Fase B/C).
  *
  * Cambios v1.10.0 (rediseno del dashboard, solo UI - el detalle NO se toca):
  *   - Pivote del dashboard de "workspace multi-pieza" a una vista unica: lista
@@ -360,6 +425,106 @@
  *  10. Media queries: <980px oculta pane-ai; <760px oculta pane-wa (igual espiritu v1.6).
  *
  * ============================================================
+ * DEFAULTS QUE TOME EN v1.11.0 (no especificados explicitamente):
+ * ============================================================
+ *   1. Estrategia de cache: state.leadDetailCache es un objeto plano indexado por leadId
+ *      (no Map). Persiste durante toda la sesion del page load (igual politica que
+ *      aiChatHistory). NO se resetea en closeModal, NO tiene TTL ni invalidacion
+ *      automatica. La unica forma de refrescar es page reload. Justificacion: la AF
+ *      iterando sobre el mismo lead (abrir, leer, cerrar, reabrir) NO debe pagar
+ *      6 round-trips a Odoo cada vez. Cuando la integracion crezca (Fase B - writes
+ *      desde el widget), se agregara invalidacion selectiva en el handler de write.
+ *   2. Manejo de tuples Odoo: tName/tId solo aceptan arrays length-2 con [id, "Name"].
+ *      Para `false` (Odoo devuelve `false` cuando el campo es vacio, no `null`), ambos
+ *      helpers devuelven null. Los mappers nunca acceden a o.partner_id[1] directo
+ *      para no romper con false. Aplicado consistente en mapLead, mapCared, mapNote,
+ *      mapActivity, mapAttachment, mapFollower.
+ *   3. Politica de `location` vacio: crm.lead NO tiene un campo directo "ciudad". Tres
+ *      opciones evaluadas: (a) leer res.partner.city via partner_id - 1 fetch extra,
+ *      (b) heredar del row del dashboard cooling - acopla detalle a dashboard, (c) dejar
+ *      vacio en Fase A. Elegida (c). mapLead pone location: '' y la UI del shell header
+ *      del detalle muestra cadena vacia (queda como "A · · C" con un separador huerfano
+ *      visible). Se evalua mejora en Fase C cuando se cablee tambien la persona cuidada
+ *      con datos completos de Odoo.
+ *   4. Orden de _errors: Promise.allSettled preserva el orden de los jobs. Constante
+ *      documental: [0]=caredPerson, [1]=notes, [2]=activities, [3]=attachments, [4]=followers.
+ *      Documentado en el comment encima del array. El primer fetch (crm.lead.read) NO
+ *      esta en _errors - si falla, todo el detail queda en _error global.
+ *   5. Race-guard: comparacion estricta state.currentLeadId === leadId. Si la AF saltó
+ *      de Lead A a Lead B durante el fetch del A, cuando llegue la respuesta de A NO se
+ *      rerendera (el cache de A se hidrata igual para hits futuros, pero la UI queda
+ *      apuntando a B). El handler select-lead normaliza leadId a number ANTES del
+ *      setState (parseInt si /^\d+$/.test(id), o id tal cual si ya viene como number/
+ *      string no-numerico). Asi state.currentLeadId queda como number desde el inicio
+ *      y la comparacion === con el leadId int de Odoo funciona sin coercion.
+ *   6. Fallback a mock cuando IS_ODOO_MODE === false: LeadDetailService.fetchAll detecta
+ *      el flag y, en modo mock, llama mockHydrate(leadId) sincronicamente y devuelve
+ *      Promise.resolve(entry). El comportamiento en index.html (dev local) es 100%
+ *      identico a v1.10.0 (sin loading visible, render instantaneo).
+ *   7. fetchAll se llama SIEMPRE en select-lead (incluso modo mock), no solo cuando
+ *      IS_ODOO_MODE es true. Justificacion: el cache siempre tiene la entrada del lead
+ *      activo y los renderers reciben `cached` siempre populado. Mas limpio que tener
+ *      dos paths (mock = leer mocks directos, odoo = leer cache).
+ *   8. Renderer fallback cuando cached === null: si el handler aun no llamo a fetchAll
+ *      (defensivo - no deberia pasar en el flujo normal), los renderers tratan TODO
+ *      como "modo mock crudo" y leen directo de los mocks como en v1.10.0. Esto preserva
+ *      el comportamiento de v1.10.0 si por alguna razon entras al detalle sin pasar
+ *      por select-lead (ej. via API publica QidaAssistant.showScreen o test manual).
+ *   9. Skeleton: 3 lineas por card en estado loading (anchos w90/w70/w50 para variar
+ *      visualmente). Shimmer 1.4s ease-in-out infinite sobre gradiente eef0ee/f5f7f5.
+ *      NO se muestra spinner ni texto "Cargando..." - solo las lineas grises. En modo
+ *      mock el skeleton es invisible (mockHydrate sync, sin _loading: true intermedio).
+ *  10. Granularidad de error: dos niveles. Global (cached._error) cuando crm.lead.read
+ *      falla - sin lead base no hidratamos nada. Acciones: 401/403 o no-JSON -> toast
+ *      "Sesion expirada en Odoo. Recarga la pagina." + cierre del detail. Otro error ->
+ *      toast con mensaje + permitir reintentar. Parcial (cached._errors[idx] no-null
+ *      + cached.<dataset> === null) - allSettled capturo fallo en uno de los 5 secundarios.
+ *      Sin toast global. La card del dataset fallido muestra microcopy local "No se pudo
+ *      cargar esta seccion". Los otros 4 datasets se hidratan normal.
+ *  11. _baseContext: hidratado UNA SOLA VEZ en init via odooSession(). Si la AF cambia
+ *      de lang o uid en otra pestana sin recargar, el widget seguira usando el contexto
+ *      viejo (uid/lang/tz). Aceptable para Fase A (lectura). En Fase B (writes) se
+ *      evaluara re-fetch del session_info antes de cada write.
+ *  12. DOMPurify: cargado via @require en tempermonkey.js (Fase A solo en dev). El widget
+ *      tiene fallback defensivo en sanitizeOdooHtml (template-based parse, eliminacion de
+ *      script/style/iframe/object/embed/link/meta + atributos on* y javascript:href/src).
+ *      Si DOMPurify no esta presente, el fallback aplica con lista mas conservadora. NO
+ *      bloquea el render: peor caso, las notas sin sanitizar via DOMPurify pasan por el
+ *      fallback. gtm-loader.html actualiza despues (cuando Pablo cablee DOMPurify en
+ *      GTM o desde el sitio Odoo).
+ *  13. Promise.allSettled: ES6+ pero soportado en Chrome 76+/Firefox 71+/Safari 13+/
+ *      Edge 79+. Sin polyfill - el target real (Chrome/Firefox/Edge sobre erp.qida.es,
+ *      lo mismo en dev local) lo soporta nativo. fetch idem (Chrome 42+). NO entra en
+ *      contradiccion con "vanilla ES5" del resto del archivo: son APIs runtime, no
+ *      sintaxis (no hay let/const, arrow functions, template literals, async/await).
+ *  14. MOCK_COOLING_LEADS_RESPONSE: 7 filas, todas con leadId: 123333 (number). El row
+ *      del dashboard sigue mostrando los 7 contactos / ubicaciones / razones distintas
+ *      (vienen del cooling, no del detail). Clicks en cualquier fila abren el mismo lead
+ *      real de prueba en Odoo. Tradeoff explicito: visualmente confunde un poco (7 filas
+ *      "distintas" abren el mismo lead) pero permite testear el flow end-to-end Fase A
+ *      sin necesidad de cablear cooling a Odoo (eso es Fase D). Cuando Fase D corra, el
+ *      mock se reemplaza por GET al endpoint real. Side-effect conocido: si la AF marca
+ *      "hecho" en una fila, el filtro de getCoolingLeadsSync compara state.completedTodayIds
+ *      (string "123333" desde el DOM) vs row.leadId (number 123333) - mismatch, no filtra.
+ *      Se acepta para Fase A (todas las filas son la misma de todos modos). Cuando Fase D
+ *      cablee leadIds reales, esto deja de ser un edge case y la coercion natural del
+ *      Set funciona como antes.
+ *  15. EDITS conservadas: notas/scheduledActivities/iaSummaries siguen siendo overrides
+ *      UX-locales. Se merge sobre cached.<dataset> en cada render. Sync a Odoo es
+ *      Fase B/C. Justificacion: la AF iterando en modo Odoo puede agregar notas locales
+ *      durante una sesion sin perderlas si la red se cae o si el endpoint de write aun
+ *      no existe.
+ *  16. Endpoint policy estricta: SOLO /web/dataset/call_kw/{model}/{method} y
+ *      /web/session/get_session_info. Endpoints custom de Qida (/agency/*) NO se llaman -
+ *      estan fuera de servicio segun el ultimo brief con Pablo. Si en Fase B aparecen
+ *      endpoints custom, se agregaran al helper layer (no inline en el service).
+ *  17. CORS: en modo Odoo (host === 'erp.qida.es') las llamadas son same-origin y la
+ *      sesion (cookie session_id) viaja sola. En index.html / dev local el feature flag
+ *      queda false y no hay llamadas - asi NO hay CORS issue.
+ *  18. Bloque "Cambios v1.11.0" + DEFAULTS en orden descendente (mas reciente arriba),
+ *      respetando el patron del archivo.
+ *
+ * ============================================================
  * DEFAULTS QUE TOME EN v1.10.0 (no especificados explicitamente):
  * ============================================================
  *   1. VERSION = '1.10.0' (no '1.8.0' como dice el prompt original). El prompt
@@ -518,8 +683,14 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.10.0';
+    var VERSION = '1.11.0';
     var CONFIG = null;
+    // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
+    //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
+    //   queda false y el detalle se hidrata via mockHydrate. Se setea en init() y puede
+    //   degradar a false si odooSession() falla (fallback graceful a modo mock).
+    var IS_ODOO_MODE = false;
+    var _baseContext = {};
     var QIDA_LOGO_URL = 'https://strapi-upload-files-production.s3.eu-central-1.amazonaws.com/qida_logo_ba5b1d80b5.png?w=1080';
     var FONTS_HREF = 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap';
     // v1.10: COVERAGE_TARGET eliminado (lo consumia renderCoverage / CoverageService).
@@ -729,14 +900,20 @@
     // El array YA esta filtrado (solo enfriandose), YA priorizado (orden por urgencia),
     // y YA excluye leads con seguimiento agendado futuro (lógica del backend).
     // Cubre los 5 rangos de urgencia: warn (4-7), orange (8-14), stale (15-20), danger (21+).
+    // v1.11: TODOS los leadIds apuntan a 123333 (number) para que cualquier fila del
+    //   dashboard cooling abra el unico lead validado en prod (Jeronimo Goyarrola Ugalde).
+    //   El resto del row (contact / location / relation / caredPersonName / age / reason /
+    //   serviceType / daysWithoutTouch / lastMessageDate) se mantiene como mock visual
+    //   para testear el flow end-to-end. Cuando Fase D cablee el cooling a Odoo real,
+    //   estos valores vienen del endpoint.
     var MOCK_COOLING_LEADS_RESPONSE = [
-        { leadId: 'L121399', contact: 'Marta Ortiz',          location: 'Madrid',                relation: 'Madre', caredPersonName: 'Concepcion', age: 86, serviceType: 'Interno',       daysWithoutTouch: 22, lastMessageDate: '27-abr', reason: 'Pidio pensarlo en familia, sin respuesta' },
-        { leadId: 'L121547', contact: 'Maria Jesus Sanchez',  location: 'Madrid',                relation: 'Madre', caredPersonName: 'Dolores',    age: 88, serviceType: 'Fin de semana', daysWithoutTouch: 17, lastMessageDate: '02-may', reason: 'No responde desde la propuesta hace 17 dias' },
-        { leadId: 'L121708', contact: 'David Campos',         location: 'Alcala de Henares',     relation: 'Madre', caredPersonName: 'Pilar',      age: 84, serviceType: 'Interno',       daysWithoutTouch: 11, lastMessageDate: '08-may', reason: 'Dijo que llamaria, hace 11 dias sin respuesta' },
-        { leadId: 'L122055', contact: 'Jose Maria Recio',     location: 'Collado Villalba',      relation: 'Madre', caredPersonName: 'Mercedes',   age: 85, serviceType: 'Externo',       daysWithoutTouch: 9,  lastMessageDate: '10-may', reason: 'No contesta WhatsApp ni llamadas hace 9 dias' },
-        { leadId: 'L122278', contact: 'Marina Ruben',         location: 'Madrid',                relation: 'Padre', caredPersonName: 'Manuel',     age: 83, serviceType: 'Por horas',     daysWithoutTouch: 5,  lastMessageDate: '14-may', reason: 'Esperando respuesta tras enviarle el presupuesto' },
-        { leadId: 'L121656', contact: 'Teresa Parellada',     location: "Sant Sadurni d'Anoia",  relation: 'Padre', caredPersonName: 'Joan',       age: 79, serviceType: 'Externo',       daysWithoutTouch: 6,  lastMessageDate: '13-may', reason: 'Familia comparando con otras dos opciones' },
-        { leadId: 'L122613', contact: 'Jordi Vidal',          location: 'Barcelona',             relation: 'Madre', caredPersonName: 'Carmen',     age: 82, serviceType: 'Interno',       daysWithoutTouch: 4,  lastMessageDate: '15-may', reason: 'Pidio pensarlo en familia, han pasado 4 dias' }
+        { leadId: 123333, contact: 'Marta Ortiz',          location: 'Madrid',                relation: 'Madre', caredPersonName: 'Concepcion', age: 86, serviceType: 'Interno',       daysWithoutTouch: 22, lastMessageDate: '27-abr', reason: 'Pidio pensarlo en familia, sin respuesta' },
+        { leadId: 123333, contact: 'Maria Jesus Sanchez',  location: 'Madrid',                relation: 'Madre', caredPersonName: 'Dolores',    age: 88, serviceType: 'Fin de semana', daysWithoutTouch: 17, lastMessageDate: '02-may', reason: 'No responde desde la propuesta hace 17 dias' },
+        { leadId: 123333, contact: 'David Campos',         location: 'Alcala de Henares',     relation: 'Madre', caredPersonName: 'Pilar',      age: 84, serviceType: 'Interno',       daysWithoutTouch: 11, lastMessageDate: '08-may', reason: 'Dijo que llamaria, hace 11 dias sin respuesta' },
+        { leadId: 123333, contact: 'Jose Maria Recio',     location: 'Collado Villalba',      relation: 'Madre', caredPersonName: 'Mercedes',   age: 85, serviceType: 'Externo',       daysWithoutTouch: 9,  lastMessageDate: '10-may', reason: 'No contesta WhatsApp ni llamadas hace 9 dias' },
+        { leadId: 123333, contact: 'Marina Ruben',         location: 'Madrid',                relation: 'Padre', caredPersonName: 'Manuel',     age: 83, serviceType: 'Por horas',     daysWithoutTouch: 5,  lastMessageDate: '14-may', reason: 'Esperando respuesta tras enviarle el presupuesto' },
+        { leadId: 123333, contact: 'Teresa Parellada',     location: "Sant Sadurni d'Anoia",  relation: 'Padre', caredPersonName: 'Joan',       age: 79, serviceType: 'Externo',       daysWithoutTouch: 6,  lastMessageDate: '13-may', reason: 'Familia comparando con otras dos opciones' },
+        { leadId: 123333, contact: 'Jordi Vidal',          location: 'Barcelona',             relation: 'Madre', caredPersonName: 'Carmen',     age: 82, serviceType: 'Interno',       daysWithoutTouch: 4,  lastMessageDate: '15-may', reason: 'Pidio pensarlo en familia, han pasado 4 dias' }
     ];
 
     // Tope visual del dashboard. El backend ya devuelve la cohorte priorizada;
@@ -804,6 +981,14 @@
         attachmentsExpanded: false,     // colapsable de adjuntos en el pane central
         aiChatHistory: {},              // { leadId: [{ from: 'user'|'ai', payload }] } - PERSISTENTE en sesion
         aiChatDraft: '',                // texto vivo del input del chat IA del pane central
+
+        // v1.11: cache del detalle por leadId. En modo Odoo lo popula LeadDetailService.fetchAll;
+        //   en modo mock lo popula mockHydrate (sync, sin loading visible). Persiste durante toda
+        //   la sesion del page load (igual politica que aiChatHistory - NO se vacia en closeModal).
+        //   Shape: { [leadId]: { lead, caredPerson, notes, activities, attachments, followers,
+        //                        _loadedAt, _loading, _error, _errors[5] } }
+        //   _errors indices: [0]=caredPerson, [1]=notes, [2]=activities, [3]=attachments, [4]=followers.
+        leadDetailCache: {},
         __waNeedsScroll: false,         // flag para auto-scroll al fondo del pane WhatsApp post-rerender
         __aiNeedsScroll: false,         // v1.9.1: flag para auto-scroll al fondo del pane Chat IA post-rerender
 
@@ -1019,6 +1204,418 @@
     };
 
     // ============================================================
+    // ODOO INTEGRATION (Fase A - v1.11)
+    // ============================================================
+    // Helpers + constantes + mappers + service layer para hidratar el detalle del lead
+    // desde Odoo via JSON-RPC same-origin. Solo lectura. Endpoints validos:
+    //   POST /web/dataset/call_kw/{model}/{method}
+    //   POST /web/session/get_session_info
+    // Endpoints custom (/agency/*) estan FUERA de servicio - no se llaman desde aqui.
+
+    // ---- Helpers para tuples Odoo: campos relacionales devuelven [id, "Name"] o false ----
+    function tName(f) { return (f && typeof f === 'object' && f.length === 2) ? f[1] : null; }
+    function tId(f)   { return (f && typeof f === 'object' && f.length === 2) ? f[0] : null; }
+
+    // ---- Llamada generica JSON-RPC a Odoo via /web/dataset/call_kw ----
+    // Merge de _baseContext (session) + kwargs.context (caller-specific). Maneja 401/403,
+    // respuestas no-JSON (login screen redirect = sesion expirada), y data.error de Odoo.
+    function odooCall(model, method, args, kwargs) {
+        args = args || [];
+        kwargs = kwargs || {};
+        var url = '/web/dataset/call_kw/' + model + '/' + method;
+        var mergedContext = {};
+        var k;
+        for (k in _baseContext) {
+            if (Object.prototype.hasOwnProperty.call(_baseContext, k)) {
+                mergedContext[k] = _baseContext[k];
+            }
+        }
+        if (kwargs.context) {
+            for (k in kwargs.context) {
+                if (Object.prototype.hasOwnProperty.call(kwargs.context, k)) {
+                    mergedContext[k] = kwargs.context[k];
+                }
+            }
+        }
+        var finalKwargs = {};
+        for (k in kwargs) {
+            if (Object.prototype.hasOwnProperty.call(kwargs, k)) {
+                finalKwargs[k] = kwargs[k];
+            }
+        }
+        finalKwargs.context = mergedContext;
+
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'call',
+                params: { model: model, method: method, args: args, kwargs: finalKwargs }
+            })
+        }).then(function (res) {
+            if (!res.ok) {
+                if (res.status === 401 || res.status === 403) {
+                    throw new Error('Odoo session expired (HTTP ' + res.status + ')');
+                }
+                throw new Error('Odoo ' + model + '/' + method + ': HTTP ' + res.status);
+            }
+            var ct = res.headers.get('content-type') || '';
+            if (ct.indexOf('application/json') === -1) {
+                throw new Error('Odoo ' + model + '/' + method + ': respuesta no-JSON (sesion expirada)');
+            }
+            return res.json();
+        }).then(function (data) {
+            if (data && data.error) {
+                var msg = (data.error.data && data.error.data.message) || data.error.message || 'Unknown Odoo error';
+                throw new Error('Odoo ' + model + '/' + method + ': ' + msg);
+            }
+            return data.result;
+        });
+    }
+
+    // ---- Hidratar _baseContext desde /web/session/get_session_info ----
+    function odooSession() {
+        return fetch('/web/session/get_session_info', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', method: 'call', params: {} })
+        }).then(function (res) {
+            if (!res.ok) throw new Error('Odoo session_info HTTP ' + res.status);
+            return res.json();
+        }).then(function (data) { return data && data.result; });
+    }
+
+    // ---- Sanitizacion de HTML pre-renderizado de Odoo (mail.message.body) ----
+    // Si DOMPurify esta cargado (via @require en tempermonkey.js o desde GTM/sitio Odoo
+    // mas adelante), usar su sanitizer con allowlist conservadora. Si no, fallback
+    // defensivo: parse en template detached, eliminar scripts/style/iframe/etc + atributos
+    // peligrosos (on*, javascript:href/src).
+    function sanitizeOdooHtml(rawHtml) {
+        if (!rawHtml) return '';
+        if (typeof window.DOMPurify !== 'undefined' && window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+            return window.DOMPurify.sanitize(rawHtml, {
+                ALLOWED_TAGS: ['p','br','b','strong','i','em','u','a','ul','ol','li','span','div'],
+                ALLOWED_ATTR: ['href','target','rel'],
+                ALLOW_DATA_ATTR: false
+            });
+        }
+        // Fallback defensivo.
+        try {
+            var tpl = document.createElement('template');
+            tpl.innerHTML = rawHtml;
+            var bad = tpl.content.querySelectorAll('script, style, iframe, object, embed, link, meta');
+            var i;
+            for (i = 0; i < bad.length; i++) {
+                if (bad[i].parentNode) bad[i].parentNode.removeChild(bad[i]);
+            }
+            var all = tpl.content.querySelectorAll('*');
+            for (i = 0; i < all.length; i++) {
+                var attrs = all[i].attributes;
+                for (var j = attrs.length - 1; j >= 0; j--) {
+                    var n = attrs[j].name.toLowerCase();
+                    var v = (attrs[j].value || '').toLowerCase();
+                    if (n.indexOf('on') === 0) {
+                        all[i].removeAttribute(attrs[j].name);
+                        continue;
+                    }
+                    if ((n === 'href' || n === 'src') && v.indexOf('javascript:') === 0) {
+                        all[i].removeAttribute(attrs[j].name);
+                    }
+                }
+            }
+            return tpl.innerHTML;
+        } catch (e) {
+            // Worst case: si el parse falla, devolver texto plano escapado para no inyectar HTML.
+            return esc(rawHtml);
+        }
+    }
+
+    // ---- Listas explicitas de fields (NUNCA usar fields:[] que descarga todo) ----
+    // NOTA sobre 'chronich_illness': typo del modelo Odoo (sic). NO corregir.
+    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id'];
+    var CARED_FIELDS = ['id','name','main_need','reduced_mobility','cognitive_decline','behavioral_disorder','chronich_illness','requires_trained_caregivers','support_type','has_support_material','weight','complex_treatment_ids'];
+    var NOTES_FIELDS = ['id','author_id','date','body','message_type','subject'];
+    var ACTIVITY_FIELDS = ['id','activity_type_id','summary','note','date_deadline','state','user_id'];
+    var ATTACHMENT_FIELDS = ['id','name','mimetype','file_size','create_date','create_uid'];
+    var FOLLOWER_FIELDS = ['id','partner_id','subtype_ids'];
+
+    // ---- Mappers Odoo -> shape interno (preserva keys que ya consumen los renderers) ----
+    function mapLead(o) {
+        return {
+            id: o.id,
+            odooId: o.id,
+            name: o.name || tName(o.partner_id) || '',
+            contact: tName(o.partner_id) || o.name || '',
+            location: '',  // crm.lead no tiene campo directo "ciudad" - ver DEFAULTS v1.11 #3
+            phone: o.mobile || o.phone || '',
+            email: o.email_from || '',
+            stage: tName(o.stage_id) || '',
+            serviceType: tName(o.original_service_id) || '',
+            urgency: o.urgency || '',
+            urgent: !!o.urgent_service,
+            responsableAf: tName(o.user_id) || '',
+            plannedStartDate: o.planned_start_date || null,
+            createdAt: o.create_date || null,
+            followersIds: o.message_follower_ids || [],
+            caredPersonIds: o.cared_person_ids || [],
+            // Campos que NO existen en Odoo (los completa mapCared o futuras fases):
+            relation: null,
+            age: null,
+            caredPersonName: null,
+            // Preservados para compat con renders existentes:
+            daysWithoutTouch: 0,  // Fase D lo provee desde cooling
+            lastInteraction: '',
+            interactionCount: 0,
+            historico: false,
+            prescriptor: ''
+        };
+    }
+
+    function mapCared(o) {
+        if (!o) return null;
+        return {
+            name: o.name || '',
+            relationship: null,        // no existe en Odoo (Fase C)
+            age: null,                 // no existe en Odoo
+            relation: null,            // idem
+            mainCondition: o.main_need || '',
+            livesAlone: null,          // no hay flag directo
+            reducedMobility: !!o.reduced_mobility,
+            cognitiveDecline: !!o.cognitive_decline,
+            behavioralDisorder: !!o.behavioral_disorder,
+            chronicIllness: !!o.chronich_illness,  // typo Odoo respetado (sic)
+            requiresTrainedCaregivers: !!o.requires_trained_caregivers,
+            supportType: o.support_type || '',
+            hasSupportMaterial: !!o.has_support_material,
+            weight: o.weight,
+            complexTreatmentIds: o.complex_treatment_ids || []
+        };
+    }
+
+    function mapNote(o) {
+        return {
+            id: o.id,
+            author: tName(o.author_id) || 'Sin autor',
+            date: o.date || '',
+            text: sanitizeOdooHtml(o.body || ''),
+            isHtml: true,  // flag para que renderInternalNotes use innerHTML controlado
+            messageType: o.message_type,
+            subject: o.subject || ''
+        };
+    }
+
+    function mapActivity(o) {
+        return {
+            id: o.id,
+            type: tName(o.activity_type_id) || '',
+            summary: o.summary || '',
+            note: sanitizeOdooHtml(o.note || ''),
+            deadline: o.date_deadline || null,
+            state: o.state || 'planned',
+            responsable: tName(o.user_id) || '',
+            assignee: tName(o.user_id) || '',
+            done: false
+        };
+    }
+
+    function mapAttachment(o) {
+        return {
+            id: o.id,
+            name: o.name || '',
+            mimetype: o.mimetype || '',
+            fileSize: o.file_size || 0,
+            createdAt: o.create_date || '',
+            date: o.create_date || '',
+            author: tName(o.create_uid) || '',
+            downloadUrl: '/web/content/' + o.id + '?download=true',
+            isMain: false
+        };
+    }
+
+    function mapFollower(o) {
+        return {
+            id: o.id,
+            name: tName(o.partner_id) || '',
+            partnerId: tId(o.partner_id),
+            role: '',
+            email: ''
+        };
+    }
+
+    // ---- Modo mock: hidrata el cache desde los MOCKS existentes con el MISMO shape ----
+    // que en modo Odoo, para que los renderers funcionen identicos en ambos modos.
+    function mockHydrate(leadId) {
+        var lead = getLead(leadId);
+        if (!lead) {
+            return {
+                lead: null,
+                caredPerson: null,
+                notes: null,
+                activities: null,
+                attachments: null,
+                followers: null,
+                _loadedAt: Date.now(),
+                _loading: false,
+                _error: 'Lead not found in mock',
+                _errors: [null, null, null, null, null]
+            };
+        }
+        var notesRaw = (MOCK_NOTES[leadId] || []);
+        var notes = [];
+        for (var i = 0; i < notesRaw.length; i++) {
+            var n = notesRaw[i];
+            notes.push({ author: n.author, date: n.date, text: n.text, isHtml: false });
+        }
+        return {
+            lead: lead,  // mocks ya tienen el shape interno
+            caredPerson: MOCK_CARE_CONTEXT[leadId] || null,
+            notes: notes,
+            activities: (MOCK_PLANNED_ACTIVITIES[leadId] || []).slice(),
+            attachments: (MOCK_ATTACHMENTS[leadId] || []).slice(),
+            followers: (MOCK_FOLLOWERS[leadId] || DEFAULT_FOLLOWERS).slice(),
+            _loadedAt: Date.now(),
+            _loading: false,
+            _error: null,
+            _errors: [null, null, null, null, null]
+        };
+    }
+
+    // ---- LeadDetailService: orquesta los 6 fetchs (1 lead + 5 secundarios) ----
+    // Indices del array _errors (orden de Promise.allSettled):
+    //   [0]=caredPerson, [1]=notes, [2]=activities, [3]=attachments, [4]=followers.
+    var LeadDetailService = {
+        fetchAll: function (leadId) {
+            // Modo mock: hidratar sync desde MOCK_* y devolver Promise.resolve.
+            if (!IS_ODOO_MODE) {
+                state.leadDetailCache[leadId] = mockHydrate(leadId);
+                return Promise.resolve(state.leadDetailCache[leadId]);
+            }
+
+            // Marcar loading inmediatamente para que los skeletons aparezcan.
+            state.leadDetailCache[leadId] = {
+                lead: null,
+                caredPerson: null,
+                notes: null,
+                activities: null,
+                attachments: null,
+                followers: null,
+                _loading: true,
+                _loadedAt: null,
+                _error: null,
+                _errors: [null, null, null, null, null]
+            };
+
+            // El cambio a loading no dispara rerender automatico - el handler ya hizo
+            // setState con view=detail y eso ya renderizo. Forzamos un rerender extra
+            // para mostrar el skeleton mientras corren los fetchs.
+            if (state.currentLeadId === leadId) {
+                rerenderContent();
+            }
+
+            var p1 = odooCall('crm.lead', 'read', [[leadId]], { fields: LEAD_FIELDS });
+            return p1.then(function (leadArr) {
+                if (!leadArr || !leadArr.length) {
+                    throw new Error('Lead not found');
+                }
+                var rawLead = leadArr[0];
+
+                var jobs = [];
+                // [0] caredPerson
+                jobs.push(rawLead.cared_person_ids && rawLead.cared_person_ids.length
+                    ? odooCall('crm.lead.cared.person', 'read', [rawLead.cared_person_ids], { fields: CARED_FIELDS })
+                    : Promise.resolve([]));
+                // [1] notes (mail.message con subtype interno)
+                jobs.push(odooCall('mail.message', 'search_read', [], {
+                    domain: [['model','=','crm.lead'], ['res_id','=',leadId], ['subtype_id.internal','=',true]],
+                    fields: NOTES_FIELDS,
+                    order: 'date desc',
+                    limit: 50
+                }));
+                // [2] activities (mail.activity)
+                jobs.push(odooCall('mail.activity', 'search_read', [], {
+                    domain: [['res_model','=','crm.lead'], ['res_id','=',leadId]],
+                    fields: ACTIVITY_FIELDS,
+                    order: 'date_deadline asc',
+                    limit: 50
+                }));
+                // [3] attachments
+                jobs.push(odooCall('ir.attachment', 'search_read', [], {
+                    domain: [['res_model','=','crm.lead'], ['res_id','=',leadId]],
+                    fields: ATTACHMENT_FIELDS,
+                    order: 'create_date desc'
+                }));
+                // [4] followers
+                jobs.push(rawLead.message_follower_ids && rawLead.message_follower_ids.length
+                    ? odooCall('mail.followers', 'read', [rawLead.message_follower_ids], { fields: FOLLOWER_FIELDS })
+                    : Promise.resolve([]));
+
+                return Promise.allSettled(jobs).then(function (results) {
+                    function pluck(idx, mapper) {
+                        if (results[idx].status !== 'fulfilled') return null;
+                        var val = results[idx].value;
+                        return mapper ? mapper(val) : val;
+                    }
+                    function errMsg(r) {
+                        if (r.status !== 'rejected') return null;
+                        return (r.reason && r.reason.message) ? r.reason.message : String(r.reason);
+                    }
+
+                    state.leadDetailCache[leadId] = {
+                        lead: mapLead(rawLead),
+                        caredPerson: pluck(0, function (arr) { return mapCared(arr && arr[0]); }),
+                        notes: pluck(1, function (arr) { return (arr || []).map(mapNote); }),
+                        activities: pluck(2, function (arr) { return (arr || []).map(mapActivity); }),
+                        attachments: pluck(3, function (arr) { return (arr || []).map(mapAttachment); }),
+                        followers: pluck(4, function (arr) { return (arr || []).map(mapFollower); }),
+                        _errors: [errMsg(results[0]), errMsg(results[1]), errMsg(results[2]), errMsg(results[3]), errMsg(results[4])],
+                        _loadedAt: Date.now(),
+                        _loading: false,
+                        _error: null
+                    };
+
+                    // Race-guard: solo rerender si el lead activo sigue siendo este.
+                    if (state.currentLeadId === leadId) {
+                        rerenderContent();
+                    }
+                    return state.leadDetailCache[leadId];
+                });
+            }).catch(function (err) {
+                // Error en crm.lead.read - todo el detail queda en error global.
+                state.leadDetailCache[leadId] = {
+                    lead: null,
+                    caredPerson: null,
+                    notes: null,
+                    activities: null,
+                    attachments: null,
+                    followers: null,
+                    _loading: false,
+                    _loadedAt: null,
+                    _error: err && err.message ? err.message : String(err),
+                    _errors: [null, null, null, null, null]
+                };
+                if (state.currentLeadId === leadId) {
+                    rerenderContent();
+                    var msg = err && err.message ? err.message : 'Error desconocido';
+                    if (msg.indexOf('session expired') >= 0 || msg.indexOf('sesion expirada') >= 0) {
+                        showToast('Sesion expirada en Odoo. Recarga la pagina.');
+                    } else if (msg.indexOf('Lead not found') >= 0) {
+                        showToast('Lead no encontrado en Odoo');
+                    } else {
+                        showToast('Error cargando lead: ' + msg);
+                    }
+                }
+                log('LeadDetailService.fetchAll error', err);
+                // No re-throw: ya quedo registrado en cache._error y notificado al usuario.
+            });
+        },
+
+        getFromCache: function (leadId) {
+            return state.leadDetailCache[leadId] || null;
+        }
+    };
+
+    // ============================================================
     // SVG ICONS (lucide-style)
     // ============================================================
     var I = {
@@ -1182,6 +1779,14 @@
             '.qida-info-card-actions{font-size:11px;font-weight:400;color:var(--s500);display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;}',
             '.qida-info-card-body{font-size:13px;font-weight:400;line-height:1.55;color:var(--s800);}',
             '.qida-info-card-highlight{background:#E1F5EE;border-radius:8px;padding:10px 12px;color:#143C32;font-size:13px;font-weight:400;line-height:1.55;}',
+
+            /* v1.11: Skeleton lines para cards en estado loading mientras Odoo responde */
+            '.qida-skeleton-line{display:block;height:12px;background:linear-gradient(90deg,#eef0ee 0%,#f5f7f5 50%,#eef0ee 100%);background-size:200% 100%;border-radius:4px;animation:qida-skel-shimmer 1.4s ease-in-out infinite;}',
+            '.qida-skeleton-line + .qida-skeleton-line{margin-top:6px;}',
+            '.qida-skeleton-line.w90{width:90%;}',
+            '.qida-skeleton-line.w70{width:70%;}',
+            '.qida-skeleton-line.w50{width:50%;}',
+            '@keyframes qida-skel-shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}',
             '.qida-link-btn{background:transparent;border:0;padding:0;color:#0F6E56;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;}',
             '.qida-link-btn:hover{color:var(--qgH);text-decoration:underline;}',
             '.qida-link-btn.muted{color:var(--s500);font-weight:400;}',
@@ -1499,6 +2104,18 @@
     // ============================================================
     // RENDER: detail blocks (v1.7 cards)
     // ============================================================
+    // v1.11: helper de skeleton para cards en loading. Anchos w90/w70/w50 alternan para
+    //   romper el patron visual. n por defecto = 3.
+    function renderSkeletonLines(n) {
+        var count = n || 3;
+        var widths = ['w90', 'w70', 'w50', 'w90', 'w70'];
+        var out = '';
+        for (var i = 0; i < count; i++) {
+            out += '<span class="qida-skeleton-line ' + widths[i % widths.length] + '"></span>';
+        }
+        return out;
+    }
+
     function infoCard(title, actionsHtml, bodyHtml) {
         return '<div class="qida-info-card">'
             + '<div class="qida-info-card-head">'
@@ -1542,15 +2159,39 @@
         return infoCard(title, actions, body);
     }
 
-    function renderCare(lead) {
-        var c = MOCK_CARE_CONTEXT[lead.id] || {};
+    function renderCare(lead, cached) {
+        var title = icon('users', 12) + ' Contexto del cuidado';
+
+        // v1.11: skeleton si _loading.
+        if (cached && cached._loading) {
+            return infoCard(title, '', renderSkeletonLines(4));
+        }
+        // v1.11: error parcial (allSettled fallo en este dataset).
+        if (cached && cached._errors && cached._errors[0] && cached.caredPerson === null) {
+            return infoCard(title, '', '<p class="qida-empty-notes" title="' + esc(cached._errors[0]) + '">No se pudo cargar esta seccion.</p>');
+        }
+
+        // v1.11: leer del cache si esta; fallback al mock crudo si cached === null (modo
+        //   dev defensivo: si por alguna razon nunca corrio fetchAll, comportamiento v1.10.0).
+        var c = (cached && cached.caredPerson) || MOCK_CARE_CONTEXT[lead.id] || {};
+
         function item(key, val, urgent) {
             var valCls = 'qida-context-val' + (urgent ? ' urgent' : '');
             return '<div class="qida-context-item"><span class="qida-context-key">' + esc(key) + '</span><span class="' + valCls + '">' + esc(val || '-') + '</span></div>';
         }
         var urgencyUrgent = lead.urgency && /muy\s+urgente/i.test(lead.urgency);
+        // Persona cuidada line: usa lead fields si estan (modo mock); si vienen null
+        //   (modo Odoo - no existen en crm.lead), cae al name del caredPerson.
+        var personaLine;
+        if (lead.relation && lead.caredPersonName && lead.age != null) {
+            personaLine = lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos';
+        } else if (c && c.name) {
+            personaLine = c.name;
+        } else {
+            personaLine = '-';
+        }
         var grid = '<div class="qida-context-grid">'
-            + item('Persona cuidada', lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos')
+            + item('Persona cuidada', personaLine)
             + item('Relacion', c.relationship)
             + item('Condicion principal', c.mainCondition)
             + item('Ubicacion', lead.location)
@@ -1559,20 +2200,47 @@
             + item('Vive solo', c.livesAlone == null ? '-' : (c.livesAlone ? 'Si' : 'No'))
             + item('Prescriptor', lead.prescriptor)
         + '</div>';
-        return infoCard(icon('users', 12) + ' Contexto del cuidado', '', grid);
+        return infoCard(title, '', grid);
     }
 
-    function renderInternalNotes(lead) {
-        var notes = getNotes(lead.id);
+    function renderInternalNotes(lead, cached) {
+        var title = icon('file', 12) + ' Notas internas';
+
+        if (cached && cached._loading) {
+            return infoCard(title, '', renderSkeletonLines(3));
+        }
+        if (cached && cached._errors && cached._errors[1] && cached.notes === null) {
+            return infoCard(title, '', '<p class="qida-empty-notes" title="' + esc(cached._errors[1]) + '">No se pudo cargar esta seccion.</p>');
+        }
+
+        // v1.11: cached.notes ya viene sanitizada (cuando Odoo) o con isHtml:false (cuando mock).
+        //   EDITS.notes se mergea siempre arriba (mas recientes primero) como en v1.10.
+        var baseNotes;
+        if (cached && cached.notes) {
+            baseNotes = cached.notes.slice();
+        } else {
+            // Fallback dev defensivo: leer mocks directo (comportamiento v1.10.0).
+            baseNotes = (MOCK_NOTES[lead.id] || []).slice().map(function (n) {
+                return { author: n.author, date: n.date, text: n.text, isHtml: false };
+            });
+        }
+        var added = EDITS.notes[lead.id] || [];
+        // EDITS son siempre texto plano (isHtml:false). Las nuevas notas van arriba.
+        var notes = added.concat(baseNotes);
+
         var notesHtml = '';
         if (notes.length === 0) {
             notesHtml = '<p class="qida-empty-notes">Aun no hay notas guardadas para este lead.</p>';
         } else {
             for (var i = 0; i < notes.length; i++) {
                 var n = notes[i];
+                // v1.11: si n.isHtml === true (notas Odoo), text ya esta sanitizado y va
+                //   por innerHTML (envuelto en un span con la clase). Si false (mock + EDITS),
+                //   pasa por esc() texto plano.
+                var textHtml = n.isHtml ? n.text : esc(n.text);
                 notesHtml += '<div class="qida-note">'
                     + '<div class="qida-note-head"><span class="qida-note-author">' + esc(n.author) + '</span><span class="qida-note-date">' + esc(n.date) + '</span></div>'
-                    + '<p class="qida-note-text">' + esc(n.text) + '</p>'
+                    + '<div class="qida-note-text">' + textHtml + '</div>'
                 + '</div>';
             }
         }
@@ -1589,12 +2257,27 @@
         }
 
         var actions = state.addingNote ? '' : '<button class="qida-link-btn" data-action="start-add-note">' + icon('plus', 11) + ' Anadir nota</button>';
-        return infoCard(icon('file', 12) + ' Notas internas', actions, notesHtml + add);
+        return infoCard(title, actions, notesHtml + add);
     }
 
-    function renderActivities(lead) {
-        var acts = MOCK_PLANNED_ACTIVITIES[lead.id] || [];
-        // Sumar las que la AF haya programado en sesion via schedule modal
+    function renderActivities(lead, cached) {
+        var title = icon('clock', 12) + ' Proximas actividades';
+
+        if (cached && cached._loading) {
+            return infoCard(title, '', renderSkeletonLines(3));
+        }
+        if (cached && cached._errors && cached._errors[2] && cached.activities === null) {
+            return infoCard(title, '', '<p class="qida-empty-act" title="' + esc(cached._errors[2]) + '">No se pudo cargar esta seccion.</p>');
+        }
+
+        // v1.11: leer del cache; fallback al mock crudo si cached === null.
+        var acts;
+        if (cached && cached.activities) {
+            acts = cached.activities.slice();
+        } else {
+            acts = (MOCK_PLANNED_ACTIVITIES[lead.id] || []).slice();
+        }
+        // Sumar las que la AF haya programado en sesion via schedule modal (overrides locales).
         for (var i = 0; i < EDITS.scheduledActivities.length; i++) {
             var sa = EDITS.scheduledActivities[i];
             if (sa.leadId === lead.id) {
@@ -1630,11 +2313,26 @@
             }
         }
 
-        return infoCard(icon('clock', 12) + ' Proximas actividades', '', html);
+        return infoCard(title, '', html);
     }
 
-    function renderFollowers(lead) {
-        var f = MOCK_FOLLOWERS[lead.id] || DEFAULT_FOLLOWERS;
+    function renderFollowers(lead, cached) {
+        var title = icon('users', 12) + ' Equipo siguiendo';
+
+        if (cached && cached._loading) {
+            return infoCard(title, '', renderSkeletonLines(2));
+        }
+        if (cached && cached._errors && cached._errors[4] && cached.followers === null) {
+            return infoCard(title, '', '<p class="qida-empty-notes" title="' + esc(cached._errors[4]) + '">No se pudo cargar esta seccion.</p>');
+        }
+
+        // v1.11: leer del cache; fallback al mock crudo si cached === null.
+        var f;
+        if (cached && cached.followers) {
+            f = cached.followers;
+        } else {
+            f = MOCK_FOLLOWERS[lead.id] || DEFAULT_FOLLOWERS;
+        }
         var html = '';
         for (var i = 0; i < f.length; i++) {
             var p = f[i];
@@ -1645,7 +2343,7 @@
                 + (p.role ? '<span class="qida-follower-role">&middot; ' + esc(p.role) + '</span>' : '')
             + '</span>';
         }
-        return infoCard(icon('users', 12) + ' Equipo siguiendo', 'Hover para email', '<div class="qida-followers">' + html + '</div>');
+        return infoCard(title, 'Hover para email', '<div class="qida-followers">' + html + '</div>');
     }
 
     // v1.6: renderTemplatesPanel/renderMaterialPanel eliminadas. Plantillas y Material como
@@ -1735,8 +2433,23 @@
     }
 
     // Adjuntos colapsable (reemplaza el panel derecho v1.5). Vive dentro del .qida-center-body.
-    function renderAttachmentsCollapsable(lead) {
-        var atts = MOCK_ATTACHMENTS[lead.id] || [];
+    function renderAttachmentsCollapsable(lead, cached) {
+        var title = icon('paperclip', 12) + ' Adjuntos';
+
+        if (cached && cached._loading) {
+            return infoCard(title, '', renderSkeletonLines(2));
+        }
+        if (cached && cached._errors && cached._errors[3] && cached.attachments === null) {
+            return infoCard(title, '', '<p class="qida-att-empty" title="' + esc(cached._errors[3]) + '">No se pudo cargar esta seccion.</p>');
+        }
+
+        // v1.11: leer del cache; fallback al mock crudo si cached === null.
+        var atts;
+        if (cached && cached.attachments) {
+            atts = cached.attachments;
+        } else {
+            atts = MOCK_ATTACHMENTS[lead.id] || [];
+        }
         var count = atts.length;
         var expanded = !!state.attachmentsExpanded;
 
@@ -1749,11 +2462,14 @@
                     var a = atts[i];
                     var iconName = 'file';
                     if (a.mimetype && a.mimetype.indexOf('image') === 0) iconName = 'paperclip';
-                    bodyHtml += '<div class="qida-att" data-action="open-attachment" data-id="' + esc(a.name) + '">'
+                    // v1.11: el handler open-attachment recibe el id (numero Odoo o nombre en mock).
+                    //   Para adjuntos Odoo, el handler usa downloadUrl si esta disponible.
+                    var dataId = a.id != null ? a.id : a.name;
+                    bodyHtml += '<div class="qida-att" data-action="open-attachment" data-id="' + esc(dataId) + '">'
                         + '<div class="qida-att-icon">' + icon(iconName, 14) + '</div>'
                         + '<div class="qida-att-body">'
                             + '<div class="qida-att-name">' + esc(a.name) + '</div>'
-                            + '<div class="qida-att-meta">' + esc(a.mimetype || '') + ' &middot; ' + esc(a.date || '') + '</div>'
+                            + '<div class="qida-att-meta">' + esc(a.mimetype || '') + ' &middot; ' + esc(a.date || a.createdAt || '') + '</div>'
                         + '</div>'
                         + (a.isMain ? '<span class="qida-att-main">Principal</span>' : '')
                     + '</div>';
@@ -1772,7 +2488,7 @@
             + '</button>'
             + (expanded ? '<div class="qida-att-collapse-body">' + bodyHtml + '</div>' : '')
         + '</div>';
-        return infoCard(icon('paperclip', 12) + ' Adjuntos', '', collapse);
+        return infoCard(title, '', collapse);
     }
 
     // v1.7: Chat IA en columna dedicada (.qida-pane-ai).
@@ -1951,24 +2667,36 @@
             + '</div>';
     }
 
-    function renderCenterPane(lead) {
+    // v1.11: renderCenterPane recibe cached y lo propaga a los renderers de paneles
+    //   del detalle. renderIaSummary y renderAiChat NO se tocan en Fase A (Fase E).
+    function renderCenterPane(lead, cached) {
         return ''
             + renderIaSummary(lead)
-            + renderCare(lead)
-            + renderInternalNotes(lead)
-            + renderActivities(lead)
-            + renderFollowers(lead)
-            + renderAttachmentsCollapsable(lead);
+            + renderCare(lead, cached)
+            + renderInternalNotes(lead, cached)
+            + renderActivities(lead, cached)
+            + renderFollowers(lead, cached)
+            + renderAttachmentsCollapsable(lead, cached);
     }
 
     function renderDetail() {
-        var lead = getLead(state.currentLeadId);
-        if (!lead) return renderDashboard();
+        var leadId = state.currentLeadId;
+        // v1.11: leer del cache; fallback al mock crudo si cached === null (modo dev
+        //   defensivo: si por alguna razon entras al detalle sin pasar por select-lead).
+        var cached = LeadDetailService.getFromCache(leadId);
+        var lead = (cached && cached.lead) || getLead(leadId);
+        if (!lead) {
+            // v1.11: error global - el primer fetch (crm.lead.read) fallo. Volvemos al
+            //   dashboard. El toast con el mensaje ya lo disparo fetchAll en su .catch.
+            return renderDashboard();
+        }
 
         // v1.8: el toggle "Swap" del shell header intercambia el orden centro/derecha.
         //   false -> WA | Info | IA   (default)
         //   true  -> WA | IA   | Info
-        var centerHtml = '<div class="qida-pane-center">' + renderCenterPane(lead) + '</div>';
+        // v1.11: renderWhatsAppPane y renderAiChat reciben lead pero NO cached (no se
+        //   tocan en Fase A - Fase B y Fase E respectivamente).
+        var centerHtml = '<div class="qida-pane-center">' + renderCenterPane(lead, cached) + '</div>';
         var aiHtml = '<div class="qida-pane-ai">' + renderAiChat(lead) + '</div>';
         var middleAndRight = state.detailLayoutSwapped ? (aiHtml + centerHtml) : (centerHtml + aiHtml);
 
@@ -2287,7 +3015,20 @@
                 // v1.6: inicializamos draftMessage='' y attachmentsExpanded=false. NO tocar aiChatHistory.
                 state.__waNeedsScroll = true;
                 state.__aiNeedsScroll = true;  // v1.9.1: scroll inicial al fondo del chat IA si hay historial.
-                setState({ view: 'detail', currentLeadId: id, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false });
+                // v1.11: normalizamos leadId a number cuando es numerico (los data-id del DOM
+                //   son siempre strings; los leadIds de Odoo son int). Lo hacemos UNA vez aca,
+                //   antes del setState, para que state.currentLeadId quede como number desde el
+                //   inicio y el race-guard de LeadDetailService.fetchAll compare con ===
+                //   estricto sin coercion.
+                var leadIdNum = (typeof id === 'string' && /^\d+$/.test(id)) ? parseInt(id, 10) : id;
+                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false });
+                // v1.11: SIEMPRE llamamos a fetchAll (incluso en modo mock - el service lo
+                //   detecta y hace mockHydrate sync, sin loading visible). Solo skipeamos si
+                //   ya hay cache valido (sin _error) para evitar fetchs redundantes en cache hits.
+                var existing = LeadDetailService.getFromCache(leadIdNum);
+                if (!existing || existing._error) {
+                    LeadDetailService.fetchAll(leadIdNum);
+                }
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
@@ -2791,6 +3532,21 @@
         init: function (options) {
             CONFIG = options || {};
             log('init() called', CONFIG);
+
+            // v1.11: feature flag automatico por host. Si estamos en erp.qida.es, activamos
+            //   modo Odoo y disparamos session_info para hidratar _baseContext. Si la sesion
+            //   falla (logout, network), degradamos a modo mock para no romper el widget.
+            IS_ODOO_MODE = (typeof window.location !== 'undefined' && window.location.host === 'erp.qida.es');
+            if (IS_ODOO_MODE) {
+                odooSession().then(function (sess) {
+                    _baseContext = (sess && sess.user_context) || {};
+                    log('Odoo session ready', { uid: sess && sess.uid, lang: _baseContext.lang });
+                }).catch(function (err) {
+                    log('Odoo session failed, falling back to mock mode', err && err.message);
+                    IS_ODOO_MODE = false;  // graceful fallback
+                });
+            }
+
             mountWhenReady();
             if (CONFIG.autoOpen) {
                 var delay = CONFIG.autoOpenDelay || 0;

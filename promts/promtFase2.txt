@@ -1,0 +1,466 @@
+# Widget de Seguimientos — Fase B: BFF mínimo + Panel WhatsApp
+
+> **Audiencia**: agente de código.
+> **Objetivo**: implementar el **panel izquierdo del modal** (conversación WhatsApp + envío) y el **BFF mínimo** que lo soporta.
+> **Doc previo**: `widget-seguimientos-fase-A-panel-odoo.md` (lectura Odoo desde widget).
+> **Plan global**:
+> - Fase A: Lead Detail desde Odoo (en curso)
+> - **Fase B** (este doc): BFF mínimo + Panel WhatsApp
+> - Fase C: Endurecer auth/logs/errors/cache
+> - Fase D: Dashboard cooling
+> - Fase E: Gemini / panel central IA
+
+---
+
+## 1. Qué es "BFF mínimo"
+
+Un servicio pequeño cuyo **único trabajo** es:
+
+1. Guardar el token de Timelines (no puede ir en el JS del navegador).
+2. Proxyar llamadas widget → Timelines.
+3. Resolver qué cuenta WhatsApp corresponde a la AF logueada.
+
+**Lo que NO es**:
+- ❌ No tiene base de datos.
+- ❌ No tiene migraciones.
+- ❌ No procesa webhooks.
+- ❌ No tiene cliente Odoo (Fase A ya hace eso desde el widget).
+- ❌ No persiste estado.
+
+Si en algún momento del scope aparece "necesito guardar X", **mover ese requisito a Fase C+**.
+
+---
+
+## 2. Por qué necesitamos backend (no se puede solo widget)
+
+- **Token de Timelines**: si lo hardcodeás en el script de Tampermonkey, queda expuesto a cualquiera que vea el JS. Cualquier persona con acceso al ambiente del champion puede leerlo y enviar WhatsApp en nombre de la AF.
+- **Composición**: una respuesta del panel WhatsApp necesita `phone` (Odoo, ya lo tiene el widget) + `whatsapp_account.id` (Timelines, lo resuelve el BFF). El BFF compone.
+- **Costo cero de seguridad**: con un backend mínimo + whitelist de emails ya tenés MVP defendible para 3 champions.
+
+---
+
+## 3. Stack técnico
+
+- Python 3.12
+- FastAPI 0.115+
+- httpx async (cliente HTTP)
+- Pydantic v2
+- structlog (logs estructurados básicos)
+- **SIN** Postgres, SQLAlchemy, Alembic, Celery, Redis. Nada de eso para Fase B.
+- Deploy: cualquier servicio simple (Render, Fly, Railway, Cloud Run). No requiere DB.
+
+Dependencias en `pyproject.toml`: `fastapi`, `httpx`, `pydantic`, `pydantic-settings`, `structlog`, `uvicorn`. Punto.
+
+---
+
+## 4. Arquitectura
+
+```
+Widget JS (Tampermonkey sobre erp.qida.es)
+    │
+    │  Lee de Odoo directamente (Fase A):
+    │    - lead.id, lead.mobile/phone, etc.
+    │    - session.username (email AF)
+    │
+    │  Llama al BFF con:
+    │    Headers: X-AF-Email: alba.alvarez@qida.es
+    │    Body: { lead_id, family_phone (normalizado), text }
+    │
+    └──→ BFF (FastAPI, en cualquier host)
+           │
+           │  Resuelve AF.email → whatsapp_account vía Timelines
+           │  Compone llamadas + agrega token
+           │
+           └──→ Timelines.ai
+                Read messages / Send message / Upload file
+```
+
+**No** hay validación cruzada widget → BFF → Odoo en esta fase. El BFF **confía** en el `family_phone` que recibe del widget. Threat model piloto: 3 champions = bajo. En Fase C se endurece con validación contra Odoo si hace falta.
+
+---
+
+## 5. Auth: whitelist + header
+
+Sin JWT, sin cookies cross-origin, sin OAuth.
+
+### En el widget
+
+Al inicializarse (Fase A), el widget ya hace `odooSession()` y guarda `session.username` (email de la AF). Cada llamada al BFF agrega ese header:
+
+```js
+async function bffCall(path, options = {}) {
+  return fetch(`${BFF_URL}${path}`, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'Content-Type': 'application/json',
+      'X-AF-Email': session.username,
+    },
+  });
+}
+```
+
+### En el BFF
+
+```python
+# app/api/deps.py
+from fastapi import Header, HTTPException
+
+WHITELIST = {
+    "alba.alvarez@qida.es",
+    "ana.pinilla@qida.es",
+    "alejandro.vivas@qida.es",
+    # agregar champions acá
+}
+
+def get_current_af(x_af_email: str = Header(...)) -> str:
+    if x_af_email not in WHITELIST:
+        raise HTTPException(403, "AF not in whitelist")
+    return x_af_email
+```
+
+**Threat model**: cualquiera que tenga acceso al BFF puede mandarse un header falso. Para piloto con 3 personas en un dominio cerrado, está OK. Para producción, Fase C: reemplazar por validación real contra Odoo (BFF llama a Odoo con la cookie del widget, valida sesión).
+
+---
+
+## 6. Endpoints del BFF
+
+### 6.1 `GET /api/leads/{lead_id}/conversation`
+
+**Headers**: `X-AF-Email: ...`
+
+**Query params**:
+- `phone` (string, requerido): teléfono normalizado de la familia (el widget lo extrae de Odoo y normaliza)
+- `page` (int, opcional, default 1)
+
+**Response 200**:
+
+```json
+{
+  "chat_id": 54768459,
+  "messages": [
+    {
+      "uid": "70e9...3e17",
+      "timestamp": "2026-05-20T10:53:58+02:00",
+      "from_me": false,
+      "sender_phone": "+34XXXXXX831",
+      "text": "Gracias, recibido",
+      "has_attachment": false,
+      "status": "Not connected"
+    },
+    {
+      "uid": "b412...0949",
+      "timestamp": "2026-05-20T10:52:02+02:00",
+      "from_me": true,
+      "text": ".",
+      "has_attachment": true,
+      "attachment_filename": "Propuesta.pdf",
+      "attachment_url": "https://tl-prod-data.s3.amazonaws.com/...",
+      "status": "Delivered"
+    }
+  ],
+  "has_more_pages": false
+}
+```
+
+**Notas**:
+- Orden: descendente (lo que devuelve Timelines). El widget decide si invertir al renderear.
+- `attachment_url` expira en ~3600s, no la persistas.
+- Si no hay chat con esa familia: devuelve `{ "chat_id": null, "messages": [], "has_more_pages": false }`. **No es error**.
+
+**Lógica del BFF**:
+
+```python
+async def get_conversation(lead_id, phone, af_email):
+    # 1. Resolver AF email → whatsapp_account
+    accounts = await timelines.list_whatsapp_accounts()  # cache 5 min
+    account = next((a for a in accounts if a.owner_email == af_email), None)
+    if not account:
+        raise HTTPException(403, "AF_HAS_NO_WHATSAPP_ACCOUNT")
+    if account.status != "active":
+        raise HTTPException(403, "WHATSAPP_ACCOUNT_DISCONNECTED")
+
+    # 2. Buscar chat
+    chat = await timelines.find_chat(family_phone=phone, whatsapp_account_id=account.id)
+    if not chat:
+        return ConversationResponse(chat_id=None, messages=[], has_more_pages=False)
+
+    # 3. Listar mensajes
+    page_data = await timelines.list_messages(chat.id, page=page)
+    return normalize_response(chat, page_data)
+```
+
+### 6.2 `POST /api/leads/{lead_id}/conversation/messages`
+
+**Headers**: `X-AF-Email: ...`
+
+**Body**:
+```json
+{
+  "phone": "+34688776655",
+  "text": "Hola Conxi, te escribo para...",
+  "file_uid": "opcional"
+}
+```
+
+**Response 202**:
+```json
+{ "message_uid": "9367...fc4c" }
+```
+
+**Lógica**:
+1. Validar: `text` no vacío OR `file_uid` presente.
+2. Resolver AF email → `whatsapp_account.phone` (igual que 6.1).
+3. `POST /messages` a Timelines:
+   ```json
+   {
+     "phone": "<family_phone>",
+     "whatsapp_account_phone": "<account.phone>",
+     "text": "<text>",
+     "file_uid": "<opcional>"
+   }
+   ```
+4. Devolver `message_uid`.
+
+### 6.3 `POST /api/leads/{lead_id}/attachments` (opcional para primer ship)
+
+**Body**: multipart/form-data, campo `file`.
+
+**Response 200**:
+```json
+{ "file_uid": "afa9d4dd-..." }
+```
+
+**Lógica**: passthrough a `POST /files_upload` de Timelines. Si Fase B sale sin adjuntos, comunicar a champions y agregar en iteración siguiente.
+
+---
+
+## 7. Cliente Timelines
+
+```python
+# app/clients/timelines.py
+from typing import Optional
+import httpx
+from pydantic import BaseModel
+
+class WhatsAppAccount(BaseModel):
+    id: str           # JID, ej "34645592132@s.whatsapp.net"
+    phone: str        # ej "+34645592132"
+    status: str       # "active" | "disconnected" | ...
+    owner_email: str  # email de la AF
+    owner_name: str
+
+class ChatSummary(BaseModel):
+    id: int
+    phone: str
+    jid: str
+    whatsapp_account_id: str
+    last_message_timestamp: Optional[str]
+
+class TimelinesClient:
+    def __init__(self, base_url: str, token: str):
+        self._http = httpx.AsyncClient(
+            base_url=base_url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=httpx.Timeout(10.0, connect=5.0),
+        )
+
+    async def list_whatsapp_accounts(self) -> list[WhatsAppAccount]:
+        r = await self._http.get("/whatsapp_accounts")
+        r.raise_for_status()
+        return [WhatsAppAccount(**a) for a in r.json()["data"]]
+
+    async def find_chat(self, family_phone: str, whatsapp_account_id: str) -> Optional[ChatSummary]:
+        r = await self._http.get("/chats", params={
+            "phone": family_phone,
+            "whatsapp_account_id": whatsapp_account_id,
+        })
+        r.raise_for_status()
+        chats = r.json()["data"]["chats"]
+        return ChatSummary(**chats[0]) if chats else None
+
+    async def list_messages(self, chat_id: int, page: int = 1) -> dict:
+        r = await self._http.get(f"/chats/{chat_id}/messages", params={"page": page})
+        r.raise_for_status()
+        return r.json()["data"]
+
+    async def send_message(
+        self,
+        family_phone: str,
+        whatsapp_account_phone: str,  # SIEMPRE explícito
+        text: str,
+        file_uid: Optional[str] = None,
+    ) -> str:
+        if not whatsapp_account_phone:
+            raise ValueError("whatsapp_account_phone is mandatory")
+        body = {
+            "phone": family_phone,
+            "whatsapp_account_phone": whatsapp_account_phone,
+            "text": text,
+        }
+        if file_uid:
+            body["file_uid"] = file_uid
+        r = await self._http.post("/messages", json=body)
+        r.raise_for_status()
+        return r.json()["data"]["message_uid"]
+```
+
+**Cache de `list_whatsapp_accounts`**: usar `cachetools.TTLCache` en memoria con TTL 5 min. Las cuentas no cambian seguido.
+
+---
+
+## 8. Resolución AF email → cuenta WhatsApp
+
+Esto está confirmado por el discovery. **NO** usar `responsible_email` de los chats (viene NULL).
+
+Flujo:
+1. BFF llama `GET /whatsapp_accounts` (cacheado).
+2. Filtra por `owner_email == af_email`.
+3. Si no match → 403 `AF_HAS_NO_WHATSAPP_ACCOUNT`.
+4. Si `status != "active"` → 403 `WHATSAPP_ACCOUNT_DISCONNECTED`.
+
+**Asunción crítica**: que el email en Odoo coincida con `owner_email` en Timelines. Validar empíricamente: hacer un script que para cada champion, chequee que `WHITELIST[email]` aparece como `owner_email` en alguna cuenta activa de Timelines. Si no, escalar.
+
+---
+
+## 9. Variables de entorno
+
+```bash
+# App
+APP_ENV=production
+LOG_LEVEL=INFO
+
+# CORS
+CORS_ORIGINS=https://erp.qida.es
+CORS_ALLOW_CREDENTIALS=false  # no necesitamos cookies cross-origin
+
+# Whitelist (CSV)
+AF_WHITELIST=alba.alvarez@qida.es,ana.pinilla@qida.es,alejandro.vivas@qida.es
+
+# Timelines
+TIMELINES_BASE_URL=https://app.timelines.ai/integrations/api
+TIMELINES_API_TOKEN=...
+```
+
+Sin DB, sin secret de webhook, sin nada más.
+
+---
+
+## 10. Manejo de errores
+
+| Código | HTTP | Cuándo |
+|---|---|---|
+| `AF_NOT_IN_WHITELIST` | 403 | Header `X-AF-Email` con email no permitido |
+| `AF_HAS_NO_WHATSAPP_ACCOUNT` | 403 | No hay cuenta con ese `owner_email` |
+| `WHATSAPP_ACCOUNT_DISCONNECTED` | 403 | Cuenta existe pero `status != "active"` |
+| `PHONE_REQUIRED` | 422 | Falta el query param o body field `phone` |
+| `EMPTY_MESSAGE` | 422 | Ni `text` ni `file_uid` |
+| `TIMELINES_UPSTREAM_ERROR` | 502 | Timelines respondió 5xx o timeout |
+
+Response error estándar:
+```json
+{
+  "error": {
+    "code": "WHATSAPP_ACCOUNT_DISCONNECTED",
+    "message": "La cuenta WhatsApp de la AF está desconectada en Timelines.",
+    "details": { "af_email": "alba.alvarez@qida.es" }
+  }
+}
+```
+
+---
+
+## 11. Polling desde el widget
+
+Mientras no haya SSE/webhooks, el widget polea cada 10-15s mientras el modal está abierto:
+
+```js
+let pollInterval = null;
+let lastTimestamp = null;
+
+function startConversationPolling(leadId, familyPhone) {
+  const fetchConv = async () => {
+    const res = await bffCall(
+      `/api/leads/${leadId}/conversation?phone=${encodeURIComponent(familyPhone)}`
+    );
+    if (!res.ok) {
+      console.error('Conversation fetch failed:', res.status);
+      return;
+    }
+    const data = await res.json();
+    renderConversation(data.messages);
+  };
+
+  fetchConv();
+  pollInterval = setInterval(fetchConv, 12000);
+}
+
+function stopConversationPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = null;
+}
+```
+
+Llamar `startConversationPolling` al abrir el modal, `stopConversationPolling` al cerrarlo. Importante para no dejar pollers huérfanos.
+
+---
+
+## 12. Gotchas críticos (validados con Timelines)
+
+1. **`whatsapp_account_phone` SIEMPRE obligatorio en `POST /messages`.** Si omitís, Timelines envía desde "la cuenta más recientemente conectada del workspace". Bomba. → Validación dura en `send_message`.
+
+2. **`responsible_email` viene NULL** en los chats. NO usar. Mapping de AF es solo vía `whatsapp_accounts.owner_email`.
+
+3. **`attachment_url` con expiración ~3600s** (URL S3 firmada). No persistirla. Si el widget querer mostrar el adjunto después de mucho rato, refrescar la conversación.
+
+4. **`GET /chats` sin resultados → 200 OK con `chats: []`**. No es error HTTP. Manejar.
+
+5. **Mensajes vienen orden descendente**. Más reciente primero.
+
+6. **Rate limit ~2 seg entre envíos** del lado de Timelines. Para nuestro flujo no impacta.
+
+7. **Costos Timelines**: 1 credit por texto, 2 con adjunto. Monitorizar.
+
+8. **Teléfonos**: Odoo devuelve con espacios (`"+34 911 22 33 44"`). El widget tiene que normalizar antes de mandar al BFF: `tel.replace(/\s+/g, '').replace(/-/g, '')`. Resultado: `+34911223344`.
+
+---
+
+## 13. Lo que NO entra en Fase B
+
+| Item | Fase futura |
+|---|---|
+| Webhooks de Timelines (push) | Post-MVP, opcional |
+| Base de datos / persistencia | Solo cuando haga falta (D para marks_done, E para chat logs) |
+| Validación cruzada de phone contra Odoo | C |
+| Auth real con cookie de Odoo | C |
+| SSE para mensajes nuevos | Post-Fase B |
+| Tracking de message status (entregado / leído) | Post-MVP |
+
+---
+
+## 14. Plan de ataque sugerido
+
+1. Repo nuevo: `qida-followup-api`. FastAPI mínimo (`fastapi`, `httpx`, `pydantic`, `pydantic-settings`, `structlog`, `uvicorn`).
+2. Endpoint `GET /health` que devuelve `{"status": "ok"}`. Deploy temprano, sin lógica.
+3. Cliente Timelines con los 4 métodos (sección 7). Tests unitarios con `respx` mockeando Timelines.
+4. Endpoint `GET /api/leads/{id}/conversation` end-to-end. Probar con el lead 123333 + phone real desde curl.
+5. Endpoint `POST /api/leads/{id}/conversation/messages`. Test manual: enviar a tu propio WhatsApp.
+6. Integrar widget: agregar `bffCall` helper, conectar polling al abrir modal, conectar envío al botón de enviar.
+7. Validar empíricamente: probar con cuenta de Alba (champion). Confirmar que `owner_email` matchea.
+8. (Opcional) Endpoint de adjuntos.
+
+**Estimación**: 1-2 días para el BFF + integración del widget. Si surge fricción con CORS o el deploy, sumar medio día.
+
+---
+
+## 15. Checklist antes de pasar a Fase C
+
+- [ ] Los 3 champions pueden ver su propia conversación WhatsApp con cada familia.
+- [ ] Pueden enviar un mensaje y la familia lo recibe.
+- [ ] El modal no tira errores cuando una familia todavía no tiene chat creado.
+- [ ] Polling no deja procesos huérfanos al cerrar el modal.
+- [ ] Si una AF tiene su cuenta WhatsApp desconectada, ve un mensaje claro (no un error críptico).
+
+---
+
+**Fin del documento.**

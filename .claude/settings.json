@@ -5,6 +5,9 @@
       "PowerShell(cmd /c \"npm run publish:widget\")",
       "PowerShell($response = Invoke-WebRequest \"https://6lrdpudff30zg6ys.public.blob.vercel-storage.com/qida-widget.v1.js\" -UseBasicParsing; $response.Content | Select-String -Pattern \"var VERSION = '[\\\\d.]+'\" | Select-Object -First 1; \"Content-Length: $\\($response.Content.Length\\) bytes\")",
       "PowerShell(cmd /c \"node --check qida-widget.v1.js\" 2>&1; \"exit=$LASTEXITCODE\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\alejandro.vivas_qida\\Documents\\GitHub\\qida-followup-api"
     ]
   }
 }
