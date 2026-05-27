@@ -2315,8 +2315,7 @@
             '.qida-leader-badge:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(31,41,55,.38),0 4px 8px rgba(31,41,55,.18);}',
 
             /* Dashboard layout */
-            /* Dashboard layout */
-            '.qida-leader-dash{display:flex;flex-direction:column;flex:1;max-height:calc(92vh - 65px);min-height:0;overflow-y:auto;background:#f9fafb;padding:20px 24px;gap:18px;width:98vw;}',
+            '.qida-leader-dash{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;background:#f9fafb;padding:20px 24px;gap:18px;}',
             /* v1.12.1: toolbar plano en una sola fila. Exportar a la derecha via margin-left:auto. */
             '.qida-leader-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}',
             '.qida-leader-select{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px;color:var(--s800);cursor:pointer;outline:none;max-width:240px;}',
