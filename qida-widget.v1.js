@@ -2031,6 +2031,7 @@
             '.qida-shell-swap:hover{background:var(--s100);}',
             '.qida-shell-swap.active{background:#E1F5EE;color:#0F6E56;border-color:#c5e8dc;}',
             '.qida-content{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0;}',
+            '.qida-shell.qida-view-leaders .qida-content{overflow-y:auto;overflow-x:hidden;display:block;}',
 
             /* v1.10: coverage widget, dashboard search/chips/table, badges util ELIMINADOS.
                Vivian con renderCoverage / renderUnifiedTable / renderTempBadge / renderUrg /
@@ -2317,6 +2318,7 @@
             /* Dashboard layout */
             /* Dashboard layout */
             '.qida-leader-dash{display:flex;flex-direction:column;flex:1;max-height:calc(92vh - 70px)!important;min-height:0;overflow-y:auto!important;background:#f9fafb;padding:20px 24px;gap:18px;}',
+            '.qida-shell.qida-view-leaders .qida-leader-dash{min-height:100%;max-height:none!important;overflow:visible!important;}',
             /* v1.12.1: toolbar plano en una sola fila. Exportar a la derecha via margin-left:auto. */
             '.qida-leader-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}',
             '.qida-leader-select{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px;color:var(--s800);cursor:pointer;outline:none;max-width:240px;}',
