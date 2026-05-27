@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.11.0
+ * QIDA ASSISTANT v1.12.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,137 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.12.1 (fixes pre-demo del martes - 7 ajustes al panel de lideres):
+ *   - Modal de lideres mas grande: .qida-shell.qida-view-leaders (max-width:1600px,
+ *     width:98vw, height:98vh, max-height:98vh). Aplicado SOLO en view=leadersDashboard
+ *     via syncShellSizing (branch nuevo + class qida-view-leaders). Modal AF y detail
+ *     intactos. Scroll vertical del contenido del dashboard funciona via .qida-leader-dash
+ *     {height:100%;overflow-y:auto} (no cambia, solo gana espacio con el modal mas grande).
+ *   - Toolbar en una sola fila: locSelector + search + Exportar (Exportar con margin-left:auto).
+ *     Eliminados los wrappers .qida-leader-toolbar-left/right. Ancho razonable de selectors
+ *     y search (~220px). Eliminado el filtro team-lead (el mock nuevo no tiene teamLead).
+ *   - KPIs sin deltas. 4 cards nuevas con metricas correctas para lider de equipo:
+ *       1. "Leads totales en cartera"        valor=totalCartera        sub="snapshot actual"
+ *       2. "% cartera con <3 seguimientos"   valor=bajoSegPct%         sub=bajoSegCount + " leads"
+ *       3. "Conversion del equipo"           valor=convTeam% (weighted) sub="ultimos 30 dias"
+ *       4. "AFs en zona de riesgo"           valor=N de M              sub="Sobrecarga o bajo seguimiento"
+ *     Todos los valores se derivan del array filtrado de AFs. Conversion del equipo es promedio
+ *     ponderado por cartera (no promedio simple) para que reflieje la realidad operativa.
+ *   - Filtros se RESETEAN al abrir el modal (locFilter='all', search='', sortCol=null,
+ *     sortDir='asc'). trendMetric SI persiste (preserva la metrica elegida la ultima vez).
+ *     Resuelve el bug reportado de "arranca en Cataluna" por persistencia entre aperturas.
+ *   - Mock MOCK_LEADER_AFS reemplazado: 19 AFs con nombres reales del proyecto (Ana Pinilla,
+ *     Maria Aridane Asiain, Graciela Mateos, Mariluz Guerrero, Inma Juarez Lopez, Ana Bezares,
+ *     Maria Diaz, Paloma Galvez, Alba Alvarez Rubio, Natalia Narro, Asun Herrera Teixido,
+ *     Pilar Comyn, Natalia Godoy, Sandra Casol, Marina Costa, Ruben Fernandez, Sandra Muro,
+ *     Maylan Almeida, Andrea Mahia). Schema cambia keys a espanol:
+ *       { nombre, localidad, cartera, calientes, templados, frios, bajoSeg, intPorLead,
+ *         conversion, estado }
+ *     estado en espanol: 'OK' | 'Atencion' | 'Sobrecarga'. Marina Costa con conversion 1.4%
+ *     es un outlier real conocido (es coach, no AF de campo - dejarla asi).
+ *   - 5 localidades en el filtro: Todas, MAD, CAT, BIL, VAL, COR. Cada una con su badge CSS:
+ *       MAD #EFF6FF/#1D4ED8 azul, CAT #FEF3C7/#92400E ambar, BIL #F0FDF4/#166534 verde,
+ *       VAL #FFF1F2/#9F1239 rosa, COR #F5F3FF/#5B21B6 violeta.
+ *   - Tabla con 8 columnas (era 10): AF, Localidad, Cartera, Temperatura (bar apilada),
+ *     Bajo seg, Int/lead, Conversion, Estado. Eliminadas: Aceptados, En curso, Rechazados,
+ *     Team lead. La barra apilada de temperatura usa calientes/templados/frios proporcional
+ *     al total de la AF. Estado en espanol.
+ *   - Grafica de tendencia replanteada (Fix #7):
+ *       * 6 meses en eje X (Dic 25 -> May 26) en lugar de 14 dias.
+ *       * Toggle entre dos metricas con pills "Conversion / Cobertura" en el header del card:
+ *           - Conversion: data [6.8, 7.1, 7.4, 7.8, 8.0, 8.2], target 8%, yMax 12.
+ *           - Cobertura:  data [37, 42, 48, 54, 61, 66], target 68%, yMax 100.
+ *       * NO se filtran por localidad (son metricas globales del equipo, no del subset).
+ *       * El toggle usa chart.updateOptions + chart.updateSeries SIN destruir el donut
+ *         (function updateLeaderAreaChart). Si las refs no estan vivas, fallback a rerender.
+ *       * Estado nuevo: state.leaderDash.trendMetric = 'conversion' | 'coverage'. Persiste
+ *         en sesion (NO se resetea en openLeadersDashboard).
+ *   - filterAndSortAfs adaptado: keys en espanol (af.nombre, af.localidad, af.cartera,
+ *     af.calientes para sort temperatura, mapeo estado OK/Atencion/Sobrecarga).
+ *   - NO se tocan: whitelist, lazy ApexCharts, donut (solo cambia el origen de la data:
+ *     calientes/templados/frios), modal AF, modal detail, tampermonkey, GTM, index.html.
+ *
+ * DEFAULTS QUE TOME EN v1.12.1:
+ *   - Keys del mock en espanol (no traduccion interna): nombre/localidad/cartera/etc.
+ *     Mas consistente con el resto del mock real y reduce magic mapping.
+ *   - Conversion del equipo = promedio ponderado por cartera (no simple avg).
+ *   - "AFs en zona de riesgo" = count(estado!=='OK') de count total filtrado (N de M dinamico).
+ *   - Persistencia: trendMetric SI persiste entre aperturas; locFilter/search/sortCol NO.
+ *   - Paleta de badges de localidad nuevos: BIL verde, VAL rosa, COR violeta.
+ *   - Tabla 8 columnas: temperatura como bar apilada (no 3 cols numericas separadas).
+ *   - openModal (badge AF) si state quedo en 'leadersDashboard', vuelve a 'dashboard'.
+ *     Comportamiento ya cubierto en v1.12.0 (sin cambios).
+ *
+ * Cambios v1.12.0 (Panel de lideres - segunda seccion del widget para managers de AFs):
+ *   - Segundo boton flotante (.qida-leader-badge) visible SOLO a usuarios en whitelist
+ *     LEADER_EMAILS (Eva, Mariluz, Jordi, Alejandro). Se posiciona apilado encima del
+ *     badge AF existente (bottom:110px;left:24px, 60x60, bg #1F2937, icono bar-chart-2).
+ *     El badge AF queda intacto - los dos botones coexisten en la misma pagina.
+ *   - Tercer valor de state.view: 'leadersDashboard' (suma a 'dashboard' | 'detail').
+ *     Modal mutuamente excluyente con el AF: reusa .qida-overlay / .qida-shell. El handler
+ *     'open-leaders-dashboard' setea state.view + abre overlay; ESC y X global cierran.
+ *     rerenderContent y syncShellHeader tienen rama nueva para el panel de lideres.
+ *   - Deteccion de leader en init():
+ *       * Modo Odoo (IS_ODOO_MODE === true): se lee sess.username de odooSession y se
+ *         compara contra LEADER_EMAILS. Si la session falla y estabamos en modo Odoo,
+ *         _isLeader queda FALSE explicito (NUNCA true por fallback - evita exponer el
+ *         dashboard a una AF si Odoo tiene un hiccup). Se loggea console.error.
+ *       * Modo dev local (!IS_ODOO_MODE desde el inicio): _isLeader = true automatico
+ *         para poder iterar / demo sin Odoo. Documentado en DEFAULTS.
+ *     Tras setear _isLeader, si true, se dispara injectApexCharts() (lazy) e
+ *     injectLeaderBadge() en paralelo con mountWhenReady().
+ *   - Lazy load de ApexCharts via CDN (jsdelivr): injectExternalScript con guard por id,
+ *     onload / onerror. Solo se inyecta si _isLeader === true. mountLeaderCharts chequea
+ *     typeof window.ApexCharts !== 'undefined' antes de instanciar - si falla la carga,
+ *     los divs muestran microcopy "Las gráficas no se cargaron correctamente. Recargá
+ *     la página para reintentarlo." en lugar de quedar en blanco.
+ *   - Mocks nuevos: MOCK_LEADER_KPIS (4 cards), MOCK_LEADER_TEMPERATURE (donut 3 segmentos),
+ *     MOCK_LEADER_TREND (area chart 14 dias con annotation 68%), MOCK_LEADER_AFS (8 filas
+ *     con name, location, leadTotal, leadAccepted, leadInProgress, leadRejected, conversion,
+ *     temperature {hot, warm, cold}, status {ok, attention, overload}, teamLead).
+ *   - state.leaderDash = { locFilter, leadFilter, search, sortCol, sortDir, __charts }.
+ *     Persiste durante la sesion del page load (igual que aiChatHistory) - NO se vacia en
+ *     closeModal. Los charts se destroyean antes de re-instanciar para evitar memory leaks.
+ *   - Filtros (localidad, team-lead, search) afectan KPIs + charts + tabla en simultaneo:
+ *     filterAndSortAfs(MOCK_LEADER_AFS, leaderDash) devuelve el array filtrado, y todos los
+ *     renderers (KPIs, donut, area, tabla) derivan totales y series desde ese mismo array.
+ *     Si Mariluz filtra MAD, todo el dashboard refleja solo MAD (no solo la tabla).
+ *   - Tabla AFs: 10 columnas (AF, Localidad, Total, Aceptados, En curso, Rechazados,
+ *     Conversion, Temperatura, Estado, Team lead). Sort por click en header (toggle asc/desc).
+ *     Search input filtra por nombre - el handler actualiza SOLO innerHTML de la tabla (NO
+ *     rerendea el modal entero) para no destruir las instancias ApexCharts. Selectores
+ *     localidad/team-lead SI rerendean (mas barato: charts se rebuilden con la data filtrada).
+ *   - CSS namespaced .qida-leader-* (badge, dashboard, kpis-grid, kpi-card, charts-row,
+ *     chart-card, table, table-header, table-row, badge-mad/cat, status-ok/att/overload).
+ *     Paleta acento: #3B82F6 azul, #EF4444 rojo, #F59E0B ambar, #10B981 verde, #1F2937
+ *     gris oscuro (badge leader).
+ *   - Boton "Exportar" en la toolbar visual (handler leader-export -> showToast placeholder).
+ *   - 2 console.info debug logs al final del init para verificar leader mode en prod:
+ *       [QidaAssistant] Leader mode: <bool>, <email>
+ *       [QidaAssistant] ApexCharts loaded: <bool>
+ *   - tempermonkey.js / gtm-loader.html: SIN cambios. Si Odoo bloquea jsdelivr por CSP,
+ *     se agregaria @require en tempermonkey.js (igual patron que DOMPurify en v1.11.0).
+ *   - NO se tocan: vista 'dashboard' AF, vista 'detail', mocks AF, LeadDetailService, WA pane,
+ *     IA chat, Schedule modal, integracion Odoo (Fase A) ni handlers existentes. El AF flow
+ *     queda 100% intacto.
+ *
+ * DEFAULTS QUE TOME EN v1.12.0:
+ *   - Icono del badge leader: 'bar-chart-2' (lucide). Se agrega al objeto I.
+ *   - Tamano badge leader: 60x60. Posicion bottom:110px;left:24px (24 base + 78 badge AF + 8 gap).
+ *   - state.leaderDash NO se vacia en closeModal (sesion del page load). Se vacia en reload.
+ *   - Sort por defecto de la tabla: ninguno (orden del MOCK_LEADER_AFS).
+ *   - Selectores localidad/team-lead afectan KPIs + charts + tabla (todo el dashboard).
+ *   - Botón cerrar del modal leader reusa data-action="close-modal" global.
+ *   - state.leaderDash.__charts NO serializable (instancias ApexCharts).
+ *   - Whitelist hardcodeada en el codigo (LEADER_EMAILS). Bump + republish para cambiar.
+ *     Aceptable para MVP demo. Cambio futuro: leer de un campo Odoo del user (res.users.is_leader).
+ *   - Modo dev local: !IS_ODOO_MODE desde el inicio implica _isLeader = true automatico
+ *     (para demo sin Odoo). En modo Odoo real, SOLO la whitelist habilita el badge.
+ *   - Fallback explicito si odooSession falla en modo Odoo: _isLeader = false (no true).
+ *     Se loggea console.error y NO se inyecta ni el badge ni ApexCharts.
+ *   - Microcopy de fallo de ApexCharts: "Las gráficas no se cargaron correctamente.
+ *     Recargá la página para reintentarlo." (en los dos divs de chart).
  *
  * Cambios v1.11.0 (Fase A - cablear datos reales del detalle del lead desde Odoo):
  *   - Feature flag automatico por host: IS_ODOO_MODE = (location.host === 'erp.qida.es').
@@ -683,7 +814,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.11.0';
+    var VERSION = '1.12.1';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -691,6 +822,20 @@
     //   degradar a false si odooSession() falla (fallback graceful a modo mock).
     var IS_ODOO_MODE = false;
     var _baseContext = {};
+    // v1.12: whitelist de emails con acceso al panel de lideres. _isLeader se setea en
+    //   init() comparando sess.username (modo Odoo) contra LEADER_EMAILS. En modo dev
+    //   local (!IS_ODOO_MODE desde el inicio) se setea true automatico para iterar la UI.
+    //   NUNCA degrada a true por fallback de session (eso expondria el dashboard a una AF).
+    //   TODO[whitelist]: mover a campo Odoo del user (res.users.is_leader) en proxima iteracion.
+    var LEADER_EMAILS = {
+        'alejandro.vivas@qida.es': 1,
+        'eva.fernandez.arratia@qida.es': 1,
+        'jordi.castillo@qida.es': 1,
+        'mariluz.guerrero@qida.es': 1
+    };
+    var _currentUserEmail = null;
+    var _isLeader = false;
+    var APEXCHARTS_URL = 'https://cdn.jsdelivr.net/npm/apexcharts';
     var QIDA_LOGO_URL = 'https://strapi-upload-files-production.s3.eu-central-1.amazonaws.com/qida_logo_ba5b1d80b5.png?w=1080';
     var FONTS_HREF = 'https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap';
     // v1.10: COVERAGE_TARGET eliminado (lo consumia renderCoverage / CoverageService).
@@ -955,6 +1100,56 @@
     //   buildUnifiedFeed (todos eliminados con el dashboard nuevo).
 
     // ============================================================
+    // MOCK DATA - PANEL DE LIDERES (v1.12)
+    // ============================================================
+    // v1.12.1: schema en espanol (nombre/localidad/cartera/calientes/templados/frios/bajoSeg/
+    //   intPorLead/conversion/estado). 19 AFs con nombres reales del proyecto. Marina Costa
+    //   tiene conversion 1.4% como outlier real (es coach, no AF de campo).
+    //   Las cifras de KPIs y donut se DERIVAN del array filtrado de AFs en runtime
+    //   (buildLeaderKpis / buildLeaderTemperature). La grafica de tendencia NO se filtra
+    //   (es metrica global del equipo - decision #2 del plan v1.12.1).
+    var MOCK_LEADER_AFS = [
+        { nombre: 'Ana Pinilla',           localidad: 'MAD', cartera: 82, calientes: 18, templados: 28, frios: 36, bajoSeg: 24, intPorLead: 3.1, conversion: 10.4, estado: 'OK' },
+        { nombre: 'María Aridane Asiaín',  localidad: 'MAD', cartera: 74, calientes: 16, templados: 25, frios: 33, bajoSeg: 27, intPorLead: 2.9, conversion: 9.7,  estado: 'OK' },
+        { nombre: 'Graciela Mateos',       localidad: 'MAD', cartera: 71, calientes: 12, templados: 25, frios: 34, bajoSeg: 35, intPorLead: 2.4, conversion: 8.9,  estado: 'OK' },
+        { nombre: 'Mariluz Guerrero',      localidad: 'MAD', cartera: 38, calientes: 10, templados: 14, frios: 14, bajoSeg: 18, intPorLead: 3.2, conversion: 9.5,  estado: 'OK' },
+        { nombre: 'Inma Juárez López',     localidad: 'CAT', cartera: 65, calientes: 13, templados: 22, frios: 30, bajoSeg: 32, intPorLead: 2.5, conversion: 8.4,  estado: 'OK' },
+        { nombre: 'Ana Bezares',           localidad: 'BIL', cartera: 58, calientes: 11, templados: 19, frios: 28, bajoSeg: 34, intPorLead: 2.3, conversion: 8.1,  estado: 'Atención' },
+        { nombre: 'María Díaz',            localidad: 'MAD', cartera: 68, calientes: 11, templados: 24, frios: 33, bajoSeg: 38, intPorLead: 2.1, conversion: 8.0,  estado: 'Atención' },
+        { nombre: 'Paloma Gálvez',         localidad: 'CAT', cartera: 49, calientes: 8,  templados: 15, frios: 26, bajoSeg: 48, intPorLead: 1.6, conversion: 6.8,  estado: 'Atención' },
+        { nombre: 'Alba Álvarez Rubio',    localidad: 'CAT', cartera: 62, calientes: 18, templados: 22, frios: 22, bajoSeg: 18, intPorLead: 3.2, conversion: 11.2, estado: 'OK' },
+        { nombre: 'Natalia Narro',         localidad: 'MAD', cartera: 45, calientes: 14, templados: 16, frios: 15, bajoSeg: 15, intPorLead: 3.4, conversion: 12.3, estado: 'OK' },
+        { nombre: 'Asun Herrera Teixidó',  localidad: 'CAT', cartera: 53, calientes: 9,  templados: 18, frios: 26, bajoSeg: 41, intPorLead: 1.9, conversion: 7.2,  estado: 'Atención' },
+        { nombre: 'Pilar Comyn',           localidad: 'MAD', cartera: 47, calientes: 7,  templados: 16, frios: 24, bajoSeg: 45, intPorLead: 1.7, conversion: 6.5,  estado: 'Atención' },
+        { nombre: 'Natalia Godoy',         localidad: 'MAD', cartera: 78, calientes: 14, templados: 24, frios: 40, bajoSeg: 42, intPorLead: 1.8, conversion: 7.4,  estado: 'Atención' },
+        { nombre: 'Sandra Casol',          localidad: 'CAT', cartera: 89, calientes: 9,  templados: 20, frios: 60, bajoSeg: 58, intPorLead: 1.4, conversion: 5.2,  estado: 'Sobrecarga' },
+        { nombre: 'Marina Costa',          localidad: 'CAT', cartera: 42, calientes: 12, templados: 14, frios: 16, bajoSeg: 19, intPorLead: 2.8, conversion: 1.4,  estado: 'OK' },
+        { nombre: 'Rubén Fernández',       localidad: 'MAD', cartera: 56, calientes: 12, templados: 19, frios: 25, bajoSeg: 30, intPorLead: 2.6, conversion: 8.7,  estado: 'OK' },
+        { nombre: 'Sandra Muro',           localidad: 'VAL', cartera: 51, calientes: 10, templados: 18, frios: 23, bajoSeg: 35, intPorLead: 2.2, conversion: 7.6,  estado: 'Atención' },
+        { nombre: 'Maylan Almeida',        localidad: 'MAD', cartera: 44, calientes: 9,  templados: 15, frios: 20, bajoSeg: 36, intPorLead: 2.0, conversion: 7.0,  estado: 'Atención' },
+        { nombre: 'Andrea Mahia',          localidad: 'COR', cartera: 39, calientes: 7,  templados: 13, frios: 19, bajoSeg: 38, intPorLead: 1.9, conversion: 6.9,  estado: 'Atención' }
+    ];
+
+    // v1.12.1: dos series mensuales fijas (6 meses) para el area chart, toggleable con pills.
+    //   NO se filtran por localidad (decision #2): son metricas globales del equipo. El target
+    //   line se anota como linea horizontal punteada al valor target de cada metrica.
+    var MOCK_LEADER_TREND = {
+        categories: ['Dic 25', 'Ene 26', 'Feb 26', 'Mar 26', 'Abr 26', 'May 26'],
+        conversion: {
+            data: [6.8, 7.1, 7.4, 7.8, 8.0, 8.2],
+            target: 8,
+            title: 'Conversión mensual del equipo',
+            yMax: 12
+        },
+        coverage: {
+            data: [37, 42, 48, 54, 61, 66],
+            target: 68,
+            title: '% cartera con ≥3 seguimientos',
+            yMax: 100
+        }
+    };
+
+    // ============================================================
     // STATE
     // ============================================================
     var state = {
@@ -1008,7 +1203,21 @@
         scheduleLeadIdOverride: null,   // leadId target cuando origin !== 'detail'
 
         // Toast
-        toast: null                     // { msg, ts }
+        toast: null,                    // { msg, ts }
+
+        // v1.12: state del panel de lideres. Persiste durante la sesion del page load.
+        //   v1.12.1: filtros/sort/search se RESETEAN al abrir el modal (openLeadersDashboard).
+        //   trendMetric SI persiste entre aperturas (preserva la metrica elegida).
+        //   __charts guarda las instancias ApexCharts (donut + area) para destroy/recrear
+        //   en cada rerender. NO serializable - no usar en JSON.stringify.
+        leaderDash: {
+            locFilter: 'all',           // 'all' | 'MAD' | 'CAT' | 'BIL' | 'VAL' | 'COR'
+            search: '',
+            sortCol: null,              // 'nombre' | 'localidad' | 'cartera' | ... | null
+            sortDir: 'asc',             // 'asc' | 'desc'
+            trendMetric: 'conversion',  // v1.12.1: 'conversion' | 'coverage'. PERSISTE.
+            __charts: null              // { donut: ApexCharts, area: ApexCharts } | null
+        }
     };
 
     // Edits "vivos" hechos por la AF (sin persistencia).
@@ -1616,6 +1825,102 @@
     };
 
     // ============================================================
+    // LEADER DASHBOARD SERVICE (v1.12, v1.12.1)
+    // ============================================================
+    // v1.12.1: schema en espanol (nombre/localidad/cartera/calientes/templados/frios/bajoSeg/
+    //   intPorLead/conversion/estado). Filtro team-lead eliminado (mock real no tiene teamLead).
+    //   Devuelve un nuevo array sin mutar el mock. KPIs, donut y tabla derivan de este array.
+    //   La grafica de tendencia NO se filtra (es metrica global del equipo).
+    function filterAndSortAfs(afs, ld) {
+        var locFilter = (ld && ld.locFilter) || 'all';
+        var search = ((ld && ld.search) || '').trim().toLowerCase();
+        var sortCol = ld && ld.sortCol;
+        var sortDir = (ld && ld.sortDir) || 'asc';
+
+        var out = [];
+        for (var i = 0; i < afs.length; i++) {
+            var af = afs[i];
+            if (locFilter !== 'all' && af.localidad !== locFilter) continue;
+            if (search && af.nombre.toLowerCase().indexOf(search) === -1) continue;
+            out.push(af);
+        }
+
+        if (sortCol) {
+            var dirMul = (sortDir === 'desc') ? -1 : 1;
+            out.sort(function (a, b) {
+                var av, bv;
+                if (sortCol === 'temperatura') {
+                    // v1.12.1: proxy de orden por temperatura -> usa calientes.
+                    av = a.calientes; bv = b.calientes;
+                } else if (sortCol === 'estado') {
+                    var ord = { 'OK': 0, 'Atención': 1, 'Sobrecarga': 2 };
+                    av = ord[a.estado]; bv = ord[b.estado];
+                } else {
+                    av = a[sortCol]; bv = b[sortCol];
+                }
+                if (av == null && bv == null) return 0;
+                if (av == null) return 1;
+                if (bv == null) return -1;
+                if (typeof av === 'string') return av.localeCompare(bv) * dirMul;
+                return (av - bv) * dirMul;
+            });
+        }
+        return out;
+    }
+
+    // v1.12.1: KPIs del lider. Conversion del equipo es PROMEDIO PONDERADO por cartera
+    //   (no avg simple) para reflejar la realidad operativa - AFs con mas cartera pesan mas.
+    //   bajoSegPct = (sum bajoSeg) / (sum cartera) * 100. riesgoCount = count(estado != 'OK').
+    function buildLeaderKpis(afs) {
+        var totalCartera = 0, bajoSegSum = 0, convWeighted = 0, riesgo = 0;
+        for (var i = 0; i < afs.length; i++) {
+            var a = afs[i];
+            totalCartera += a.cartera;
+            bajoSegSum   += a.bajoSeg;
+            convWeighted += a.conversion * a.cartera;
+            if (a.estado !== 'OK') riesgo++;
+        }
+        var bajoSegPct = totalCartera ? Math.round(bajoSegSum / totalCartera * 100) : 0;
+        var convTeam   = totalCartera ? Math.round((convWeighted / totalCartera) * 10) / 10 : 0;
+        return {
+            totalCartera: totalCartera,
+            bajoSegPct: bajoSegPct,
+            bajoSegCount: bajoSegSum,
+            convTeam: convTeam,
+            riesgoCount: riesgo,
+            afCount: afs.length
+        };
+    }
+
+    // v1.12.1: agregado por temperatura para el donut. Renombre simple de hot/warm/cold ->
+    //   calientes/templados/frios (mock nuevo).
+    function buildLeaderTemperature(afs) {
+        var hot = 0, warm = 0, cold = 0;
+        for (var i = 0; i < afs.length; i++) {
+            hot  += afs[i].calientes;
+            warm += afs[i].templados;
+            cold += afs[i].frios;
+        }
+        return { hot: hot, warm: warm, cold: cold, total: hot + warm + cold };
+    }
+
+    // v1.12.1: serie del area chart segun state.leaderDash.trendMetric. Series FIJAS (no se
+    //   filtran por localidad - son metricas globales del equipo). targetValue es el valor
+    //   absoluto del target (8 para conversion, 68 para coverage), sirve para la annotation.
+    function buildLeaderTrendSeries() {
+        var key = (state.leaderDash && state.leaderDash.trendMetric) || 'conversion';
+        var m = MOCK_LEADER_TREND[key] || MOCK_LEADER_TREND.conversion;
+        return {
+            categories: MOCK_LEADER_TREND.categories.slice(),
+            data: m.data.slice(),
+            target: m.target,
+            title: m.title,
+            yMax: m.yMax,
+            metric: key
+        };
+    }
+
+    // ============================================================
     // SVG ICONS (lucide-style)
     // ============================================================
     var I = {
@@ -1660,7 +1965,12 @@
         // v1.10: lucide RefreshCw (rotation horario, dos arrows) - distinto a "refresh" que es RefreshCcw.
         'refresh-cw':'<path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>',
         // v1.10: lucide AlertTriangle (triangulo con !) - distinto a "alert" que es AlertCircle.
-        'alert-triangle':'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>'
+        'alert-triangle':'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+        // v1.12: lucide BarChart2 - icono del badge leader.
+        'bar-chart-2':'<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+        // v1.12: lucide Search (alias del existente; agrego download/external para boton exportar).
+        'download':'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+        'filter':'<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -1702,6 +2012,8 @@
             '.qida-overlay.active{display:flex;}',
             '.qida-shell{background:#fff;border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.3);width:100%;max-width:1400px;height:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;position:relative;}',
             '.qida-shell.qida-view-detail{max-width:none;max-height:none;width:96vw;height:96vh;}',
+            /* v1.12.1: modal mas grande para el panel de lideres (95vw x 92vh, max 1600px). */
+            '.qida-shell.qida-view-leaders{max-width:1600px;max-height:92vh;width:95vw;height:92vh;}',
             '.qida-shell *{box-sizing:border-box;}',
 
             /* shell header */
@@ -1993,7 +2305,92 @@
             /* Detalle: anchos por posicion estructural. En 760px se oculta la 1ra columna (WA). */
             '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 26%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
             '@media (max-width:980px){.qida-detail-body > *:nth-child(3){display:none;}}',
-            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}.qida-cooling-header{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}.qida-cooling-row{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}}'
+            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}.qida-cooling-header{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}.qida-cooling-row{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}}',
+
+            /* ============================================================ */
+            /* v1.12: PANEL DE LIDERES                                       */
+            /* ============================================================ */
+            /* Badge leader (apilado encima del badge AF) */
+            '.qida-leader-badge{position:fixed;bottom:110px;left:24px;z-index:2147483000;width:60px;height:60px;border-radius:50%;cursor:pointer;background:#1F2937;color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(31,41,55,.32),0 2px 4px rgba(31,41,55,.16);transition:transform .18s ease,box-shadow .18s ease;user-select:none;-webkit-tap-highlight-color:transparent;font-family:"Manrope",system-ui,sans-serif;}',
+            '.qida-leader-badge:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(31,41,55,.38),0 4px 8px rgba(31,41,55,.18);}',
+
+            /* Dashboard layout */
+            '.qida-leader-dash{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;background:#f9fafb;padding:20px 24px;gap:18px;}',
+            /* v1.12.1: toolbar plano en una sola fila. Exportar a la derecha via margin-left:auto. */
+            '.qida-leader-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}',
+            '.qida-leader-select{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px;color:var(--s800);cursor:pointer;outline:none;max-width:240px;}',
+            '.qida-leader-select:focus{border-color:#3B82F6;}',
+            '.qida-leader-search-wrap{position:relative;display:inline-flex;align-items:center;flex:0 0 auto;}',
+            '.qida-leader-search-wrap .qa-icon{position:absolute;left:10px;color:var(--s500);pointer-events:none;}',
+            '.qida-leader-search{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px 7px 32px;font-family:inherit;font-size:13px;color:var(--s800);outline:none;min-width:220px;max-width:260px;}',
+            '.qida-leader-search:focus{border-color:#3B82F6;}',
+            '.qida-leader-export-btn{background:#1F2937;color:#fff;border:0;border-radius:8px;padding:8px 14px;font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin-left:auto;}',
+            '.qida-leader-export-btn:hover{background:#111827;}',
+
+            /* KPI cards */
+            '.qida-leader-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}',
+            '.qida-leader-kpi{background:#fff;border:0.5px solid var(--s200);border-radius:10px;padding:14px 16px;}',
+            '.qida-leader-kpi-label{font-size:11px;font-weight:500;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;}',
+            '.qida-leader-kpi-value{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-weight:600;font-size:28px;color:var(--s900);margin-top:4px;line-height:1.1;}',
+            /* v1.12.1: kpi-sub reemplaza al kpi-delta. Sin colores up/down/flat, solo gris. */
+            '.qida-leader-kpi-sub{font-size:11px;color:var(--s500);margin-top:4px;}',
+
+            /* Charts row */
+            '.qida-leader-charts{display:grid;grid-template-columns:1fr 1.6fr;gap:12px;}',
+            '.qida-leader-chart-card{background:#fff;border:0.5px solid var(--s200);border-radius:10px;padding:14px 16px;min-height:280px;display:flex;flex-direction:column;}',
+            /* v1.12.1: head del chart card con titulo a la izq + pills a la derecha */
+            '.qida-leader-chart-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;}',
+            '.qida-leader-chart-title{font-size:13px;font-weight:600;color:var(--s800);}',
+            '.qida-leader-chart-sub{font-size:11px;color:var(--s500);margin-bottom:8px;}',
+            '.qida-leader-chart-mount{flex:1;min-height:220px;display:flex;align-items:center;justify-content:center;}',
+            '.qida-leader-chart-fallback{font-size:12px;color:var(--s500);text-align:center;padding:16px;line-height:1.5;}',
+            /* v1.12.1: pills toggle metrica de tendencia */
+            '.qida-leader-pills{display:inline-flex;gap:2px;background:var(--s100);padding:3px;border-radius:8px;}',
+            '.qida-leader-pill{background:transparent;border:0;padding:4px 10px;border-radius:6px;font-family:inherit;font-size:11px;font-weight:500;color:var(--s700);cursor:pointer;transition:background .12s,color .12s;}',
+            '.qida-leader-pill:hover{color:var(--s900);}',
+            '.qida-leader-pill.active{background:#3B82F6;color:#fff;}',
+
+            /* Tabla AFs */
+            '.qida-leader-table-card{background:#fff;border:0.5px solid var(--s200);border-radius:10px;overflow:hidden;}',
+            '.qida-leader-table-head-bar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:0.5px solid var(--s200);}',
+            '.qida-leader-table-title{font-size:13px;font-weight:600;color:var(--s800);}',
+            '.qida-leader-table-count{font-size:11px;color:var(--s500);}',
+            '.qida-leader-table-wrap{overflow-x:auto;}',
+            '.qida-leader-table{width:100%;border-collapse:collapse;font-size:12.5px;}',
+            '.qida-leader-table th{background:#f3f4f6;color:var(--s700);font-weight:500;text-transform:uppercase;font-size:10.5px;letter-spacing:.04em;padding:9px 12px;text-align:left;border-bottom:0.5px solid var(--s200);white-space:nowrap;cursor:pointer;user-select:none;}',
+            '.qida-leader-table th:hover{background:#e5e7eb;}',
+            '.qida-leader-table th.qida-leader-th-sorted{color:#3B82F6;}',
+            '.qida-leader-table th .qa-icon{margin-left:4px;vertical-align:middle;}',
+            '.qida-leader-table td{padding:10px 12px;border-bottom:0.5px solid #f3f4f6;color:var(--s800);vertical-align:middle;}',
+            '.qida-leader-table tr:last-child td{border-bottom:0;}',
+            '.qida-leader-table tr:hover td{background:#fafafa;}',
+            '.qida-leader-af-cell{display:flex;align-items:center;gap:8px;}',
+            '.qida-leader-avatar{width:28px;height:28px;border-radius:50%;background:var(--s100);color:var(--s700);display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0;}',
+            '.qida-leader-af-name{font-weight:500;color:var(--s900);}',
+            '.qida-leader-loc-badge{display:inline-block;padding:2px 7px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;}',
+            '.qida-leader-loc-MAD{background:#EFF6FF;color:#1D4ED8;}',
+            '.qida-leader-loc-CAT{background:#FEF3C7;color:#92400E;}',
+            /* v1.12.1: 3 localidades nuevas */
+            '.qida-leader-loc-BIL{background:#F0FDF4;color:#166534;}',
+            '.qida-leader-loc-VAL{background:#FFF1F2;color:#9F1239;}',
+            '.qida-leader-loc-COR{background:#F5F3FF;color:#5B21B6;}',
+            '.qida-leader-temp-bar{display:flex;width:88px;height:8px;border-radius:4px;overflow:hidden;background:var(--s100);}',
+            '.qida-leader-temp-hot{background:#EF4444;}',
+            '.qida-leader-temp-warm{background:#F59E0B;}',
+            '.qida-leader-temp-cold{background:#3B82F6;}',
+            '.qida-leader-temp-cell{display:flex;align-items:center;gap:8px;}',
+            '.qida-leader-temp-nums{font-size:10.5px;color:var(--s500);white-space:nowrap;}',
+            '.qida-leader-status{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:8px;font-size:10.5px;font-weight:500;}',
+            '.qida-leader-status-ok{background:#ECFDF5;color:#047857;}',
+            '.qida-leader-status-attention{background:#FFFBEB;color:#92400E;}',
+            '.qida-leader-status-overload{background:#FEF2F2;color:#991B1B;}',
+            '.qida-leader-status-dot{width:6px;height:6px;border-radius:50%;background:currentColor;}',
+            '.qida-leader-conv{font-variant-numeric:tabular-nums;font-weight:500;}',
+            '.qida-leader-empty-row{padding:24px 16px;text-align:center;color:var(--s500);font-size:13px;}',
+
+            /* Responsive panel de lideres */
+            '@media (max-width:980px){.qida-leader-kpis{grid-template-columns:repeat(2,1fr);}.qida-leader-charts{grid-template-columns:1fr;}}',
+            '@media (max-width:680px){.qida-leader-search{min-width:140px;}.qida-leader-kpis{grid-template-columns:1fr;}}'
         ].join('');
 
         var style = document.createElement('style');
@@ -2807,9 +3204,306 @@
     }
 
     // ============================================================
+    // RENDER: PANEL DE LIDERES (v1.12)
+    // ============================================================
+    // Devuelve las iniciales (1-2 letras) para el avatar de la tabla.
+    function leaderInitials(name) {
+        if (!name) return '?';
+        var parts = name.split(/\s+/);
+        var a = (parts[0] && parts[0].charAt(0)) || '';
+        var b = (parts[1] && parts[1].charAt(0)) || '';
+        return (a + b).toUpperCase();
+    }
+
+    // v1.12.1: toolbar en una sola fila (sin wrappers left/right). Filtro team-lead eliminado.
+    //   Selectores con 6 opciones de localidad (Todas + MAD/CAT/BIL/VAL/COR). Exportar va a la
+    //   derecha via margin-left:auto en CSS.
+    function renderLeaderToolbar() {
+        var ld = state.leaderDash;
+        var locSel = ''
+            + '<select class="qida-leader-select" data-input="leader-filter-loc">'
+                + '<option value="all"' + (ld.locFilter === 'all' ? ' selected' : '') + '>Todas las localidades</option>'
+                + '<option value="MAD"' + (ld.locFilter === 'MAD' ? ' selected' : '') + '>Madrid</option>'
+                + '<option value="CAT"' + (ld.locFilter === 'CAT' ? ' selected' : '') + '>Cataluña</option>'
+                + '<option value="BIL"' + (ld.locFilter === 'BIL' ? ' selected' : '') + '>Bilbao</option>'
+                + '<option value="VAL"' + (ld.locFilter === 'VAL' ? ' selected' : '') + '>Valencia</option>'
+                + '<option value="COR"' + (ld.locFilter === 'COR' ? ' selected' : '') + '>Coruña</option>'
+            + '</select>';
+        var search = ''
+            + '<span class="qida-leader-search-wrap">'
+                + icon('search', 13)
+                + '<input type="text" class="qida-leader-search" data-input="leader-search" placeholder="Buscar AF…" value="' + esc(ld.search) + '"/>'
+            + '</span>';
+        var exportBtn = '<button class="qida-leader-export-btn" data-action="leader-export">' + icon('download', 13) + ' Exportar</button>';
+        return '<div class="qida-leader-toolbar">' + locSel + search + exportBtn + '</div>';
+    }
+
+    // v1.12.1: KPIs sin deltas. 4 cards con valor grande + subtitulo descriptivo en gris.
+    function renderLeaderKpis(kpis) {
+        function kpi(label, value, subText) {
+            return '<div class="qida-leader-kpi">'
+                + '<div class="qida-leader-kpi-label">' + esc(label) + '</div>'
+                + '<div class="qida-leader-kpi-value">' + value + '</div>'
+                + '<div class="qida-leader-kpi-sub">' + esc(subText) + '</div>'
+            + '</div>';
+        }
+        return '<div class="qida-leader-kpis">'
+            + kpi('Leads totales en cartera',     kpis.totalCartera,                       'snapshot actual')
+            + kpi('% cartera con <3 seguimientos', kpis.bajoSegPct + '%',                  kpis.bajoSegCount + ' leads')
+            + kpi('Conversión del equipo',        kpis.convTeam + '%',                    'últimos 30 días')
+            + kpi('AFs en zona de riesgo',        kpis.riesgoCount + ' de ' + kpis.afCount, 'Sobrecarga o bajo seguimiento')
+        + '</div>';
+    }
+
+    // v1.12.1: card de tendencia con pills "Conversion / Cobertura" en el header. Titulo
+    //   dinamico segun state.leaderDash.trendMetric. Donut card sin cambios estructurales.
+    function renderLeaderChartsRow(temp, trend) {
+        var donutSub = temp.total + ' leads totales · 3 estados';
+        var trendKey = (state.leaderDash && state.leaderDash.trendMetric) || 'conversion';
+        var pillConv = '<button class="qida-leader-pill' + (trendKey === 'conversion' ? ' active' : '') + '" data-action="leader-trend-metric" data-id="conversion">Conversión</button>';
+        var pillCov  = '<button class="qida-leader-pill' + (trendKey === 'coverage'   ? ' active' : '') + '" data-action="leader-trend-metric" data-id="coverage">Cobertura</button>';
+        var trendSub = 'últimos 6 meses · target ' + trend.target + '%';
+        return '<div class="qida-leader-charts">'
+            + '<div class="qida-leader-chart-card">'
+                + '<div class="qida-leader-chart-head">'
+                    + '<div class="qida-leader-chart-title">Temperatura de leads</div>'
+                + '</div>'
+                + '<div class="qida-leader-chart-sub">' + esc(donutSub) + '</div>'
+                + '<div class="qida-leader-chart-mount" id="qida-leader-donut"></div>'
+            + '</div>'
+            + '<div class="qida-leader-chart-card">'
+                + '<div class="qida-leader-chart-head">'
+                    + '<div class="qida-leader-chart-title" id="qida-leader-trend-title">' + esc(trend.title) + '</div>'
+                    + '<div class="qida-leader-pills">' + pillConv + pillCov + '</div>'
+                + '</div>'
+                + '<div class="qida-leader-chart-sub" id="qida-leader-trend-sub">' + esc(trendSub) + '</div>'
+                + '<div class="qida-leader-chart-mount" id="qida-leader-area"></div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    // v1.12.1: tabla con 8 columnas. Schema en espanol. Eliminadas: Aceptados, En curso,
+    //   Rechazados, Team lead. Sort temperatura usa "calientes" como proxy.
+    function renderLeaderAfsTable(afs) {
+        var ld = state.leaderDash;
+        function th(label, col, alignRight) {
+            var sorted = (ld.sortCol === col);
+            var arrow = sorted ? (ld.sortDir === 'desc' ? icon('arrowDown', 10) : icon('arrowUp', 10)) : '';
+            var cls = sorted ? ' qida-leader-th-sorted' : '';
+            var style = alignRight ? ' style="text-align:right;"' : '';
+            return '<th class="' + cls + '" data-action="leader-sort" data-id="' + col + '"' + style + '>' + esc(label) + arrow + '</th>';
+        }
+
+        var headers = ''
+            + '<tr>'
+                + th('AF',          'nombre',     false)
+                + th('Localidad',   'localidad',  false)
+                + th('Cartera',     'cartera',    true)
+                + th('Temperatura', 'temperatura',false)
+                + th('Bajo seg',    'bajoSeg',    true)
+                + th('Int/lead',    'intPorLead', true)
+                + th('Conversión',  'conversion', true)
+                + th('Estado',      'estado',     false)
+            + '</tr>';
+
+        var rows = '';
+        if (!afs.length) {
+            rows = '<tr><td colspan="8" class="qida-leader-empty-row">No hay AFs que coincidan con los filtros aplicados.</td></tr>';
+        } else {
+            for (var i = 0; i < afs.length; i++) {
+                var af = afs[i];
+                var tHot = af.calientes, tWarm = af.templados, tCold = af.frios;
+                var tTotal = tHot + tWarm + tCold || 1;
+                var pctHot  = (tHot  / tTotal * 100);
+                var pctWarm = (tWarm / tTotal * 100);
+                var pctCold = (tCold / tTotal * 100);
+
+                // Status en espanol: usar el valor directo del mock como label + map a CSS class.
+                var statusKey = af.estado === 'OK' ? 'ok' : (af.estado === 'Atención' ? 'attention' : 'overload');
+
+                rows += '<tr>'
+                    + '<td><div class="qida-leader-af-cell"><span class="qida-leader-avatar">' + esc(leaderInitials(af.nombre)) + '</span><span class="qida-leader-af-name">' + esc(af.nombre) + '</span></div></td>'
+                    + '<td><span class="qida-leader-loc-badge qida-leader-loc-' + esc(af.localidad) + '">' + esc(af.localidad) + '</span></td>'
+                    + '<td style="text-align:right;">' + af.cartera + '</td>'
+                    + '<td>'
+                        + '<div class="qida-leader-temp-cell">'
+                            + '<div class="qida-leader-temp-bar">'
+                                + '<div class="qida-leader-temp-hot"  style="width:' + pctHot  + '%;"></div>'
+                                + '<div class="qida-leader-temp-warm" style="width:' + pctWarm + '%;"></div>'
+                                + '<div class="qida-leader-temp-cold" style="width:' + pctCold + '%;"></div>'
+                            + '</div>'
+                            + '<span class="qida-leader-temp-nums">' + tHot + '/' + tWarm + '/' + tCold + '</span>'
+                        + '</div>'
+                    + '</td>'
+                    + '<td style="text-align:right;">' + af.bajoSeg + '</td>'
+                    + '<td style="text-align:right;">' + (Math.round(af.intPorLead * 10) / 10) + '</td>'
+                    + '<td style="text-align:right;" class="qida-leader-conv">' + (Math.round(af.conversion * 10) / 10) + '%</td>'
+                    + '<td><span class="qida-leader-status qida-leader-status-' + statusKey + '"><span class="qida-leader-status-dot"></span>' + esc(af.estado) + '</span></td>'
+                + '</tr>';
+            }
+        }
+
+        return ''
+            + '<div class="qida-leader-table-card">'
+                + '<div class="qida-leader-table-head-bar">'
+                    + '<span class="qida-leader-table-title">AFs del equipo</span>'
+                    + '<span class="qida-leader-table-count">' + afs.length + ' AF' + (afs.length === 1 ? '' : 's') + '</span>'
+                + '</div>'
+                + '<div class="qida-leader-table-wrap">'
+                    + '<table class="qida-leader-table" id="qida-leader-afs-table">'
+                        + '<thead>' + headers + '</thead>'
+                        + '<tbody>' + rows + '</tbody>'
+                    + '</table>'
+                + '</div>'
+            + '</div>';
+    }
+
+    function renderLeadersDashboard() {
+        var afs = filterAndSortAfs(MOCK_LEADER_AFS, state.leaderDash);
+        var kpis = buildLeaderKpis(afs);
+        var temp = buildLeaderTemperature(afs);
+        var trend = buildLeaderTrendSeries();   // v1.12.1: ya no recibe filteredAfs (series globales)
+        return '<div class="qida-leader-dash">'
+            + renderLeaderToolbar()
+            + renderLeaderKpis(kpis)
+            + renderLeaderChartsRow(temp, trend)
+            + renderLeaderAfsTable(afs)
+        + '</div>';
+    }
+
+    // Mount / destroy ApexCharts post-innerHTML. Guarda refs en state.leaderDash.__charts
+    //   para destroyear antes de re-instanciar en el proximo rerender.
+    function destroyLeaderCharts() {
+        var ch = state.leaderDash.__charts;
+        if (!ch) return;
+        try { if (ch.donut && ch.donut.destroy) ch.donut.destroy(); } catch (e) {}
+        try { if (ch.area  && ch.area.destroy)  ch.area.destroy();  } catch (e) {}
+        state.leaderDash.__charts = null;
+    }
+
+    // v1.12.1: helper para construir las options del area chart segun el trend struct.
+    //   Centralizado para que mountLeaderCharts y updateLeaderAreaChart usen el mismo shape.
+    function buildLeaderAreaOptions(trend) {
+        return {
+            chart: { type: 'area', height: 240, fontFamily: 'Manrope, system-ui, sans-serif', toolbar: { show: false }, zoom: { enabled: false } },
+            series: [{ name: trend.title, data: trend.data }],
+            xaxis: { categories: trend.categories, labels: { style: { fontSize: '10px', colors: '#78716c' } } },
+            yaxis: { min: 0, max: trend.yMax, labels: { style: { fontSize: '10px', colors: '#78716c' }, formatter: function (v) { return v + '%'; } } },
+            colors: ['#3B82F6'],
+            stroke: { curve: 'smooth', width: 2 },
+            fill: { type: 'gradient', gradient: { shadeIntensity: 0.4, opacityFrom: 0.4, opacityTo: 0.05 } },
+            dataLabels: { enabled: false },
+            grid: { borderColor: '#e7e5e4', strokeDashArray: 3 },
+            annotations: {
+                yaxis: [{
+                    y: trend.target,
+                    borderColor: '#10B981',
+                    strokeDashArray: 4,
+                    label: { borderColor: '#10B981', style: { color: '#fff', background: '#10B981', fontSize: '10px' }, text: 'Target ' + trend.target + '%' }
+                }]
+            },
+            tooltip: { y: { formatter: function (v) { return v + '%'; } } }
+        };
+    }
+
+    function mountLeaderCharts() {
+        var donutEl = document.getElementById('qida-leader-donut');
+        var areaEl  = document.getElementById('qida-leader-area');
+        if (!donutEl || !areaEl) return;
+
+        if (typeof window.ApexCharts === 'undefined') {
+            var fallback = '<div class="qida-leader-chart-fallback">Las gráficas no se cargaron correctamente.<br/>Recargá la página para reintentarlo.</div>';
+            donutEl.innerHTML = fallback;
+            areaEl.innerHTML  = fallback;
+            return;
+        }
+
+        var afs = filterAndSortAfs(MOCK_LEADER_AFS, state.leaderDash);
+        var temp = buildLeaderTemperature(afs);
+        var trend = buildLeaderTrendSeries();   // v1.12.1: globales
+
+        var donutOptions = {
+            chart: { type: 'donut', height: 240, fontFamily: 'Manrope, system-ui, sans-serif', toolbar: { show: false } },
+            series: [temp.hot, temp.warm, temp.cold],
+            labels: ['Calientes', 'Templados', 'Fríos'],
+            colors: ['#EF4444', '#F59E0B', '#3B82F6'],
+            legend: { position: 'bottom', fontSize: '12px' },
+            dataLabels: { enabled: false },
+            stroke: { width: 0 },
+            plotOptions: {
+                pie: {
+                    donut: {
+                        size: '70%',
+                        labels: {
+                            show: true,
+                            total: {
+                                show: true,
+                                label: 'Leads totales',
+                                fontSize: '11px',
+                                fontWeight: 500,
+                                color: '#78716c',
+                                formatter: function () { return String(temp.total); }
+                            },
+                            value: { fontSize: '22px', fontFamily: 'Fraunces, Georgia, serif', fontWeight: 600, color: '#1c1917' }
+                        }
+                    }
+                }
+            },
+            tooltip: { y: { formatter: function (v) { return v + ' leads'; } } }
+        };
+
+        var areaOptions = buildLeaderAreaOptions(trend);
+
+        try {
+            var donut = new window.ApexCharts(donutEl, donutOptions);
+            donut.render();
+            var area = new window.ApexCharts(areaEl, areaOptions);
+            area.render();
+            state.leaderDash.__charts = { donut: donut, area: area };
+        } catch (e) {
+            log('mountLeaderCharts failed', e && e.message);
+            var fallback2 = '<div class="qida-leader-chart-fallback">Las gráficas no se cargaron correctamente.<br/>Recargá la página para reintentarlo.</div>';
+            donutEl.innerHTML = fallback2;
+            areaEl.innerHTML = fallback2;
+        }
+    }
+
+    // v1.12.1: toggle de metrica de tendencia sin destruir el donut. Si las refs de chart no
+    //   estan vivas (caso raro: ApexCharts no cargo), fallback a rerender completo. updateOptions
+    //   + updateSeries son APIs de ApexCharts v3.x+.
+    function updateLeaderAreaChart() {
+        var ch = state.leaderDash.__charts;
+        if (!ch || !ch.area || typeof window.ApexCharts === 'undefined') {
+            rerenderContent();
+            return;
+        }
+        var trend = buildLeaderTrendSeries();
+        try {
+            ch.area.updateOptions(buildLeaderAreaOptions(trend), false, true);
+        } catch (e) {
+            log('updateLeaderAreaChart failed, falling back to full rerender', e && e.message);
+            rerenderContent();
+            return;
+        }
+
+        // Actualizar titulo + sub + estado activo de las pills sin rerender total.
+        var titleEl = document.getElementById('qida-leader-trend-title');
+        if (titleEl) titleEl.textContent = trend.title;
+        var subEl = document.getElementById('qida-leader-trend-sub');
+        if (subEl) subEl.textContent = 'últimos 6 meses · target ' + trend.target + '%';
+        var pills = document.querySelectorAll('.qida-leader-pills .qida-leader-pill');
+        for (var i = 0; i < pills.length; i++) {
+            var k = pills[i].getAttribute('data-id');
+            if (k === trend.metric) pills[i].classList.add('active');
+            else pills[i].classList.remove('active');
+        }
+    }
+
+    // ============================================================
     // RENDER: content dispatcher
     // ============================================================
     function renderContent() {
+        if (state.view === 'leadersDashboard') return renderLeadersDashboard();
         return state.view === 'detail' ? renderDetail() : renderDashboard();
     }
 
@@ -2819,19 +3513,42 @@
     function syncShellSizing() {
         var shell = document.getElementById('qida-shell');
         if (!shell) return;
-        if (state.view === 'detail') shell.classList.add('qida-view-detail');
-        else shell.classList.remove('qida-view-detail');
+        // v1.12.1: tercera class para el modal de lideres (mas grande). Mutuamente excluyente
+        //   con qida-view-detail. Cuando view='dashboard', se quitan ambas.
+        if (state.view === 'leadersDashboard') {
+            shell.classList.add('qida-view-leaders');
+            shell.classList.remove('qida-view-detail');
+        } else if (state.view === 'detail') {
+            shell.classList.add('qida-view-detail');
+            shell.classList.remove('qida-view-leaders');
+        } else {
+            shell.classList.remove('qida-view-detail');
+            shell.classList.remove('qida-view-leaders');
+        }
     }
 
     function rerenderContent() {
         var content = document.getElementById('qida-content');
         if (!content) return;
+        // v1.12: destroyear charts del panel de lideres ANTES de innerHTML swap para evitar
+        //   memory leaks. Las instancias quedan en state.leaderDash.__charts.
+        if (state.leaderDash && state.leaderDash.__charts) {
+            destroyLeaderCharts();
+        }
         content.innerHTML = renderContent();
         syncShellSizing();
         syncShellHeader();
         syncScheduleModal();
         // v1.10: syncAssistantHeader eliminada (junto con todo el bloque del asistente).
         syncToast();
+        // v1.12: mount ApexCharts post-innerHTML solo si estamos en la vista leaders.
+        if (state.view === 'leadersDashboard') {
+            if (typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(mountLeaderCharts);
+            } else {
+                setTimeout(mountLeaderCharts, 16);
+            }
+        }
         // v1.6: auto-scroll del pane WhatsApp post-rerender si el flag esta seteado.
         if (state.__waNeedsScroll) {
             state.__waNeedsScroll = false;
@@ -2917,6 +3634,20 @@
                 + '<div class="qida-shell-actions">'
                     + '<div id="qida-asst-anchor" class="qida-asst-anchor"></div>'
                     + '<button class="qida-shell-swap' + swapActiveCls + '" data-action="toggle-detail-layout" title="Cambiar orden de columnas">' + swapIcons + ' Swap</button>'
+                    + '<span class="qida-esc">Esc para cerrar</span>'
+                    + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
+                + '</div>';
+        } else if (state.view === 'leadersDashboard') {
+            // v1.12: header del panel de lideres. Titulo a la izquierda + Esc/X a la derecha.
+            header.innerHTML = ''
+                + '<div class="qida-shell-title">'
+                    + '<div class="qida-shell-mark">' + icon('bar-chart-2', 16) + '</div>'
+                    + '<div>'
+                        + '<div class="qida-shell-tt-main">Seguimientos v2 · Panel de líderes</div>'
+                        + '<div class="qida-shell-tt-sub">Operativo del equipo · ' + (_currentUserEmail || 'modo dev') + '</div>'
+                    + '</div>'
+                + '</div>'
+                + '<div class="qida-shell-actions">'
                     + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
@@ -3010,6 +3741,33 @@
             case 'open-modal':       openModal(); return;
             case 'close-modal':      closeModal(); return;
             case 'overlay-backdrop': if (e.target === target) closeModal(); return;
+
+            // v1.12: panel de lideres
+            case 'open-leaders-dashboard':
+                openLeadersDashboard();
+                return;
+            case 'leader-sort': {
+                var col = id;
+                var ld = state.leaderDash;
+                if (ld.sortCol === col) {
+                    ld.sortDir = (ld.sortDir === 'asc') ? 'desc' : 'asc';
+                } else {
+                    ld.sortCol = col;
+                    ld.sortDir = 'asc';
+                }
+                rerenderContent();
+                return;
+            }
+            case 'leader-export':
+                showToast('Exportar: pendiente de cablear');
+                return;
+            case 'leader-trend-metric':
+                // v1.12.1: toggle entre conversion/coverage en el area chart. Update in-place
+                //   sin destruir el donut (mejor UX, evita flicker).
+                if (!id || id === state.leaderDash.trendMetric) return;
+                state.leaderDash.trendMetric = id;
+                updateLeaderAreaChart();
+                return;
 
             case 'select-lead':
                 // v1.6: inicializamos draftMessage='' y attachmentsExpanded=false. NO tocar aiChatHistory.
@@ -3350,6 +4108,25 @@
                 if (node.value.trim()) sendBtnAi.removeAttribute('disabled');
                 else sendBtnAi.setAttribute('disabled', '');
             }
+        } else if (input === 'leader-search') {
+            // v1.12: search del panel de lideres. NO rerender completo - solo se reescribe
+            //   el tbody y el contador, asi las instancias ApexCharts no se destruyen y la
+            //   busqueda es instantanea. KPIs y charts mantienen el resultado del ultimo
+            //   filtro de localidad (search es mas granular y solo afecta la tabla).
+            state.leaderDash.search = node.value;
+            var afsFiltered = filterAndSortAfs(MOCK_LEADER_AFS, state.leaderDash);
+            var tableCard = document.querySelector('.qida-leader-table-card');
+            if (tableCard) {
+                tableCard.outerHTML = renderLeaderAfsTable(afsFiltered);
+            }
+            // Reposicionar foco en el search tras el outerHTML swap. El search NO esta en
+            //   tableCard - vive en la toolbar (intacta), asi que el caret se mantiene.
+        } else if (input === 'leader-filter-loc') {
+            // v1.12: filtro localidad. Rerender completo - KPIs/donut/tabla se rebuilden con
+            //   la data filtrada. v1.12.1: el area chart (tendencia) NO se filtra (es serie
+            //   global del equipo) pero el rerender la re-mounta con la misma metrica activa.
+            state.leaderDash.locFilter = node.value || 'all';
+            rerenderContent();
         }
     }
 
@@ -3466,6 +4243,72 @@
         }
     }
 
+    // v1.12: lazy load de ApexCharts via CDN. Guard por id para no duplicar el script.
+    //   Devuelve una Promise que resuelve con typeof window.ApexCharts. NO rechaza nunca -
+    //   en caso de error de red, resuelve con false y mountLeaderCharts muestra fallback.
+    function injectApexCharts() {
+        return new Promise(function (resolve) {
+            if (typeof window.ApexCharts !== 'undefined') {
+                resolve(true);
+                return;
+            }
+            var existing = document.getElementById('qida-apexcharts-script');
+            if (existing) {
+                // Otro init() en curso. Esperar a que cargue el existente.
+                existing.addEventListener('load', function () { resolve(typeof window.ApexCharts !== 'undefined'); });
+                existing.addEventListener('error', function () { resolve(false); });
+                return;
+            }
+            var script = document.createElement('script');
+            script.id = 'qida-apexcharts-script';
+            script.src = APEXCHARTS_URL;
+            script.async = true;
+            script.onload = function () {
+                log('ApexCharts loaded');
+                resolve(typeof window.ApexCharts !== 'undefined');
+            };
+            script.onerror = function () {
+                log('ApexCharts failed to load from CDN');
+                resolve(false);
+            };
+            document.head.appendChild(script);
+        });
+    }
+
+    // v1.12: badge flotante apilado encima del badge AF. Solo se inyecta si _isLeader === true.
+    function injectLeaderBadge() {
+        if (document.querySelector('.qida-leader-badge')) return;
+        var badge = document.createElement('div');
+        badge.className = 'qida-leader-badge';
+        badge.setAttribute('data-action', 'open-leaders-dashboard');
+        badge.setAttribute('role', 'button');
+        badge.setAttribute('aria-label', 'Abrir panel de lideres');
+        badge.setAttribute('title', 'Panel de líderes');
+        badge.innerHTML = icon('bar-chart-2', 24);
+        badge.addEventListener('click', handleClick);
+        document.body.appendChild(badge);
+    }
+
+    // v1.12: abrir el panel de lideres. Reusa el overlay/shell global, solo cambia state.view
+    //   y rerendea. Si el modal AF estaba abierto en otra vista, el rerender la sobreescribe.
+    // v1.12.1: reset de filtros (locFilter, search, sortCol/Dir) en cada apertura. trendMetric
+    //   SI persiste (la metrica de la grafica de tendencia es preferencia de visualizacion).
+    function openLeadersDashboard() {
+        if (!_isLeader) {
+            log('openLeadersDashboard ignored: user is not a leader');
+            return;
+        }
+        state.leaderDash.locFilter = 'all';
+        state.leaderDash.search = '';
+        state.leaderDash.sortCol = null;
+        state.leaderDash.sortDir = 'asc';
+        state.view = 'leadersDashboard';
+        var overlay = document.querySelector('.qida-overlay');
+        if (overlay) overlay.className = 'qida-overlay active';
+        rerenderContent();
+        log('openLeadersDashboard()');
+    }
+
     // Keyboard global: prioridad schedule modal -> main modal.
     // v1.10: el atajo "/" para abrir el asistente y el branch Enter del input del
     //   asistente fueron eliminados (el asistente del dashboard ya no existe).
@@ -3486,6 +4329,13 @@
     // PUBLIC API
     // ============================================================
     function openModal() {
+        // v1.12: si el usuario habia abierto el panel de lideres y vuelve por el badge AF,
+        //   normalizamos a la vista AF. closeModal ya resetea a 'dashboard', pero hacemos
+        //   esto explicito por si algo dejara view en 'leadersDashboard'.
+        if (state.view === 'leadersDashboard') {
+            state.view = 'dashboard';
+            rerenderContent();
+        }
         var overlay = document.querySelector('.qida-overlay');
         if (overlay) overlay.className = 'qida-overlay active';
         log('openModal()');
@@ -3528,6 +4378,22 @@
         log('closeModal()');
     }
 
+    // v1.12: helper que dispara la inyeccion del badge leader + lazy load de ApexCharts.
+    //   Se llama desde dos puntos (rama Odoo OK / rama dev local) - asi evitamos duplicar
+    //   logs y la decision de cuando inyectar queda centralizada.
+    function activateLeaderUi() {
+        if (!_isLeader) return;
+        injectApexCharts().then(function (loaded) {
+            console.info('[QidaAssistant] ApexCharts loaded:', !!loaded);
+        });
+        // El badge se inyecta sync (no depende de ApexCharts).
+        if (document.body) {
+            injectLeaderBadge();
+        } else {
+            document.addEventListener('DOMContentLoaded', injectLeaderBadge);
+        }
+    }
+
     var api = {
         init: function (options) {
             CONFIG = options || {};
@@ -3536,15 +4402,37 @@
             // v1.11: feature flag automatico por host. Si estamos en erp.qida.es, activamos
             //   modo Odoo y disparamos session_info para hidratar _baseContext. Si la sesion
             //   falla (logout, network), degradamos a modo mock para no romper el widget.
+            // v1.12: en el .then() de odooSession se setea _currentUserEmail (sess.username) y
+            //   se compara contra LEADER_EMAILS para habilitar el panel de lideres. En el .catch()
+            //   _isLeader queda EXPLICITAMENTE false (NUNCA degrada a true por fallback - eso
+            //   expondria el dashboard de manager a una AF si Odoo tiene un hiccup). En modo dev
+            //   local (!IS_ODOO_MODE desde el inicio) _isLeader = true automatico para iterar.
             IS_ODOO_MODE = (typeof window.location !== 'undefined' && window.location.host === 'erp.qida.es');
             if (IS_ODOO_MODE) {
                 odooSession().then(function (sess) {
                     _baseContext = (sess && sess.user_context) || {};
-                    log('Odoo session ready', { uid: sess && sess.uid, lang: _baseContext.lang });
+                    _currentUserEmail = (sess && sess.username) || null;
+                    _isLeader = !!(_currentUserEmail && LEADER_EMAILS[_currentUserEmail]);
+                    log('Odoo session ready', { uid: sess && sess.uid, lang: _baseContext.lang, isLeader: _isLeader });
+                    if (_isLeader) activateLeaderUi();
+                    console.info('[QidaAssistant] Leader mode:', _isLeader, _currentUserEmail);
                 }).catch(function (err) {
-                    log('Odoo session failed, falling back to mock mode', err && err.message);
-                    IS_ODOO_MODE = false;  // graceful fallback
+                    log('Odoo session failed, falling back to mock mode for AF detail', err && err.message);
+                    IS_ODOO_MODE = false;  // graceful fallback para el detalle de leads.
+                    // v1.12: en modo Odoo con session fallida, _isLeader queda FALSE explicito.
+                    //   No inyectamos el badge ni ApexCharts. console.error para alertar.
+                    _isLeader = false;
+                    _currentUserEmail = null;
+                    console.error('[QidaAssistant] Odoo session failed - leader UI disabled for safety');
+                    console.info('[QidaAssistant] Leader mode:', false, null);
+                    console.info('[QidaAssistant] ApexCharts loaded:', typeof window.ApexCharts !== 'undefined');
                 });
+            } else {
+                // Modo dev local: habilitamos panel de lideres para demo / iteracion.
+                _isLeader = true;
+                _currentUserEmail = 'dev@local';
+                activateLeaderUi();
+                console.info('[QidaAssistant] Leader mode:', true, '(dev local)');
             }
 
             mountWhenReady();
