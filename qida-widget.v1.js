@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.12.1
+ * QIDA ASSISTANT v1.13.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,62 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.13.0 (reconstruccion del dashboard AF - reemplaza la vista "cooling" de v1.10):
+ *   - La vista state.view==='dashboard' deja de ser la lista plana "cooling" (4 cols, color
+ *     por dias). Ahora es: banda de 4 cards arriba + toolbar (Filtros/pill WhatsApp/chips de
+ *     vista) + tabla con color por TEMPERATURA + señales de WhatsApp/urgencia por fila.
+ *   - 3 vistas = 3 endpoints separados (mocks): cada chip Sugerencias/Actividades/Leads hace
+ *     un "fetch" distinto (DashboardService.fetchView), NO un re-filtro client-side.
+ *       GET /api/me/leads/suggestions  -> MOCK_SUGGESTIONS_RESPONSE (~6 items)
+ *       GET /api/me/leads/activities   -> MOCK_ACTIVITIES_RESPONSE  (~9 items)
+ *       GET /api/me/leads/leads        -> MOCK_LEADS_RESPONSE       (16 items, cartera completa)
+ *     Los 3 comparten shape comun nuevo (familyName, city, caregiverInfo{name,relation,age},
+ *     serviceType, reason, daysWithoutTouch, lastTouchDate ISO, temperature, urgency,
+ *     hasNewMessage, unreadMessagesCount). Los ids reusan MOCK_LEADS para que el detalle resuelva.
+ *   - Banda superior: 4 cards mismo tamaño. [Convertidos este mes (hardcoded 7, display-only)]
+ *     [Calientes][Templados][Fríos]. Las 3 de temperatura son clicables y escriben el MISMO
+ *     state.dashSegment que los chips de Filtros (cards ≡ chips). Sin donut/grafico.
+ *   - Toolbar: izquierda boton "Filtros" -> chips de segmento (caliente|templado|frio|pausa|
+ *     urgente|historico); centro pill "N leads con mensaje nuevo" (rojo, filtra hasNewMessage,
+ *     AND con el segmento); derecha 3 chips de vista. Filtros y pill son client-side; los chips
+ *     de vista re-fetchean.
+ *   - Tabla: color de fila por temperatura (caliente rojo suave / templado ambar / frio gris-azul
+ *     / pausa neutro). Filas con mensaje nuevo van AL TOPE (sort interno por urgencia desc +
+ *     dias desc), separadas del resto por un divider sutil. Señal WhatsApp = rail izquierdo
+ *     verde (#25D366 via box-shadow inset, sin layout shift) + icono 💬 antes del nombre +
+ *     tinte verde sutil sobre el color de temperatura. Urgencia alta = rail rojo + badge
+ *     "Urgente" en Familia; urgencia media = punto rojo DESPUES del nombre (distinto del 💬,
+ *     que va antes). unreadMessagesCount>1 = badge pequeño con la cantidad junto al 💬.
+ *   - Conflicto WhatsApp+urgencia alta en la misma fila: gana el rail ROJO (urgencia es prioridad
+ *     operativa); el WhatsApp queda señalado por el icono 💬 + tinte verde. Rail dividido
+ *     descartado por fragilidad visual/CSS dentro de Odoo (documentado en renderDashRow).
+ *   - Refresh manual: boton Refrescar re-fetchea la vista activa (refresca el badge WhatsApp).
+ *     Sin polling ni push en este sprint (TODO documentado en handleClick/DashboardService).
+ *   - Marcar hecho + toast Deshacer: SIN cambios (state.completedTodayIds global por id, undo 4s).
+ *   - MAX_VISIBLE: 5 -> 10 (hay mas altura disponible con cards + toolbar).
+ *   - normalizeUrgency() acepta vocabulario nuevo (alta/media/baja) Y el del detalle
+ *     (Muy urgente/Urgente/Estandar). TODO: unificar cuando aterrice el backend F3.
+ *   - State nuevo: dashView, dashRows, dashLoading, dashSegment, dashFiltersExpanded, dashOnlyNew.
+ *     Se resetean en closeModal. Funciones nuevas: renderDash..., buildDashFeed, DashboardService.
+ *   - NO se toca: Panel de Lideres (ApexCharts/mountLeaderCharts), detalle del lead, loaders
+ *     (gtm-loader.html/tempermonkey.js), WIDGET_URL (bump interno, mismo filename).
+ *
+ * DEFAULTS QUE TOME EN v1.13.0 (no especificados explicitamente):
+ *   - cards ≡ chips de segmento (resolucion §6.1): la card "Calientes/Templados/Fríos" escribe
+ *     state.dashSegment = 'caliente'/'templado'/'frio'. El chip de Filtros para frio se rotula
+ *     "Frío · reactivar" pero usa el mismo id 'frio' (un solo estado de frio, no dos).
+ *   - El pill WhatsApp muestra cantidad de LEADS ("N leads con mensaje nuevo"), no suma de
+ *     mensajes (§6.2). La cantidad individual de mensajes va como badge en la fila si >1.
+ *   - Counts de cards y del pill se calculan sobre el dataset de la vista activa MENOS los
+ *     completados en sesion, pero ANTES de aplicar segmento/pill (asi no se "vacian" al filtrar).
+ *   - Cambio de vista (chip): resetea dashSegment y dashOnlyNew (los segmentos difieren por vista).
+ *     Refrescar NO resetea filtros (re-fetch en sitio).
+ *   - Loading entre vistas (resolucion ajuste #1): se mantiene la tabla previa atenuada
+ *     (opacity .5 + pointer-events:none) hasta que vuelve el fetch. No skeleton, no spinner,
+ *     nunca tabla vacia.
+ *   - rail via box-shadow inset (no border-left) para no desplazar el grid de la fila.
+ *   - urgencia 'Urgente' (sin "Muy") del vocabulario viejo mapea a 'media'; 'Muy urgente' a 'alta'.
  *
  * Cambios v1.12.1 (fixes pre-demo del martes - 7 ajustes al panel de lideres):
  *   - Modal de lideres mas grande: .qida-shell.qida-view-leaders (max-width:1600px,
@@ -814,7 +870,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.12.1';
+    var VERSION = '1.13.0';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -1045,25 +1101,63 @@
     // El array YA esta filtrado (solo enfriandose), YA priorizado (orden por urgencia),
     // y YA excluye leads con seguimiento agendado futuro (lógica del backend).
     // Cubre los 5 rangos de urgencia: warn (4-7), orange (8-14), stale (15-20), danger (21+).
-    // v1.11: TODOS los leadIds apuntan a 123333 (number) para que cualquier fila del
-    //   dashboard cooling abra el unico lead validado en prod (Jeronimo Goyarrola Ugalde).
-    //   El resto del row (contact / location / relation / caredPersonName / age / reason /
-    //   serviceType / daysWithoutTouch / lastMessageDate) se mantiene como mock visual
-    //   para testear el flow end-to-end. Cuando Fase D cablee el cooling a Odoo real,
-    //   estos valores vienen del endpoint.
-    var MOCK_COOLING_LEADS_RESPONSE = [
-        { leadId: 123333, contact: 'Marta Ortiz',          location: 'Madrid',                relation: 'Madre', caredPersonName: 'Concepcion', age: 86, serviceType: 'Interno',       daysWithoutTouch: 22, lastMessageDate: '27-abr', reason: 'Pidio pensarlo en familia, sin respuesta' },
-        { leadId: 123333, contact: 'Maria Jesus Sanchez',  location: 'Madrid',                relation: 'Madre', caredPersonName: 'Dolores',    age: 88, serviceType: 'Fin de semana', daysWithoutTouch: 17, lastMessageDate: '02-may', reason: 'No responde desde la propuesta hace 17 dias' },
-        { leadId: 123333, contact: 'David Campos',         location: 'Alcala de Henares',     relation: 'Madre', caredPersonName: 'Pilar',      age: 84, serviceType: 'Interno',       daysWithoutTouch: 11, lastMessageDate: '08-may', reason: 'Dijo que llamaria, hace 11 dias sin respuesta' },
-        { leadId: 123333, contact: 'Jose Maria Recio',     location: 'Collado Villalba',      relation: 'Madre', caredPersonName: 'Mercedes',   age: 85, serviceType: 'Externo',       daysWithoutTouch: 9,  lastMessageDate: '10-may', reason: 'No contesta WhatsApp ni llamadas hace 9 dias' },
-        { leadId: 123333, contact: 'Marina Ruben',         location: 'Madrid',                relation: 'Padre', caredPersonName: 'Manuel',     age: 83, serviceType: 'Por horas',     daysWithoutTouch: 5,  lastMessageDate: '14-may', reason: 'Esperando respuesta tras enviarle el presupuesto' },
-        { leadId: 123333, contact: 'Teresa Parellada',     location: "Sant Sadurni d'Anoia",  relation: 'Padre', caredPersonName: 'Joan',       age: 79, serviceType: 'Externo',       daysWithoutTouch: 6,  lastMessageDate: '13-may', reason: 'Familia comparando con otras dos opciones' },
-        { leadId: 123333, contact: 'Jordi Vidal',          location: 'Barcelona',             relation: 'Madre', caredPersonName: 'Carmen',     age: 82, serviceType: 'Interno',       daysWithoutTouch: 4,  lastMessageDate: '15-may', reason: 'Pidio pensarlo en familia, han pasado 4 dias' }
+    // v1.13: 3 respuestas mock, una por vista del dashboard. Shape comun (ver header):
+    //   { id, familyName, city, caregiverInfo:{name,relation,age}, serviceType, reason,
+    //     daysWithoutTouch, lastTouchDate (ISO), temperature, urgency, hasNewMessage,
+    //     unreadMessagesCount, historico? }.
+    //   Los ids reusan MOCK_LEADS para que select-lead -> detalle resuelva contra datos reales.
+    //   urgency: las suggestions usan vocabulario NUEVO (alta/media/baja); activities/leads usan
+    //   el del detalle (Muy urgente/Urgente/Estandar) -> ambos los normaliza normalizeUrgency().
+    //   Fechas asumen hoy = 2026-05-15 (igual que el resto del mock).
+    //   TODO[odoo]: reemplazar por GET /api/me/leads/{suggestions|activities|leads}.
+
+    // Sugerencias del dia (~6). 3 caliente / 1 templado / 2 frio. EDGE CASE: L122581 con
+    //   WhatsApp nuevo + urgencia alta + caliente (render visual extremo).
+    var MOCK_SUGGESTIONS_RESPONSE = [
+        { id: 'L122581', familyName: 'Familia Martinez Ruiz',    city: 'Madrid',               caregiverInfo: { name: 'Juan Antonio', relation: 'Padre',  age: 87 }, serviceType: 'Por horas',     reason: 'Pidio presupuesto ayer y respondio hoy con preguntas concretas', daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'caliente', urgency: 'alta',  hasNewMessage: true,  unreadMessagesCount: 3 },
+        { id: 'L121399', familyName: 'Familia Ortiz Pica',       city: 'Madrid',               caregiverInfo: { name: 'Concepcion',   relation: 'Madre',  age: 86 }, serviceType: 'Interno',       reason: 'Alta hospitalaria manana, sin alguien en casa',                  daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'alta',  hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122131', familyName: 'Familia Roge Barcelo',     city: 'Barcelona',            caregiverInfo: { name: 'Albert',       relation: 'Marido', age: 76 }, serviceType: 'Interno',       reason: 'Necesita cuidadora antes del 30/05',                             daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'caliente', urgency: 'media', hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122613', familyName: 'Familia Vidal Pons',       city: 'Barcelona',            caregiverInfo: { name: 'Carmen',       relation: 'Madre',  age: 82 }, serviceType: 'Interno',       reason: 'Pidio pensarlo en familia, han pasado 4 dias',                   daysWithoutTouch: 4,  lastTouchDate: '2026-05-11', temperature: 'templado', urgency: 'media', hasNewMessage: true,  unreadMessagesCount: 1 },
+        { id: 'L121708', familyName: 'Familia Campos Rivera',    city: 'Alcala de Henares',    caregiverInfo: { name: 'Pilar',        relation: 'Madre',  age: 84 }, serviceType: 'Interno',       reason: 'Dijo que llamaria, hace 11 dias sin respuesta',                  daysWithoutTouch: 11, lastTouchDate: '2026-05-04', temperature: 'frio',     urgency: 'media', hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122055', familyName: 'Familia Recio del Campo',  city: 'Collado Villalba',     caregiverInfo: { name: 'Mercedes',     relation: 'Madre',  age: 85 }, serviceType: 'Externo',       reason: 'No contesta WhatsApp ni llamadas hace 9 dias',                   daysWithoutTouch: 9,  lastTouchDate: '2026-05-06', temperature: 'frio',     urgency: 'baja',  hasNewMessage: false, unreadMessagesCount: 0 }
     ];
 
-    // Tope visual del dashboard. El backend ya devuelve la cohorte priorizada;
-    // el frontend muestra como mucho MAX_VISIBLE filas para no abrumar a la AF.
-    var MAX_VISIBLE = 5;
+    // Actividades programadas (~9). Vocabulario urgency del detalle. Temperatura mixta.
+    var MOCK_ACTIVITIES_RESPONSE = [
+        { id: 'L122476', familyName: 'Familia Baena Sanz',       city: 'Madrid',               caregiverInfo: { name: 'Antonia',      relation: 'Suegra', age: 90 }, serviceType: 'Por horas',     reason: 'Llamada agendada hoy 11:00',                                     daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'Urgente',     hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122131', familyName: 'Familia Roge Barcelo',     city: 'Barcelona',            caregiverInfo: { name: 'Albert',       relation: 'Marido', age: 76 }, serviceType: 'Interno',       reason: 'Cierre operativo: cuidadora antes del 30/05',                    daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: true,  unreadMessagesCount: 2 },
+        { id: 'L121656', familyName: 'Familia Parellada Canals', city: "Sant Sadurni d'Anoia", caregiverInfo: { name: 'Joan',         relation: 'Padre',  age: 79 }, serviceType: 'Externo',       reason: 'Visita a domicilio pendiente de confirmar',                      daysWithoutTouch: 6,  lastTouchDate: '2026-05-09', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: true,  unreadMessagesCount: 1 },
+        { id: 'L121749', familyName: 'Familia Ferreiro Bergino', city: 'Madrid',               caregiverInfo: { name: 'Francisco',    relation: 'Tio',    age: 81 }, serviceType: 'Interno',       reason: 'Followup tras enviar info de servicio',                          daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122278', familyName: 'Familia Ruben Garcia',     city: 'Madrid',               caregiverInfo: { name: 'Manuel',       relation: 'Padre',  age: 83 }, serviceType: 'Por horas',     reason: 'Recordatorio: confirmar fecha de arranque',                      daysWithoutTouch: 5,  lastTouchDate: '2026-05-10', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121547', familyName: 'Familia Sanchez Tartalo',  city: 'Madrid',               caregiverInfo: { name: 'Dolores',      relation: 'Madre',  age: 88 }, serviceType: 'Fin de semana', reason: 'Reintento de contacto programado',                               daysWithoutTouch: 10, lastTouchDate: '2026-05-05', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122845', familyName: 'Familia Mestres Carrasco', city: 'Sabadell',             caregiverInfo: { name: 'Jordi',        relation: 'Padre',  age: 89 }, serviceType: 'Externo',       reason: 'Retomar al volver del viaje (20/05)',                            daysWithoutTouch: 3,  lastTouchDate: '2026-05-12', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122701', familyName: 'Familia Lopez Iniesta',    city: 'Madrid',               caregiverInfo: { name: 'Isabel',       relation: 'Madre',  age: 81 }, serviceType: 'Interno',       reason: 'Primer contacto pendiente',                                      daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122055', familyName: 'Familia Recio del Campo',  city: 'Collado Villalba',     caregiverInfo: { name: 'Mercedes',     relation: 'Madre',  age: 85 }, serviceType: 'Externo',       reason: 'Llamada de reactivacion agendada',                               daysWithoutTouch: 9,  lastTouchDate: '2026-05-06', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 }
+    ];
+
+    // Todos los leads del AF (cartera completa, 16). Vocabulario urgency del detalle. Incluye
+    //   pausa e historico. WhatsApp nuevo repartido por temperaturas (caliente, pausa, frio).
+    var MOCK_LEADS_RESPONSE = [
+        { id: 'L122581', familyName: 'Familia Martinez Ruiz',    city: 'Madrid',               caregiverInfo: { name: 'Juan Antonio', relation: 'Padre',  age: 87 }, serviceType: 'Por horas',     reason: 'Pidio presupuesto ayer y respondio hoy con preguntas concretas', daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: true,  unreadMessagesCount: 2 },
+        { id: 'L122613', familyName: 'Familia Vidal Pons',       city: 'Barcelona',            caregiverInfo: { name: 'Carmen',       relation: 'Madre',  age: 82 }, serviceType: 'Interno',       reason: 'Pidio pensarlo en familia, han pasado 4 dias',                   daysWithoutTouch: 4,  lastTouchDate: '2026-05-11', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122476', familyName: 'Familia Baena Sanz',       city: 'Madrid',               caregiverInfo: { name: 'Antonia',      relation: 'Suegra', age: 90 }, serviceType: 'Por horas',     reason: 'Llamada agendada para manana 11:00',                             daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'Urgente',     hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121656', familyName: 'Familia Parellada Canals', city: "Sant Sadurni d'Anoia", caregiverInfo: { name: 'Joan',         relation: 'Padre',  age: 79 }, serviceType: 'Externo',       reason: 'Familia comparando con otras dos opciones',                      daysWithoutTouch: 6,  lastTouchDate: '2026-05-09', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121708', familyName: 'Familia Campos Rivera',    city: 'Alcala de Henares',    caregiverInfo: { name: 'Pilar',        relation: 'Madre',  age: 84 }, serviceType: 'Interno',       reason: 'Dijo que llamaria, hace 11 dias sin respuesta',                  daysWithoutTouch: 11, lastTouchDate: '2026-05-04', temperature: 'frio',     urgency: 'Urgente',     hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121547', familyName: 'Familia Sanchez Tartalo',  city: 'Madrid',               caregiverInfo: { name: 'Dolores',      relation: 'Madre',  age: 88 }, serviceType: 'Fin de semana', reason: 'No responde desde la propuesta hace 10 dias',                    daysWithoutTouch: 10, lastTouchDate: '2026-05-05', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121749', familyName: 'Familia Ferreiro Bergino', city: 'Madrid',               caregiverInfo: { name: 'Francisco',    relation: 'Tio',    age: 81 }, serviceType: 'Interno',       reason: 'Esperando que organice visita al domicilio',                     daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122131', familyName: 'Familia Roge Barcelo',     city: 'Barcelona',            caregiverInfo: { name: 'Albert',       relation: 'Marido', age: 76 }, serviceType: 'Interno',       reason: 'Urgencia operativa: necesita cuidadora antes del 30/05',         daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122055', familyName: 'Familia Recio del Campo',  city: 'Collado Villalba',     caregiverInfo: { name: 'Mercedes',     relation: 'Madre',  age: 85 }, serviceType: 'Externo',       reason: 'No contesta WhatsApp ni llamadas hace 9 dias',                   daysWithoutTouch: 9,  lastTouchDate: '2026-05-06', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121843', familyName: 'Familia Avelino Redondo',  city: 'Madrid',               caregiverInfo: { name: 'Rosa',         relation: 'Mujer',  age: 78 }, serviceType: 'Por horas',     reason: 'Pidio no contactar hasta junio (viaje familiar)',                daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: true,  unreadMessagesCount: 1 },
+        { id: 'L122278', familyName: 'Familia Ruben Garcia',     city: 'Madrid',               caregiverInfo: { name: 'Manuel',       relation: 'Padre',  age: 83 }, serviceType: 'Por horas',     reason: 'Esperando respuesta tras enviarle el presupuesto',               daysWithoutTouch: 5,  lastTouchDate: '2026-05-10', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121399', familyName: 'Familia Ortiz Pica',       city: 'Madrid',               caregiverInfo: { name: 'Concepcion',   relation: 'Madre',  age: 86 }, serviceType: 'Interno',       reason: 'Urgente: alta hospitalaria manana, sin alguien en casa',         daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122701', familyName: 'Familia Lopez Iniesta',    city: 'Madrid',               caregiverInfo: { name: 'Isabel',       relation: 'Madre',  age: 81 }, serviceType: 'Interno',       reason: 'Sin contactar todavia, lead recien asignado',                    daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122845', familyName: 'Familia Mestres Carrasco', city: 'Sabadell',             caregiverInfo: { name: 'Jordi',        relation: 'Padre',  age: 89 }, serviceType: 'Externo',       reason: 'Pausa hasta que vuelva del viaje el 20/05',                      daysWithoutTouch: 3,  lastTouchDate: '2026-05-12', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L120912', familyName: 'Familia Heredia Solis',    city: 'Madrid',               caregiverInfo: { name: 'Lucia',        relation: 'Madre',  age: 84 }, serviceType: 'Por horas',     reason: 'Sin respuesta hace 18 dias. Quedo fuera de ventana operativa.',  daysWithoutTouch: 18, lastTouchDate: '2026-04-27', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: true,  unreadMessagesCount: 1, historico: true },
+        { id: 'L120478', familyName: 'Familia Bertran Casas',    city: 'Barcelona',            caregiverInfo: { name: 'Marc',         relation: 'Padre',  age: 92 }, serviceType: 'Externo',       reason: 'Sin respuesta hace 22 dias tras envio presupuesto.',             daysWithoutTouch: 22, lastTouchDate: '2026-04-23', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0, historico: true }
+    ];
+
+    // Tope visual del dashboard. v1.13: 5 -> 10 (mas altura disponible con cards + toolbar).
+    var MAX_VISIBLE = 10;
 
     // ============================================================
     // MOCKS v1.6 (chat IA del pane central del detalle)
@@ -1164,6 +1258,21 @@
         completedTodayIds: new Set(),
         undoToast: null,                // { leadId, expiresAt } | null
         undoTimeoutId: null,            // ID del setTimeout activo (o null)
+
+        // v1.13: dashboard AF reconstruido (3 vistas + filtros + señales WhatsApp/urgencia).
+        //   dashView: 'suggestions' | 'activities' | 'leads' (cada una = un endpoint).
+        //   dashRows: filas de la vista activa (cache de la "respuesta"). null = sin cargar.
+        //   dashLoading: true mientras vuelve el fetch de cambio de vista (atenua la tabla previa).
+        //   dashSegment: filtro de segmento client-side (compartido entre cards y chips de Filtros).
+        //   dashFiltersExpanded: bool del panel de chips de segmento.
+        //   dashOnlyNew: filtro del pill WhatsApp (hasNewMessage), se combina (AND) con dashSegment.
+        //   Se resetean en closeModal.
+        dashView: 'suggestions',
+        dashRows: null,
+        dashLoading: false,
+        dashSegment: null,              // null | 'caliente' | 'templado' | 'frio' | 'pausa' | 'urgente' | 'historico'
+        dashFiltersExpanded: false,
+        dashOnlyNew: false,
 
         // Detail state
         // v1.6: state.activePanel y state.editingTemp eliminados (no hay tabs ni temp editable
@@ -1349,28 +1458,28 @@
         close: function (id, reason) {
             // TODO[odoo]: POST /api/leads/:id/close { reason }
             return simulateLatency(80, 180).then(function () { return { ok: true, reason: reason }; });
-        },
+        }
+        // v1.13: getCoolingLeadsSync/getCoolingLeads ELIMINADOS. El dashboard ahora consume
+        //   DashboardService (3 vistas = 3 endpoints), ver abajo.
+    };
 
-        // v1.10: lista de leads enfriandose. El backend devuelve la cohorte ya filtrada
-        // y priorizada (ver TODOs al final del archivo). El frontend solo filtra los que
-        // la AF marco hechos en sesion (state.completedTodayIds).
-        //
-        // getCoolingLeadsSync: version sincrona, consumida por renderDashboard.
-        getCoolingLeadsSync: function () {
-            var out = [];
-            for (var i = 0; i < MOCK_COOLING_LEADS_RESPONSE.length; i++) {
-                var row = MOCK_COOLING_LEADS_RESPONSE[i];
-                if (state.completedTodayIds && state.completedTodayIds.has(row.leadId)) continue;
-                out.push(row);
-            }
-            return out;
+    // v1.13: capa de servicio del dashboard AF. 3 vistas = 3 endpoints separados, mismo shape.
+    //   fetchViewSync(view) -> lectura sincrona del mock (primer paint y refresh sin flash).
+    //   fetchView(view)     -> version async (simulateLatency) que usan el cambio de vista y el
+    //                          Refrescar. TODO[odoo]: reemplazar el cuerpo por fetch() real a
+    //                          GET /api/me/leads/{view} preservando esta API.
+    var DASH_MOCKS = {
+        suggestions: MOCK_SUGGESTIONS_RESPONSE,
+        activities:  MOCK_ACTIVITIES_RESPONSE,
+        leads:       MOCK_LEADS_RESPONSE
+    };
+    var DashboardService = {
+        fetchViewSync: function (view) {
+            return (DASH_MOCKS[view] || MOCK_SUGGESTIONS_RESPONSE).slice();
         },
-        // TODO[odoo]: GET /api/me/leads/cooling. Cuando se cablee, getCoolingLeadsSync
-        // pasa a leer state.coolingLeads (cacheado) y este getCoolingLeads dispara el
-        // fetch + setea el cache. En v1.10 ambos comparten el mismo mock.
-        getCoolingLeads: function () {
+        fetchView: function (view) {
             var self = this;
-            return simulateLatency(120, 280).then(function () { return self.getCoolingLeadsSync(); });
+            return simulateLatency(180, 360).then(function () { return self.fetchViewSync(view); });
         }
     };
 
@@ -2255,42 +2364,96 @@
             '.qida-toast{position:absolute;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--s900);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 8px 20px rgba(0,0,0,.25);z-index:6;opacity:0;transition:opacity .2s,transform .2s;display:inline-flex;align-items:center;gap:8px;font-family:"Manrope",system-ui,sans-serif;pointer-events:none;}',
             '.qida-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}',
 
-            /* v1.10: bloque "v1.4 DASHBOARD" (container + cobertura + tabla unificada +
-               asistente header) ELIMINADO. Se reemplaza por el bloque del dashboard nuevo
-               (qida-cooling-*). */
+            /* v1.13: el bloque del dashboard "cooling" (v1.10, .qida-cooling-*) fue reemplazado
+               por el bloque .qida-dash-* de abajo (cards + toolbar + tabla por temperatura). */
 
             /* ============================================================
-               v1.10 DASHBOARD: lista priorizada de leads enfriandose
+               v1.13 DASHBOARD AF: cards + toolbar + tabla (color por temperatura)
                ============================================================ */
-            '.qida-cooling-dashboard{padding:16px;position:relative;flex:1;overflow-y:auto;background:#fff;}',
-            '.qida-cooling-header{display:grid;grid-template-columns:2fr 1fr 2.5fr 1fr 0fr;gap:16px;padding:8px 16px;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--s500);font-weight:500;border-bottom:0.5px solid var(--s100);}',
-            '.qida-cooling-list{display:flex;flex-direction:column;gap:4px;margin-top:8px;}',
-            '.qida-cooling-row{display:grid;grid-template-columns:2fr 1fr 2.5fr 1fr 0fr;gap:16px;padding:12px 16px;border-radius:8px;cursor:pointer;align-items:center;transition:background-color 120ms;position:relative;}',
-            '.qida-cooling-row:hover{background:var(--s50);}',
-            '.qida-cooling-row:hover .qida-cooling-row-actions{opacity:1;}',
-            '.qida-cooling-row-actions{opacity:0;transition:opacity 120ms;}',
+            '.qida-dash-dashboard{padding:16px;position:relative;flex:1;overflow-y:auto;background:#fff;}',
 
-            /* Bandas de urgencia (background sutil sobre fondo blanco del dashboard) */
-            '.qida-cooling-lvl-warn   {background:rgba(245,158,11,0.05);}',
-            '.qida-cooling-lvl-orange {background:rgba(234,88,12,0.07);}',
-            '.qida-cooling-lvl-stale  {background:rgba(220,38,38,0.06);}',
-            '.qida-cooling-lvl-danger {background:rgba(220,38,38,0.10);}',
+            /* Banda superior: 4 cards mismo tamaño */
+            '.qida-dash-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;}',
+            '.qida-dash-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px 14px;border:1px solid var(--s200);border-bottom-width:3px;border-radius:10px;background:#fff;font-family:inherit;text-align:left;}',
+            '.qida-dash-card-num{font-size:26px;font-weight:600;font-family:Fraunces,Georgia,serif;line-height:1.1;color:var(--s900);}',
+            '.qida-dash-card-label{font-size:12px;color:var(--s600);}',
+            '.qida-dash-card-conv{background:var(--qg-soft);border-color:var(--qg-soft-border);border-bottom-color:var(--qg);}',
+            '.qida-dash-card-conv .qida-dash-card-num{color:var(--qg);}',
+            '.qida-dash-card-temp{cursor:pointer;transition:background-color 120ms,border-color 120ms;}',
+            '.qida-dash-card-temp:hover{background:var(--s50);}',
+            '.qida-card-caliente .qida-dash-card-num{color:#dc2626;}',
+            '.qida-card-templado .qida-dash-card-num{color:#b45309;}',
+            '.qida-card-frio .qida-dash-card-num{color:#2563eb;}',
+            /* Card activa: borde inferior grueso de color + fondo tintado + label en negrita */
+            '.qida-dash-card-temp.active .qida-dash-card-label{font-weight:600;color:var(--s800);}',
+            '.qida-card-caliente.active{border-bottom-color:#dc2626;background:#fef2f2;}',
+            '.qida-card-templado.active{border-bottom-color:#d97706;background:#fffbeb;}',
+            '.qida-card-frio.active{border-bottom-color:#2563eb;background:#eff6ff;}',
+
+            /* Toolbar */
+            '.qida-dash-toolbar{display:flex;align-items:center;gap:12px;padding:2px 2px 10px;border-bottom:0.5px solid var(--s100);}',
+            '.qida-dash-toolbar-left{display:flex;align-items:center;}',
+            '.qida-dash-toolbar-center{flex:1;display:flex;justify-content:center;}',
+            '.qida-dash-toolbar-right{display:flex;align-items:center;gap:6px;margin-left:auto;}',
+            '.qida-dash-filter-btn{display:inline-flex;align-items:center;gap:5px;background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 12px;font-size:13px;color:var(--s700);cursor:pointer;font-family:inherit;}',
+            '.qida-dash-filter-btn:hover{border-color:var(--s400);}',
+            '.qida-dash-filter-btn.active{border-color:var(--qg);color:var(--qg);background:var(--qg-soft);}',
+            '.qida-dash-segments{display:flex;flex-wrap:wrap;gap:6px;padding:10px 2px 2px;}',
+            '.qida-seg-chip{background:#fff;border:0.5px solid var(--s200);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--s700);cursor:pointer;font-family:inherit;}',
+            '.qida-seg-chip:hover{border-color:var(--s400);}',
+            '.qida-seg-chip.active{background:var(--qg);border-color:var(--qg);color:#fff;}',
+            '.qida-view-chip{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 12px;font-size:13px;color:var(--s700);cursor:pointer;font-family:inherit;}',
+            '.qida-view-chip:hover{border-color:var(--s400);}',
+            '.qida-view-chip.active{background:var(--qg);border-color:var(--qg);color:#fff;}',
+            /* Pill WhatsApp (centro): rojo de alerta, mismo rojo que el badge de urgencia */
+            '.qida-wa-pill{display:inline-flex;align-items:center;gap:7px;background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:999px;padding:5px 14px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;}',
+            '.qida-wa-pill:hover{background:#fee2e2;}',
+            '.qida-wa-pill.active{background:#dc2626;border-color:#dc2626;color:#fff;}',
+            '.qida-wa-pill-dot{width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block;}',
+            '.qida-wa-pill.active .qida-wa-pill-dot{background:#fff;}',
+
+            /* Tabla */
+            '.qida-dash-table{margin-top:8px;transition:opacity 160ms;}',
+            '.qida-dash-loading{opacity:.5;pointer-events:none;}',  /* atenuacion entre vistas (no vaciar) */
+            '.qida-dash-header{display:grid;grid-template-columns:2.2fr 0.9fr 2.4fr 0.9fr auto;gap:16px;padding:8px 16px;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--s500);font-weight:500;border-bottom:0.5px solid var(--s100);}',
+            '.qida-dash-list{display:flex;flex-direction:column;gap:4px;margin-top:8px;}',
+            '.qida-dash-row{display:grid;grid-template-columns:2.2fr 0.9fr 2.4fr 0.9fr auto;gap:16px;padding:12px 16px;border-radius:8px;cursor:pointer;align-items:center;transition:filter 120ms;position:relative;background:#fff;}',
+            '.qida-dash-row:hover{filter:brightness(0.97);}',
+            '.qida-dash-row:hover .qida-dash-row-actions{opacity:1;}',
+            '.qida-dash-row-actions{opacity:0;transition:opacity 120ms;}',
+            '.qida-dash-divider{height:1px;background:var(--s200);margin:6px 12px;}',
+
+            /* Color de fila por temperatura */
+            '.qida-temp-caliente{background:#fef4f2;}',
+            '.qida-temp-templado{background:#fffaf0;}',
+            '.qida-temp-frio{background:#f3f6fb;}',
+            '.qida-temp-pausa{background:#fafaf9;}',
+
+            /* Señales de fila. Rail via box-shadow inset (no desplaza el grid). Urgencia gana el rail. */
+            '.qida-rail-wa{box-shadow:inset 5px 0 0 0 #25D366;}',
+            '.qida-rail-urgent{box-shadow:inset 5px 0 0 0 #dc2626;}',
+            /* Tinte verde WhatsApp como capa encima del color de temperatura (background-image) */
+            '.qida-wa-tint{background-image:linear-gradient(0deg,rgba(37,211,102,0.07),rgba(37,211,102,0.07));}',
 
             /* Celdas */
-            '.qida-cell-familia .qida-cell-line1{font-weight:500;font-size:13px;color:var(--s900);}',
-            '.qida-cell-familia .qida-cell-line2{font-size:12px;color:var(--s700);}',
+            '.qida-cell-familia .qida-cell-line1{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}',
+            '.qida-cell-familia .qida-cell-name{font-weight:500;font-size:13px;color:var(--s900);}',
+            '.qida-cell-familia .qida-cell-line2{font-size:12px;color:var(--s700);margin-top:2px;}',
+            '.qida-wa-icon{display:inline-flex;align-items:center;color:#1ea952;}',
+            '.qida-wa-count{display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;padding:0 3px;border-radius:999px;background:#25D366;color:#fff;font-size:10px;font-weight:600;margin-left:-3px;}',
+            '.qida-badge-urgent{display:inline-flex;align-items:center;gap:3px;background:#fee2e2;color:#b91c1c;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;}',
+            '.qida-urg-dot{width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block;}',
             '.qida-cell-tipo{font-size:13px;color:var(--s900);}',
             '.qida-cell-porque{font-size:13px;color:var(--s700);line-height:1.4;}',
             '.qida-cell-sincontacto .qida-cell-days{font-size:22px;font-weight:500;color:var(--s900);line-height:1.1;display:inline-flex;align-items:center;gap:4px;}',
             '.qida-cell-sincontacto .qida-cell-date{font-size:11px;color:var(--s500);margin-top:2px;}',
-            '.qida-cooling-lvl-danger .qida-cell-days{color:var(--red600);}',
 
             /* Boton "Marcar hecho" (hover) */
             '.qida-mark-done-btn{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 10px;font-size:12px;color:#0F6E56;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;}',
             '.qida-mark-done-btn:hover{border-color:#0F6E56;background:#F7FAF8;}',
 
             /* Boton Refrescar abajo de la lista */
-            '.qida-cooling-actions{display:flex;justify-content:center;margin-top:16px;}',
+            '.qida-dash-actions{display:flex;justify-content:center;margin-top:16px;}',
             '.qida-refresh-btn{background:transparent;border:0.5px solid var(--s200);border-radius:8px;padding:8px 14px;font-size:13px;color:var(--s900);cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:inherit;}',
             '.qida-refresh-btn:hover{border-color:var(--s400);background:var(--s50);}',
 
@@ -2306,7 +2469,7 @@
             /* Detalle: anchos por posicion estructural. En 760px se oculta la 1ra columna (WA). */
             '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 26%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
             '@media (max-width:980px){.qida-detail-body > *:nth-child(3){display:none;}}',
-            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}.qida-cooling-header{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}.qida-cooling-row{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}}',
+            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}.qida-dash-cards{grid-template-columns:repeat(2,1fr);}.qida-dash-header{grid-template-columns:2fr 0.9fr 1.5fr 0.8fr auto;}.qida-dash-row{grid-template-columns:2fr 0.9fr 1.5fr 0.8fr auto;}}',
 
             /* ============================================================ */
             /* v1.12: PANEL DE LIDERES                                       */
@@ -2410,27 +2573,158 @@
     //   renderAssistant{Pill,Expanded,HeaderChip,Panel} ELIMINADAS.
     //   El dashboard pasa a una vista unica enfocada: maximo 5 leads enfriandose,
     //   sin tabs, sin filtros, sin asistente.
-    function renderDashboard() {
-        var feed = LeadService.getCoolingLeadsSync();
-        var visible = feed.slice(0, MAX_VISIBLE);
+    // ============================================================
+    // v1.13: helpers del dashboard AF
+    // ============================================================
+    var MONTHS_ES_SHORT = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
-        // El estado vacio y el toast de undo son mutuamente compatibles (el toast puede
-        // estar visible incluso si la lista esta vacia, ej. la AF marco hecha la ultima fila).
-        if (visible.length === 0) {
-            return '<div class="qida-cooling-dashboard">'
-                + renderEmptyState()
-                + renderUndoToast()
-            + '</div>';
+    // Normaliza temperatura a 'caliente'|'templado'|'frio'|'pausa' (acepta 'frío' con acento).
+    function normalizeTemp(t) {
+        if (!t) return '';
+        var s = String(t).toLowerCase();
+        if (s.indexOf('cali') > -1) return 'caliente';
+        if (s.indexOf('templ') > -1) return 'templado';
+        if (s.indexOf('fr') > -1) return 'frio';   // frio / frío
+        if (s.indexOf('paus') > -1) return 'pausa';
+        return s;
+    }
+
+    // Normaliza urgencia a 'alta'|'media'|'baja'|null. Acepta el vocabulario nuevo
+    //   (alta/media/baja) Y el del detalle (Muy urgente/Urgente/Estandar).
+    //   TODO: unificar vocabulario de urgencia con el detalle cuando aterrice el backend F3.
+    function normalizeUrgency(u) {
+        if (!u) return null;
+        var s = String(u).toLowerCase();
+        if (s === 'alta' || s.indexOf('muy urgente') > -1) return 'alta';
+        if (s === 'media' || s === 'urgente') return 'media';
+        if (s === 'baja' || s.indexOf('estandar') > -1 || s.indexOf('estándar') > -1) return 'baja';
+        return null;
+    }
+
+    function priorityRank(row) {
+        var u = normalizeUrgency(row.urgency);
+        return u === 'alta' ? 3 : u === 'media' ? 2 : u === 'baja' ? 1 : 0;
+    }
+
+    function formatShortDate(iso) {
+        if (!iso) return '';
+        var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+        if (!m) return iso;
+        return parseInt(m[3], 10) + ' ' + (MONTHS_ES_SHORT[parseInt(m[2], 10) - 1] || '');
+    }
+
+    // Vista activa menos los completados en sesion (state.completedTodayIds es global por id).
+    function liveDashRows() {
+        var rows = state.dashRows || [];
+        var out = [];
+        for (var i = 0; i < rows.length; i++) {
+            if (state.completedTodayIds && state.completedTodayIds.has(rows[i].id)) continue;
+            out.push(rows[i]);
+        }
+        return out;
+    }
+
+    function matchesSegment(row, seg) {
+        if (!seg) return true;
+        switch (seg) {
+            case 'caliente':
+            case 'templado':
+            case 'frio':
+            case 'pausa':     return normalizeTemp(row.temperature) === seg;
+            case 'urgente':   return normalizeUrgency(row.urgency) === 'alta';
+            case 'historico': return !!row.historico;
+            default: return true;
+        }
+    }
+
+    function countByTemp(rows, temp) {
+        var n = 0;
+        for (var i = 0; i < rows.length; i++) if (normalizeTemp(rows[i].temperature) === temp) n++;
+        return n;
+    }
+
+    // Filtros client-side (segmento AND pill WhatsApp) + agrupado "mensajes nuevos al tope"
+    //   (sort por urgencia desc + dias desc) + resto en orden del endpoint + slice MAX_VISIBLE.
+    function buildDashFeed(base) {
+        var filtered = [];
+        for (var i = 0; i < base.length; i++) {
+            var r = base[i];
+            if (!matchesSegment(r, state.dashSegment)) continue;
+            if (state.dashOnlyNew && !r.hasNewMessage) continue;
+            filtered.push(r);
+        }
+        var news = [], rest = [];
+        for (var j = 0; j < filtered.length; j++) {
+            if (filtered[j].hasNewMessage) news.push(filtered[j]); else rest.push(filtered[j]);
+        }
+        news.sort(function (a, b) {
+            var pr = priorityRank(b) - priorityRank(a);
+            if (pr !== 0) return pr;
+            return b.daysWithoutTouch - a.daysWithoutTouch;
+        });
+        return news.concat(rest).slice(0, MAX_VISIBLE);
+    }
+
+    // Cambio de vista (chip) o Refrescar. resetFilters=true solo en cambio de vista.
+    //   MVP: refresh manual del badge WhatsApp (boton Refrescar o cambio de vista).
+    //   TODO: evaluar polling cada 30-60s o push (SignalR/SSE) en iteracion siguiente.
+    //   La logica de marcar como leido la maneja el backend al abrir el detalle del lead.
+    function loadDashView(view, resetFilters) {
+        state.dashView = view;
+        if (resetFilters) {
+            state.dashSegment = null;
+            state.dashOnlyNew = false;
+        }
+        state.dashLoading = true;
+        rerenderContent();  // mantiene la tabla previa atenuada mientras vuelve el fetch
+        DashboardService.fetchView(view).then(function (rows) {
+            if (state.dashView !== view) return;  // race guard: cambio de vista mientras cargaba
+            state.dashRows = rows;
+            state.dashLoading = false;
+            rerenderContent();
+        });
+    }
+
+    // ============================================================
+    // v1.13: render del dashboard AF
+    // ============================================================
+    function renderDashboard() {
+        // Primer paint sincrono: si la vista activa no tiene datos y no estamos cargando,
+        //   leemos el mock sync para no mostrar tabla vacia en el primer render.
+        if (state.dashRows === null && !state.dashLoading) {
+            state.dashRows = DashboardService.fetchViewSync(state.dashView);
         }
 
-        var rowsHtml = '';
-        for (var i = 0; i < visible.length; i++) rowsHtml += renderCoolingRow(visible[i]);
+        var base = liveDashRows();          // vista activa menos completados en sesion
+        var ordered = buildDashFeed(base);  // filtros + nuevos al tope + sort + slice
 
-        return '<div class="qida-cooling-dashboard">'
-            + renderCoolingHeader()
-            + '<div class="qida-cooling-list">' + rowsHtml + '</div>'
-            + '<div class="qida-cooling-actions">'
-                + '<button class="qida-refresh-btn" data-action="refresh-cooling">'
+        var listHtml;
+        if (ordered.length === 0) {
+            listHtml = renderEmptyState();
+        } else {
+            listHtml = '';
+            var dividerDone = false;
+            for (var i = 0; i < ordered.length; i++) {
+                // Divider sutil en el limite entre el grupo "mensaje nuevo" y el resto.
+                if (!dividerDone && i > 0 && ordered[i - 1].hasNewMessage && !ordered[i].hasNewMessage) {
+                    listHtml += '<div class="qida-dash-divider"></div>';
+                    dividerDone = true;
+                }
+                listHtml += renderDashRow(ordered[i]);
+            }
+        }
+
+        var tableCls = 'qida-dash-table' + (state.dashLoading ? ' qida-dash-loading' : '');
+
+        return '<div class="qida-dash-dashboard">'
+            + renderDashCards(base)
+            + renderDashToolbar(base)
+            + '<div class="' + tableCls + '">'
+                + renderDashHeader()
+                + '<div class="qida-dash-list">' + listHtml + '</div>'
+            + '</div>'
+            + '<div class="qida-dash-actions">'
+                + '<button class="qida-refresh-btn" data-action="dash-refresh">'
                     + icon('refresh-cw', 14) + ' Refrescar'
                 + '</button>'
             + '</div>'
@@ -2438,9 +2732,91 @@
         + '</div>';
     }
 
-    // Header de columnas (sticky a la lista pero sin sticky CSS).
-    function renderCoolingHeader() {
-        return '<div class="qida-cooling-header">'
+    // Banda superior: 4 cards mismo tamaño. La primera es display-only; las 3 de temperatura
+    //   filtran (escriben state.dashSegment, igual que los chips de Filtros).
+    function renderDashCards(base) {
+        // "Convertidos este mes": valor mock, display-only (no filtra).
+        // TODO: conectar con endpoint cuando esté disponible (GET /api/me/leads/converted?period=current_month).
+        var convertidos = 7;
+        return '<div class="qida-dash-cards">'
+            + '<div class="qida-dash-card qida-dash-card-conv">'
+                + '<span class="qida-dash-card-num">' + convertidos + '</span>'
+                + '<span class="qida-dash-card-label">Convertidos este mes</span>'
+            + '</div>'
+            + renderDashCard('caliente', 'Calientes', countByTemp(base, 'caliente'))
+            + renderDashCard('templado', 'Templados', countByTemp(base, 'templado'))
+            + renderDashCard('frio',     'Fríos',     countByTemp(base, 'frio'))
+        + '</div>';
+    }
+
+    function renderDashCard(seg, label, count) {
+        var active = (state.dashSegment === seg);
+        return '<button class="qida-dash-card qida-dash-card-temp qida-card-' + seg + (active ? ' active' : '') + '" '
+            + 'data-action="dash-set-temp" data-id="' + seg + '" aria-pressed="' + (active ? 'true' : 'false') + '">'
+            + '<span class="qida-dash-card-num">' + count + '</span>'
+            + '<span class="qida-dash-card-label">' + esc(label) + '</span>'
+        + '</button>';
+    }
+
+    function renderDashToolbar(base) {
+        var segActive = !!state.dashSegment;
+        var filterBtn = '<button class="qida-dash-filter-btn' + (state.dashFiltersExpanded || segActive ? ' active' : '') + '" data-action="dash-toggle-filters">'
+            + icon('filter', 13) + ' Filtros' + (segActive ? ' (1)' : '') + '</button>';
+        return '<div class="qida-dash-toolbar">'
+            + '<div class="qida-dash-toolbar-left">' + filterBtn + '</div>'
+            + '<div class="qida-dash-toolbar-center">' + renderWhatsappPill(base) + '</div>'
+            + '<div class="qida-dash-toolbar-right">' + renderViewChips() + '</div>'
+        + '</div>'
+        + (state.dashFiltersExpanded ? '<div class="qida-dash-segments">' + renderFilterChips() + '</div>' : '');
+    }
+
+    // Chips de segmento (recuperados de 7f052fc). El chip de frio usa el mismo id 'frio' que la
+    //   card "Fríos" (un solo estado de frio; el rotulo "reactivar" es solo UX).
+    function renderFilterChips() {
+        var chips = [
+            { id: 'caliente',  label: 'Caliente' },
+            { id: 'templado',  label: 'Templado' },
+            { id: 'frio',      label: 'Frío · reactivar' },
+            { id: 'pausa',     label: 'Pausa' },
+            { id: 'urgente',   label: 'Urgente' },
+            { id: 'historico', label: 'Histórico' }
+        ];
+        var html = '';
+        for (var i = 0; i < chips.length; i++) {
+            var active = (state.dashSegment === chips[i].id);
+            html += '<button class="qida-seg-chip' + (active ? ' active' : '') + '" data-action="dash-set-segment" data-id="' + chips[i].id + '">' + esc(chips[i].label) + '</button>';
+        }
+        return html;
+    }
+
+    // Pill central de WhatsApp. N = cantidad de LEADS con mensaje nuevo (no suma de mensajes).
+    //   Solo visible si N>0. Filtra la tabla a esos leads (AND con el segmento activo).
+    function renderWhatsappPill(base) {
+        var n = 0;
+        for (var i = 0; i < base.length; i++) if (base[i].hasNewMessage) n++;
+        if (n === 0) return '';
+        var label = n + (n === 1 ? ' lead con mensaje nuevo' : ' leads con mensaje nuevo');
+        return '<button class="qida-wa-pill' + (state.dashOnlyNew ? ' active' : '') + '" data-action="dash-toggle-new">'
+            + '<span class="qida-wa-pill-dot"></span> ' + label + '</button>';
+    }
+
+    // 3 chips de vista. Al cambiar = fetch al endpoint correspondiente (no re-filtro client-side).
+    function renderViewChips() {
+        var views = [
+            { id: 'suggestions', label: 'Sugerencias' },
+            { id: 'activities',  label: 'Actividades' },
+            { id: 'leads',       label: 'Leads' }
+        ];
+        var html = '';
+        for (var i = 0; i < views.length; i++) {
+            var active = (state.dashView === views[i].id);
+            html += '<button class="qida-view-chip' + (active ? ' active' : '') + '" data-action="dash-set-view" data-id="' + views[i].id + '">' + esc(views[i].label) + '</button>';
+        }
+        return html;
+    }
+
+    function renderDashHeader() {
+        return '<div class="qida-dash-header">'
             + '<div>Familia</div>'
             + '<div>Tipo</div>'
             + '<div>Por que</div>'
@@ -2449,38 +2825,64 @@
         + '</div>';
     }
 
-    // Una fila del dashboard. row es la shape del response del backend
-    // (NO un MOCK_LEADS lead): contact, location, relation, caredPersonName, age,
-    // serviceType, daysWithoutTouch, lastMessageDate, reason, leadId.
-    function renderCoolingRow(row) {
-        var level = daysWithoutTouchLevel(row.daysWithoutTouch);
-        var dangerIcon = (row.daysWithoutTouch >= 21)
-            ? icon('alert-triangle', 14) + ' '
-            : '';
+    // Una fila del dashboard. row es la shape comun de los 3 endpoints (id, familyName, city,
+    //   caregiverInfo, serviceType, reason, daysWithoutTouch, lastTouchDate, temperature,
+    //   urgency, hasNewMessage, unreadMessagesCount). Los ids reusan MOCK_LEADS -> el detalle
+    //   (select-lead) resuelve contra datos reales.
+    function renderDashRow(row) {
+        var temp = normalizeTemp(row.temperature);
+        var urg = normalizeUrgency(row.urgency);
+        var hasNew = !!row.hasNewMessage;
 
-        return '<div class="qida-cooling-row qida-cooling-' + level + '" '
-            +   'data-action="select-lead" data-id="' + esc(row.leadId) + '">'
+        // Color de fila por temperatura.
+        var tempClass = (temp === 'caliente' || temp === 'templado' || temp === 'frio' || temp === 'pausa')
+            ? ' qida-temp-' + temp : '';
 
-            + '<div class="qida-cooling-cell qida-cell-familia">'
-                + '<div class="qida-cell-line1">' + esc(row.contact) + ' &middot; ' + esc(row.location) + '</div>'
-                + '<div class="qida-cell-line2">' + esc(row.relation) + ' ' + esc(row.caredPersonName) + ', ' + row.age + ' anos</div>'
+        // Conflicto urgencia+WhatsApp: el rail izquierdo es uno solo. Urgencia ALTA gana el rail
+        //   (rojo, prioridad operativa); el WhatsApp queda señalado por el icono 💬 + tinte verde.
+        //   Si no hay urgencia alta pero si mensaje nuevo, el rail es verde WhatsApp. Rail dividido
+        //   descartado por fragilidad visual/CSS dentro de Odoo.
+        var railClass = (urg === 'alta') ? ' qida-rail-urgent' : (hasNew ? ' qida-rail-wa' : '');
+        var tintClass = hasNew ? ' qida-wa-tint' : '';
+
+        // Señales en la columna Familia. 💬 ANTES del nombre; punto rojo (urgencia media) DESPUES
+        //   del nombre -> dos señales en posicion y color distintos para no confundirse.
+        var waIcon = '';
+        if (hasNew) {
+            waIcon = '<span class="qida-wa-icon" title="Mensaje nuevo de WhatsApp">' + icon('msg', 13) + '</span>';
+            if (row.unreadMessagesCount > 1) {
+                waIcon += '<span class="qida-wa-count" title="' + row.unreadMessagesCount + ' mensajes sin leer">' + row.unreadMessagesCount + '</span>';
+            }
+        }
+        var urgentBadge = (urg === 'alta')
+            ? '<span class="qida-badge-urgent">' + icon('alert-triangle', 11) + ' Urgente</span>' : '';
+        var mediaDot = (urg === 'media')
+            ? '<span class="qida-urg-dot" title="Urgencia media"></span>' : '';
+
+        var cg = row.caregiverInfo || {};
+        var line2 = esc(((cg.relation || '') + ' ' + (cg.name || '')).trim()) + (cg.age != null ? ', ' + cg.age + ' anos' : '');
+
+        var dangerIcon = (row.daysWithoutTouch >= 21) ? icon('alert-triangle', 14) + ' ' : '';
+
+        return '<div class="qida-dash-row' + tempClass + railClass + tintClass + '" '
+            + 'data-action="select-lead" data-id="' + esc(row.id) + '">'
+
+            + '<div class="qida-dash-cell qida-cell-familia">'
+                + '<div class="qida-cell-line1">' + waIcon + '<span class="qida-cell-name">' + esc(row.familyName) + ' &middot; ' + esc(row.city) + '</span>' + urgentBadge + mediaDot + '</div>'
+                + '<div class="qida-cell-line2">' + line2 + '</div>'
             + '</div>'
 
-            + '<div class="qida-cooling-cell qida-cell-tipo">'
-                + esc(row.serviceType)
-            + '</div>'
+            + '<div class="qida-dash-cell qida-cell-tipo">' + esc(row.serviceType) + '</div>'
 
-            + '<div class="qida-cooling-cell qida-cell-porque">'
-                + esc(row.reason || 'Sin actividad reciente')
-            + '</div>'
+            + '<div class="qida-dash-cell qida-cell-porque">' + esc(row.reason || 'Sin actividad reciente') + '</div>'
 
-            + '<div class="qida-cooling-cell qida-cell-sincontacto">'
+            + '<div class="qida-dash-cell qida-cell-sincontacto">'
                 + '<div class="qida-cell-days">' + dangerIcon + row.daysWithoutTouch + '</div>'
-                + '<div class="qida-cell-date">' + esc(row.lastMessageDate) + '</div>'
+                + '<div class="qida-cell-date">' + esc(formatShortDate(row.lastTouchDate)) + '</div>'
             + '</div>'
 
-            + '<div class="qida-cooling-row-actions">'
-                + '<button class="qida-mark-done-btn" data-action="mark-done" data-id="' + esc(row.leadId) + '" data-stop>'
+            + '<div class="qida-dash-row-actions">'
+                + '<button class="qida-mark-done-btn" data-action="mark-done" data-id="' + esc(row.id) + '" data-stop>'
                     + icon('check', 14) + ' Marcar hecho'
                 + '</button>'
             + '</div>'
@@ -2488,9 +2890,11 @@
     }
 
     function renderEmptyState() {
-        return '<div class="qida-empty-state">'
-            + 'Estás al día. No hay leads enfriándose.'
-        + '</div>';
+        // v1.13: el copy depende del filtro activo (segmento/pill) vs vista vacia.
+        var msg = (state.dashSegment || state.dashOnlyNew)
+            ? 'No hay leads que coincidan con el filtro.'
+            : 'Estás al día. No hay leads en esta vista.';
+        return '<div class="qida-empty-state">' + msg + '</div>';
     }
 
     function renderUndoToast() {
@@ -3828,12 +4232,38 @@
                 rerenderContent();
                 return;
             }
-            case 'refresh-cooling': {
-                // Re-render llama a getCoolingLeadsSync() nuevamente. Los completados
-                // en sesion quedan filtrados naturalmente. Cuando esto se cablee a Odoo,
-                // este handler dispara LeadService.getCoolingLeads().then(...) y refresca
-                // el cache.
-                rerenderContent();
+            // v1.13: cambio de vista (chip) -> fetch al endpoint correspondiente. resetea filtros.
+            case 'dash-set-view': {
+                if (!id || id === state.dashView) return;
+                loadDashView(id, true);
+                return;
+            }
+            // Refrescar: re-fetch de la vista activa (refresca el badge WhatsApp). NO resetea filtros.
+            //   MVP: refresh manual del badge WhatsApp (boton Refrescar o cambio de vista).
+            //   TODO: evaluar polling cada 30-60s o push (SignalR/SSE) en iteracion siguiente.
+            //   La logica de marcar como leido la maneja el backend al abrir el detalle del lead.
+            case 'dash-refresh': {
+                loadDashView(state.dashView, false);
+                return;
+            }
+            case 'dash-toggle-filters': {
+                setState({ dashFiltersExpanded: !state.dashFiltersExpanded });
+                return;
+            }
+            // Chips de Filtros: toggle del segmento (re-click limpia). Client-side.
+            case 'dash-set-segment': {
+                setState({ dashSegment: (state.dashSegment === id) ? null : id });
+                return;
+            }
+            // Cards de temperatura: escriben el MISMO state.dashSegment que los chips (cards ≡ chips).
+            //   Re-click sobre la card activa limpia el filtro.
+            case 'dash-set-temp': {
+                setState({ dashSegment: (state.dashSegment === id) ? null : id });
+                return;
+            }
+            // Pill WhatsApp: toggle del filtro hasNewMessage (AND con el segmento). Client-side.
+            case 'dash-toggle-new': {
+                setState({ dashOnlyNew: !state.dashOnlyNew });
                 return;
             }
 
@@ -4368,6 +4798,14 @@
             clearTimeout(state.undoTimeoutId);
             state.undoTimeoutId = null;
         }
+        // v1.13: reset del dashboard AF (vista, filtros y datos cacheados). completedTodayIds
+        //   PERSISTE en sesion (igual que antes). dashRows se re-primea en el proximo render.
+        state.dashView = 'suggestions';
+        state.dashRows = null;
+        state.dashLoading = false;
+        state.dashSegment = null;
+        state.dashFiltersExpanded = false;
+        state.dashOnlyNew = false;
         // v1.6: limpiamos draft del WhatsApp y del chat IA, y attachmentsExpanded.
         // aiChatHistory PERSISTE durante toda la sesion del page load: NO se vacia aqui.
         state.draftMessage = '';
