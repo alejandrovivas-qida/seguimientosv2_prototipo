@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.14.1
+ * QIDA ASSISTANT v1.15.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,42 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.15.0 (Asistente IA configurable por AF - drafts dinámicos + "Armá tu asistente"):
+ *   Principio rector intacto: la IA propone, la AF edita y envía (copy-to-WA editable).
+ *   - PIEZA A — "Sugerir mensaje" pasa de 2 variantes hardcoded (MOCK_AI_RESPONSES) a las
+ *     variantes configuradas por la AF vía DraftService.getRecommendation(leadId).getRecommendation
+ *     devuelve drafts:[{name,length,tone_style,text}]. Header de cada card = humanizeVariantName
+ *     (corto_directo -> "Corto directo"). El flujo posterior ("Esta me gusta más" -> refine ->
+ *     "Copiar al WhatsApp") NO cambia. Casos edge: should_followup_today:false / fallback:true /
+ *     drafts:[] -> burbuja IA con copy específico. AISLADO con un if explícito en handleAiChip:
+ *     'material-marketing' y 'reactivar-sin-presionar' quedan EXACTAMENTE igual (sin regresión).
+ *   - PIEZA B — pantalla "Armá tu asistente" (state.view==='agentBuilder', precedente Panel de
+ *     Líderes). Acceso: botón chico en el shell header del dashboard (al lado de "Esc para
+ *     cerrar"), visible para todas las AFs. 1-3 variantes; cada una = name + length + tone_style.
+ *     Validación live (1-3; name <40, único, no vacío; enums cerrados) gatea "Guardar". Tooltips
+ *     en length/tone. Dropdowns .qida-leader-select, botones .qida-btn-primary/ghost, showToast.
+ *     Cambios sin guardar + Volver/Esc -> confirm "¿Descartar cambios?".
+ *   - PIEZA C — sendAssistantEvent(eventType, payload): wrapper PII-ESTRICTO (solo metadata,
+ *     nunca el texto del draft/lead) con try/catch silencioso (F2.9 puede no existir). Dispara
+ *     draft_copied al copiar un draft al WhatsApp. thumbs_explicit: el wrapper lo acepta pero la
+ *     UI de 👍/👎 NO se agrega todavía (decisión de producto). draft_sent lo emite el backend.
+ *   - Mocks nuevos: DRAFT_LENGTHS/TONE_STYLES (+labels/tooltips), MOCK_ACTIVE_AFS (email->af_key,
+ *     espejo de ACTIVE_AFS_JSON), MOCK_DRAFT_VARIANTS_DEFAULT/_BY_AF, TONE_TEMPLATES,
+ *     MOCK_RECOMMENDATION_OVERRIDES (QA de edge cases). af_key se deriva de _currentUserEmail
+ *     vía resolveAfKey() (dev: fallback al primer AF activo). DraftService centraliza el mapeo
+ *     (cuando llegue el spec real, swap = 1 función). NINGÚN endpoint real cableado aún.
+ *   - State nuevo: draftVariants/draftVariantsSaved/draftVariantsLoaded/agentBuilderConfirmDiscard/
+ *     recommendationCache. Persisten en sesión (salvo el confirm, transitorio en closeModal).
+ *   - NO se toca: dashboard de Seguimientos (otra feature), Panel de Líderes, detalle del lead
+ *     más allá de Pieza A, loaders, WIDGET_URL.
+ *
+ * DEFAULTS QUE TOME EN v1.15.0:
+ *   - Anexo del spec del backend llegó vacío: shapes inferidas del cuerpo del prompt (enums
+ *     length{short,medium}/tone{neutral,direct,empathic}, /recommendation con drafts). Copy de
+ *     fallback = placeholder marcado // TODO[spec]. Todo centralizado en DraftService.
+ *   - draft_copied scoped SOLO a drafts (source==='draft'); reactivar/material NO lo disparan.
+ *   - Botón "Armá tu asistente" visible para todas las AFs (sin flag por rol en MVP).
  *
  * Cambios v1.14.1 (fixes visuales para igualar la estética .qida-leader-table):
  *   - FIX alineación header vs filas: la última columna (Acción) pasa de 'auto' a ancho FIJO
@@ -922,7 +958,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.14.1';
+    var VERSION = '1.15.0';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -1241,6 +1277,66 @@
         }
     };
 
+    // ============================================================
+    // v1.15: ASISTENTE IA CONFIGURABLE (drafts por AF) - mocks + servicio
+    // ============================================================
+    // Enums cerrados (asunción del plan §5; confirmar contra spec real cuando llegue).
+    var DRAFT_LENGTHS = ['short', 'medium'];
+    var TONE_STYLES = ['neutral', 'direct', 'empathic'];
+    var LENGTH_LABELS = { short: 'Corto', medium: 'Medio' };
+    var TONE_LABELS = { neutral: 'Neutral', direct: 'Directo', empathic: 'Empático' };
+    var LENGTH_TOOLTIP = 'short = ~100-200 chars. medium = ~200-450 chars.';
+    var TONE_TOOLTIP = 'neutral = balanceado. direct = al punto. empathic = empático y cálido.';
+    // TODO[spec]: copy real de fallback cuando llegue el Anexo del backend.
+    var DRAFT_FALLBACK_COPY = 'No pude generar un borrador automático para este caso. Redactá el mensaje manualmente con el contexto del lead.';
+
+    // Espejo de ACTIVE_AFS_JSON del backend: email del AF logueado -> af_key.
+    //   af_key se deriva de _currentUserEmail (sess.username). NO se hardcodea por lead.
+    var MOCK_ACTIVE_AFS = {
+        'patricia.vega@qida.es':    'patricia_vega',
+        'alejandro.vivas@qida.es':  'alejandro_vivas',
+        'eva.martin@qida.es':       'eva_martin'
+    };
+
+    // Config de variantes por AF (mock de GET/PUT /draft-variants). saveDraftVariants muta este
+    //   mapa. Si un af_key no está, getDraftVariantsSync devuelve los defaults (is_default:true).
+    var MOCK_DRAFT_VARIANTS_DEFAULT = [
+        { name: 'corto_directo', length: 'short',  tone_style: 'direct' },
+        { name: 'calido_medio',  length: 'medium', tone_style: 'empathic' }
+    ];
+    var MOCK_DRAFT_VARIANTS_BY_AF = {
+        // Ejemplo de AF con config custom (3 variantes).
+        'patricia_vega': [
+            { name: 'saludo_breve',        length: 'short',  tone_style: 'neutral' },
+            { name: 'seguimiento_calido',  length: 'medium', tone_style: 'empathic' },
+            { name: 'cierre_directo',      length: 'short',  tone_style: 'direct' }
+        ]
+    };
+
+    // Plantillas mock de texto por tono × largo (placeholders {contactName}/{relation}/
+    //   {caredPersonName} se resuelven contra el lead). Mientras no haya LLM real.
+    var TONE_TEMPLATES = {
+        neutral: {
+            short:  'Hola {contactName}, queria retomar el tema de {relation} {caredPersonName}. Cuando puedas, me decis y seguimos.',
+            medium: 'Hola {contactName}, espero que esten bien. Queria retomar lo que hablamos sobre el cuidado de {relation} {caredPersonName} y ver como seguimos. Cuando tengas un momento me escribis y coordinamos los proximos pasos.'
+        },
+        direct: {
+            short:  'Hola {contactName}, sigo a la espera de tu confirmacion. Tienes alguna duda que pueda resolver?',
+            medium: 'Hola {contactName}, te escribo para cerrar el tema del cuidado de {relation} {caredPersonName}. Necesito tu confirmacion para avanzar. Si quedo alguna duda con el presupuesto o el servicio, decime y lo resolvemos hoy mismo.'
+        },
+        empathic: {
+            short:  'Hola {contactName}, pensaba en {relation} {caredPersonName} estos dias. Como estan en casa? Sin prisa.',
+            medium: 'Hola {contactName}, espero que {relation} {caredPersonName} este lo mejor posible. Se que son momentos delicados, asi que sin ninguna prisa: cuando esten listos para retomar, aca estoy para ayudarles con lo que necesiten.'
+        }
+    };
+
+    // Overrides de escenario para QA de /recommendation (edge cases del plan).
+    var MOCK_RECOMMENDATION_OVERRIDES = {
+        'L120478': { should_followup_today: true,  fallback: false, drafts: [] },   // drafts vacíos
+        'L120912': { should_followup_today: true,  fallback: true,  drafts: [] }    // fallback
+        // (lead en 'pausa' -> should_followup_today:false, resuelto dinámicamente abajo)
+    };
+
     // v1.10: TEMP_CONFIG, URGENCY_ORDER, TEMP_ORDER, STALE_THRESHOLD eliminados.
     //   Solo los consumian renderTempBadge / renderUrg / renderDays / sortLeads /
     //   buildUnifiedFeed (todos eliminados con el dashboard nuevo).
@@ -1347,6 +1443,17 @@
         leadDetailCache: {},
         __waNeedsScroll: false,         // flag para auto-scroll al fondo del pane WhatsApp post-rerender
         __aiNeedsScroll: false,         // v1.9.1: flag para auto-scroll al fondo del pane Chat IA post-rerender
+
+        // v1.15: pantalla "Armá tu asistente" (state.view==='agentBuilder') + drafts dinámicos.
+        //   draftVariants: copia de trabajo en edición. draftVariantsSaved: último snapshot guardado
+        //   (dirty-check + descartar). draftVariantsLoaded: lazy. agentBuilderConfirmDiscard: modal.
+        //   recommendationCache: respuesta de /recommendation por lead (evita re-pedir por render).
+        //   Persisten en sesión (igual política que aiChatHistory); se resetea solo lo transitorio.
+        draftVariants: [],
+        draftVariantsSaved: [],
+        draftVariantsLoaded: false,
+        agentBuilderConfirmDiscard: false,
+        recommendationCache: {},
 
         // v1.8: toggle de orden de columnas del detalle (info vs IA en centro/derecha).
         //   false (default) -> WA | Info | IA   (orden actual de v1.7).
@@ -2650,7 +2757,46 @@
 
             /* Responsive panel de lideres */
             '@media (max-width:980px){.qida-leader-kpis{grid-template-columns:repeat(2,1fr);}.qida-leader-charts{grid-template-columns:1fr;}}',
-            '@media (max-width:680px){.qida-leader-search{min-width:140px;}.qida-leader-kpis{grid-template-columns:1fr;}}'
+            '@media (max-width:680px){.qida-leader-search{min-width:140px;}.qida-leader-kpis{grid-template-columns:1fr;}}',
+
+            /* ============================================================ */
+            /* v1.15: ASISTENTE CONFIGURABLE — "Armá tu asistente"           */
+            /* ============================================================ */
+            /* Botón de acceso en el shell header (dashboard) */
+            '.qida-ab-open-btn{display:inline-flex;align-items:center;gap:5px;background:transparent;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--qg);cursor:pointer;font-family:inherit;font-weight:500;}',
+            '.qida-ab-open-btn:hover{border-color:var(--qg);background:var(--qg-soft);}',
+            /* Pantalla */
+            '.qida-ab{position:relative;flex:1;overflow-y:auto;background:#fff;padding:20px 16px;}',
+            '.qida-ab-inner{max-width:720px;margin:0 auto;}',
+            '.qida-ab-lead{font-size:13px;color:var(--s600);line-height:1.5;margin:0 0 16px;}',
+            '.qida-ab-list{display:flex;flex-direction:column;gap:10px;}',
+            '.qida-ab-row{border:0.5px solid var(--s200);border-radius:10px;padding:12px;background:#fff;}',
+            '.qida-ab-row.has-error{border-color:#fca5a5;}',
+            '.qida-ab-fields{display:grid;grid-template-columns:1fr 140px 150px auto;gap:10px;align-items:end;}',
+            '.qida-ab-field{display:flex;flex-direction:column;gap:4px;}',
+            '.qida-ab-label{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--s500);display:inline-flex;align-items:center;gap:3px;}',
+            '.qida-ab-label .qa-icon{color:var(--s400);cursor:help;}',
+            '.qida-ab-input{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px;color:var(--s900);outline:none;width:100%;box-sizing:border-box;}',
+            '.qida-ab-input:focus{border-color:var(--qg);}',
+            '.qida-ab-select{max-width:none;width:100%;}',
+            '.qida-ab-remove{background:transparent;border:0.5px solid var(--s200);border-radius:8px;padding:7px;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;height:34px;}',
+            '.qida-ab-remove:hover:not([disabled]){border-color:#fca5a5;color:#991B1B;background:#FEF2F2;}',
+            '.qida-ab-remove[disabled]{opacity:.4;cursor:not-allowed;}',
+            '.qida-ab-error{font-size:11.5px;color:#991B1B;margin:8px 0 0;}',
+            '.qida-ab-general-error{font-size:12px;color:#991B1B;margin:12px 0 0;}',
+            '.qida-ab-add{margin-top:12px;}',
+            '.qida-ab-add[disabled]{opacity:.5;cursor:not-allowed;}',
+            '.qida-ab-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;padding-top:16px;border-top:0.5px solid var(--s100);}',
+            '.qida-btn-primary[disabled]{opacity:.5;cursor:not-allowed;}',
+            /* Confirm "¿Descartar cambios?" */
+            '.qida-ab-confirm-overlay{position:absolute;inset:0;background:rgba(28,25,23,.35);display:flex;align-items:center;justify-content:center;z-index:20;}',
+            '.qida-ab-confirm{background:#fff;border-radius:12px;padding:20px;max-width:320px;width:90%;box-shadow:0 16px 40px rgba(0,0,0,.25);}',
+            '.qida-ab-confirm-title{font-size:15px;font-weight:600;color:var(--s900);margin:0 0 6px;}',
+            '.qida-ab-confirm-sub{font-size:12.5px;color:var(--s600);margin:0 0 16px;}',
+            '.qida-ab-confirm-actions{display:flex;justify-content:flex-end;gap:8px;}',
+            '.qida-ab-discard-btn{background:#dc2626;}',
+            '.qida-ab-discard-btn:hover{background:#b91c1c;}',
+            '@media (max-width:680px){.qida-ab-fields{grid-template-columns:1fr 1fr auto;}.qida-ab-field-name{grid-column:1 / -1;}}'
         ].join('');
 
         var style = document.createElement('style');
@@ -3388,6 +3534,122 @@
         return null;
     }
 
+    // ============================================================
+    // v1.15: DraftService + telemetría + helpers del asistente configurable
+    // ============================================================
+    // af_key derivado del email del AF logueado (_currentUserEmail, set en init via sess.username)
+    //   contra MOCK_ACTIVE_AFS (espejo de ACTIVE_AFS_JSON). Dev (email null) -> primer AF activo.
+    function resolveAfKey() {
+        if (_currentUserEmail && MOCK_ACTIVE_AFS[_currentUserEmail]) return MOCK_ACTIVE_AFS[_currentUserEmail];
+        // Fallback dev/no-mapeado: primer af_key del mock + aviso. TODO[odoo]: cablear identidad real.
+        for (var email in MOCK_ACTIVE_AFS) {
+            if (Object.prototype.hasOwnProperty.call(MOCK_ACTIVE_AFS, email)) {
+                if (!_currentUserEmail) log('resolveAfKey: sin email de sesion, usando fallback', MOCK_ACTIVE_AFS[email]);
+                return MOCK_ACTIVE_AFS[email];
+            }
+        }
+        return 'default';
+    }
+
+    // 'corto_directo' -> 'Corto directo'. Robusto a snake_case / espacios / vacío.
+    function humanizeVariantName(name) {
+        var s = String(name || '').replace(/_/g, ' ').trim();
+        if (!s) return '(sin nombre)';
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // Validación de la config (1-3 variantes; name <40, único, no vacío; enums cerrados).
+    //   Devuelve { ok, errors: { '<idx>': 'msg' } , general: 'msg'|null }.
+    function validateVariants(variants) {
+        var errors = {}, general = null;
+        if (!variants || !variants.length) { general = 'Agregá al menos 1 variante.'; return { ok: false, errors: errors, general: general }; }
+        if (variants.length > 3) general = 'Máximo 3 variantes.';
+        var seen = {};
+        for (var i = 0; i < variants.length; i++) {
+            var v = variants[i];
+            var nm = (v.name || '').trim();
+            if (!nm) errors[i] = 'El nombre no puede estar vacío.';
+            else if (nm.length >= 40) errors[i] = 'El nombre debe tener menos de 40 caracteres.';
+            else if (seen[nm.toLowerCase()]) errors[i] = 'Nombre duplicado.';
+            else if (DRAFT_LENGTHS.indexOf(v.length) === -1) errors[i] = 'Largo inválido.';
+            else if (TONE_STYLES.indexOf(v.tone_style) === -1) errors[i] = 'Tono inválido.';
+            seen[nm.toLowerCase()] = true;
+        }
+        var ok = !general && !hasOwnKeys(errors);
+        return { ok: ok, errors: errors, general: general };
+    }
+    function hasOwnKeys(o) { for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) return true; } return false; }
+
+    // Wrapper de telemetría. PII-ESTRICTA: solo metadata, NUNCA el texto del draft ni del lead.
+    //   try/catch silencioso (el endpoint F2.9 puede no existir todavía).
+    function sendAssistantEvent(eventType, payload) {
+        try {
+            var p = payload || {};
+            var body = { event_type: eventType, ts: Date.now() };
+            if (p.lead_id != null) body.lead_id = p.lead_id;
+            if (p.variant_name) body.variant_name = p.variant_name;
+            if (p.length) body.length = p.length;
+            if (p.tone_style) body.tone_style = p.tone_style;
+            // TODO[odoo]: POST /api/leads/{lead_id}/assistant/events (F2.9). Por ahora no-op + log.
+            log('assistant event', body);
+            // thumbs_explicit: el wrapper ya lo acepta; la UI de 👍/👎 queda para cuando exista F2.9.
+        } catch (e) { /* silencioso a proposito */ }
+    }
+
+    // Texto mock de un draft segun (tone_style, length), con placeholders resueltos.
+    function buildDraftText(variant, lead) {
+        var byTone = TONE_TEMPLATES[variant.tone_style] || TONE_TEMPLATES.neutral;
+        var raw = (variant.length === 'short') ? byTone.short : byTone.medium;
+        return resolveAiPlaceholders(raw, lead);
+    }
+
+    var DraftService = {
+        // GET /api/admin/afs/{af_key}/draft-variants (mock).
+        getDraftVariantsSync: function (afKey) {
+            var custom = MOCK_DRAFT_VARIANTS_BY_AF[afKey];
+            var src = custom || MOCK_DRAFT_VARIANTS_DEFAULT;
+            // Copia profunda simple para no mutar el mock al editar.
+            var variants = [];
+            for (var i = 0; i < src.length; i++) variants.push({ name: src[i].name, length: src[i].length, tone_style: src[i].tone_style });
+            return { af_key: afKey, is_default: !custom, variants: variants };
+        },
+        getDraftVariants: function (afKey) {
+            var self = this;
+            return simulateLatency(80, 180).then(function () { return self.getDraftVariantsSync(afKey); });
+        },
+        // PUT /api/admin/afs/{af_key}/draft-variants (mock). La validación 422 se cubre client-side
+        //   (no se puede invocar con config inválida). Persiste en MOCK_DRAFT_VARIANTS_BY_AF.
+        saveDraftVariants: function (afKey, variants) {
+            var v = validateVariants(variants);
+            if (!v.ok) return simulateLatency(60, 120).then(function () { return { ok: false, status: 422, error: v }; });
+            var copy = [];
+            for (var i = 0; i < variants.length; i++) copy.push({ name: variants[i].name.trim(), length: variants[i].length, tone_style: variants[i].tone_style });
+            MOCK_DRAFT_VARIANTS_BY_AF[afKey] = copy;
+            return simulateLatency(80, 180).then(function () { return { ok: true }; });
+        },
+        // POST /api/leads/{lead_id}/recommendation (mock). Devuelve drafts derivados de la config
+        //   de la AF. Edge cases: pausa -> sin seguimiento; overrides -> vacío / fallback.
+        getRecommendationSync: function (leadId) {
+            var override = MOCK_RECOMMENDATION_OVERRIDES[leadId];
+            if (override) return override;
+            var lead = getLead(leadId);
+            if (lead && normalizeTemp(lead.temperature) === 'pausa') {
+                return { should_followup_today: false, fallback: false, drafts: [] };
+            }
+            var cfg = this.getDraftVariantsSync(resolveAfKey()).variants;
+            var drafts = [];
+            for (var i = 0; i < cfg.length; i++) {
+                drafts.push({ name: cfg[i].name, length: cfg[i].length, tone_style: cfg[i].tone_style, text: buildDraftText(cfg[i], lead) });
+            }
+            return { should_followup_today: true, fallback: false, drafts: drafts };
+        },
+        getRecommendation: function (leadId) {
+            var self = this;
+            return simulateLatency(120, 280).then(function () { return self.getRecommendationSync(leadId); });
+        }
+    };
+
+
     // Adjuntos colapsable (reemplaza el panel derecho v1.5). Vive dentro del .qida-center-body.
     function renderAttachmentsCollapsable(lead, cached) {
         var title = icon('paperclip', 12) + ' Adjuntos';
@@ -3518,13 +3780,21 @@
         if (payload.intro) html += '<p class="qida-aichat-bubble-intro">' + esc(payload.intro) + '</p>';
 
         if (payload.kind === 'variants' && payload.variants) {
+            // v1.15: las variantes pueden venir de MOCK_AI_RESPONSES (label) o de /recommendation
+            //   (name/length/tone_style -> draft). Header = label || humanize(name). Si es draft
+            //   (source==='draft'), threadeamos metadata al boton para la telemetría draft_copied.
+            var isDraft = (payload.source === 'draft');
             for (var i = 0; i < payload.variants.length; i++) {
                 var v = payload.variants[i];
                 var resolved = resolveAiPlaceholders(v.text, lead);
+                var headLabel = v.label || humanizeVariantName(v.name);
+                var metaAttrs = isDraft
+                    ? ' data-source="draft" data-variant-name="' + esc(v.name || '') + '" data-length="' + esc(v.length || '') + '" data-tone="' + esc(v.tone_style || '') + '"'
+                    : '';
                 html += '<div class="qida-aichat-variant">'
-                    + '<div class="qida-aichat-variant-label">' + esc(v.label) + '</div>'
+                    + '<div class="qida-aichat-variant-label">' + esc(headLabel) + '</div>'
                     + '<p class="qida-aichat-variant-text">' + esc(resolved) + '</p>'
-                    + '<button class="qida-aichat-variant-action" data-action="ai-pick-variant" data-label="' + esc(v.label) + '" data-text="' + esc(resolved) + '">' + icon('arrowRight', 11) + ' Esta me gusta mas</button>'
+                    + '<button class="qida-aichat-variant-action" data-action="ai-pick-variant" data-label="' + esc(headLabel) + '" data-text="' + esc(resolved) + '"' + metaAttrs + '>' + icon('arrowRight', 11) + ' Esta me gusta mas</button>'
                 + '</div>';
             }
         } else if (payload.kind === 'material' && payload.items) {
@@ -3551,9 +3821,15 @@
             // v1.8: respuesta IA al elegir una variante. Muestra el texto propuesto en una card
             //   destacada y ofrece el boton final "Copiar al WhatsApp". La AF puede iterar
             //   escribiendo texto libre en el input del chat (mockAIResponse detecta el contexto).
+            // v1.15: si el refine vino de un draft (payload.meta.source==='draft'), threadeamos la
+            //   metadata al boton para emitir draft_copied PII-safe al copiar.
+            var m = payload.meta || {};
+            var copyMeta = (m.source === 'draft')
+                ? ' data-source="draft" data-variant-name="' + esc(m.name || '') + '" data-length="' + esc(m.length || '') + '" data-tone="' + esc(m.tone_style || '') + '"'
+                : '';
             html += '<div class="qida-aichat-refine">'
                 + '<div class="qida-aichat-refine-text">' + esc(payload.text) + '</div>'
-                + '<button class="qida-aichat-copy-wa" data-action="ai-copy-to-wa" data-text="' + esc(payload.text) + '">' + icon('check', 11) + ' Copiar al WhatsApp</button>'
+                + '<button class="qida-aichat-copy-wa" data-action="ai-copy-to-wa" data-text="' + esc(payload.text) + '"' + copyMeta + '>' + icon('check', 11) + ' Copiar al WhatsApp</button>'
             + '</div>';
         } else if (payload.kind === 'free' && payload.text) {
             html += '<p class="qida-aichat-bubble-text">' + esc(payload.text) + '</p>';
@@ -3575,13 +3851,15 @@
     //   al historial como par user("<label> - esta me gusta mas") -> ai(kind: 'refine', text).
     //   La burbuja IA con kind:'refine' muestra el texto propuesto + boton "Copiar al WhatsApp"
     //   y permite iterar via texto libre en el input del chat (mockAIResponse detecta el contexto).
-    function pushAiPickVariant(leadId, label, text) {
+    function pushAiPickVariant(leadId, label, text, meta) {
         if (!leadId || !text) return;
         var userMsg = (label ? label + ' - ' : '') + 'esta me gusta mas';
         var refinePayload = {
             kind: 'refine',
             intro: 'Genial. Te gusta asi o quieres ajustar algo? (mas corto, otro tono, agregar algo especifico).',
-            text: text
+            text: text,
+            // v1.15: arrastra la metadata del draft (si aplica) para la telemetría al copiar.
+            meta: meta || null
         };
         pushAiChat(leadId, userMsg, refinePayload);
     }
@@ -4059,10 +4337,90 @@
     }
 
     // ============================================================
+    // v1.15: RENDER "Armá tu asistente" (state.view === 'agentBuilder')
+    // ============================================================
+    function deepCopyVariants(arr) {
+        var out = [];
+        for (var i = 0; i < (arr || []).length; i++) out.push({ name: arr[i].name, length: arr[i].length, tone_style: arr[i].tone_style });
+        return out;
+    }
+    function agentBuilderDirty() {
+        return JSON.stringify(state.draftVariants) !== JSON.stringify(state.draftVariantsSaved);
+    }
+
+    function renderAgentBuilder() {
+        var variants = state.draftVariants || [];
+        var v = validateVariants(variants);
+        var dirty = agentBuilderDirty();
+        var saveDisabled = (!v.ok || !dirty) ? ' disabled' : '';
+
+        var rowsHtml = '';
+        for (var i = 0; i < variants.length; i++) rowsHtml += renderVariantRow(variants[i], i, v.errors[i]);
+
+        var addDisabled = (variants.length >= 3) ? ' disabled' : '';
+        var generalErr = v.general ? '<p class="qida-ab-general-error">' + esc(v.general) + '</p>' : '';
+
+        return '<div class="qida-ab">'
+            + '<div class="qida-ab-inner">'
+                + '<p class="qida-ab-lead">Configurá de 1 a 3 variantes de borrador. Cuando uses "Sugerir mensaje" en un lead, el asistente propondrá una opción por cada variante. La IA propone; vos editás y enviás.</p>'
+                + '<div class="qida-ab-list">' + rowsHtml + '</div>'
+                + generalErr
+                + '<button class="qida-btn-ghost qida-ab-add" data-action="ab-add-variant"' + addDisabled + '>' + icon('plus', 13) + ' Agregar variante</button>'
+                + '<div class="qida-ab-foot">'
+                    + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
+                    + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + icon('check', 13) + ' Guardar</button>'
+                + '</div>'
+            + '</div>'
+            + (state.agentBuilderConfirmDiscard ? renderDiscardConfirm() : '')
+        + '</div>';
+    }
+
+    function renderVariantRow(variant, idx, errMsg) {
+        function opt(val, label, selected) { return '<option value="' + esc(val) + '"' + (selected ? ' selected' : '') + '>' + esc(label) + '</option>'; }
+        var lenOpts = '', toneOpts = '';
+        for (var i = 0; i < DRAFT_LENGTHS.length; i++) lenOpts += opt(DRAFT_LENGTHS[i], LENGTH_LABELS[DRAFT_LENGTHS[i]], variant.length === DRAFT_LENGTHS[i]);
+        for (var j = 0; j < TONE_STYLES.length; j++) toneOpts += opt(TONE_STYLES[j], TONE_LABELS[TONE_STYLES[j]], variant.tone_style === TONE_STYLES[j]);
+        var removeDisabled = (state.draftVariants.length <= 1) ? ' disabled' : '';
+
+        return '<div class="qida-ab-row' + (errMsg ? ' has-error' : '') + '">'
+            + '<div class="qida-ab-fields">'
+                + '<div class="qida-ab-field qida-ab-field-name">'
+                    + '<label class="qida-ab-label">Nombre</label>'
+                    + '<input type="text" class="qida-ab-input" data-input="ab-name" data-idx="' + idx + '" maxlength="60" value="' + esc(variant.name || '') + '" placeholder="ej. corto_directo" />'
+                + '</div>'
+                + '<div class="qida-ab-field">'
+                    + '<label class="qida-ab-label" title="' + esc(LENGTH_TOOLTIP) + '">Largo ' + icon('alert', 10) + '</label>'
+                    + '<select class="qida-leader-select qida-ab-select" data-input="ab-length" data-idx="' + idx + '">' + lenOpts + '</select>'
+                + '</div>'
+                + '<div class="qida-ab-field">'
+                    + '<label class="qida-ab-label" title="' + esc(TONE_TOOLTIP) + '">Tono ' + icon('alert', 10) + '</label>'
+                    + '<select class="qida-leader-select qida-ab-select" data-input="ab-tone" data-idx="' + idx + '">' + toneOpts + '</select>'
+                + '</div>'
+                + '<button class="qida-ab-remove" data-action="ab-remove-variant" data-idx="' + idx + '" aria-label="Quitar variante" title="Quitar"' + removeDisabled + '>' + icon('x', 14) + '</button>'
+            + '</div>'
+            + (errMsg ? '<p class="qida-ab-error">' + esc(errMsg) + '</p>' : '')
+        + '</div>';
+    }
+
+    function renderDiscardConfirm() {
+        return '<div class="qida-ab-confirm-overlay">'
+            + '<div class="qida-ab-confirm">'
+                + '<p class="qida-ab-confirm-title">¿Descartar cambios?</p>'
+                + '<p class="qida-ab-confirm-sub">Tenés cambios sin guardar en tu asistente.</p>'
+                + '<div class="qida-ab-confirm-actions">'
+                    + '<button class="qida-btn-ghost" data-action="ab-discard-cancel">Seguir editando</button>'
+                    + '<button class="qida-btn-primary qida-ab-discard-btn" data-action="ab-discard-confirm">Descartar</button>'
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    // ============================================================
     // RENDER: content dispatcher
     // ============================================================
     function renderContent() {
         if (state.view === 'leadersDashboard') return renderLeadersDashboard();
+        if (state.view === 'agentBuilder') return renderAgentBuilder();
         return state.view === 'detail' ? renderDetail() : renderDashboard();
     }
 
@@ -4210,12 +4568,23 @@
                     + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
+        } else if (state.view === 'agentBuilder') {
+            // v1.15: header de "Armá tu asistente". Volver a la izquierda + Esc/X a la derecha.
+            header.innerHTML = ''
+                + '<div class="qida-detail-shell-head">'
+                    + '<button class="qida-back" data-action="ab-back" aria-label="Volver">' + icon('arrowLeft', 12) + ' Volver</button>'
+                    + '<span class="qida-dsh-name">Armá tu asistente</span>'
+                + '</div>'
+                + '<div class="qida-shell-actions">'
+                    + '<span class="qida-esc">Esc para cerrar</span>'
+                    + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
+                + '</div>';
         } else {
-            // v1.10: shell header minimo en dashboard. Sin Sparkles + titulo + sub, sin
-            // anchor del asistente. Solo "Esc para cerrar" + X. Toda la atencion va a la
-            // lista de leads enfriandose en el contenido.
+            // v1.10: shell header minimo en dashboard. v1.15: + boton chico "Armá tu asistente"
+            //   a la derecha, antes de "Esc para cerrar". Visible para todas las AFs (sin flag).
             header.innerHTML = ''
                 + '<div class="qida-shell-actions">'
+                    + '<button class="qida-ab-open-btn" data-action="open-agent-builder">' + icon('sparkles', 13) + ' Armá tu asistente</button>'
                     + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
@@ -4305,6 +4674,52 @@
             case 'open-leaders-dashboard':
                 openLeadersDashboard();
                 return;
+
+            // v1.15: "Armá tu asistente"
+            case 'open-agent-builder':
+                openAgentBuilder();
+                return;
+            case 'ab-back':
+                abBack();
+                return;
+            case 'ab-discard-cancel':
+                setState({ agentBuilderConfirmDiscard: false });
+                return;
+            case 'ab-discard-confirm':
+                abDiscardAndLeave();
+                return;
+            case 'ab-add-variant':
+                if (state.draftVariants.length < 3) {
+                    state.draftVariants.push({ name: '', length: 'medium', tone_style: 'neutral' });
+                    rerenderContent();
+                }
+                return;
+            case 'ab-remove-variant': {
+                var rmIdx = parseInt(target.getAttribute('data-idx'), 10);
+                if (state.draftVariants.length > 1 && rmIdx >= 0 && rmIdx < state.draftVariants.length) {
+                    state.draftVariants.splice(rmIdx, 1);
+                    rerenderContent();
+                }
+                return;
+            }
+            case 'ab-save': {
+                var val = validateVariants(state.draftVariants);
+                if (!val.ok) { rerenderContent(); return; }   // botón ya debería estar disabled
+                var afKey = resolveAfKey();
+                var working = deepCopyVariants(state.draftVariants);
+                DraftService.saveDraftVariants(afKey, working).then(function (res) {
+                    if (res && res.ok) {
+                        state.draftVariantsSaved = deepCopyVariants(working);
+                        showToast('Asistente guardado.');
+                        rerenderContent();
+                    } else {
+                        showToast('No se pudo guardar (revisá los campos).');
+                        rerenderContent();
+                    }
+                });
+                return;
+            }
+
             case 'leader-sort': {
                 var col = id;
                 var ld = state.leaderDash;
@@ -4489,7 +4904,12 @@
             case 'ai-pick-variant':
                 var pickLabel = target.getAttribute('data-label') || 'Esta opcion';
                 var pickText = target.getAttribute('data-text') || '';
-                pushAiPickVariant(state.currentLeadId, pickLabel, pickText);
+                // v1.15: si es un draft configurado, arrastramos la metadata (PII-safe) para la
+                //   telemetría posterior al copiar. material/reactivar no traen estos data-*.
+                var pickMeta = (target.getAttribute('data-source') === 'draft')
+                    ? { source: 'draft', name: target.getAttribute('data-variant-name') || '', length: target.getAttribute('data-length') || '', tone_style: target.getAttribute('data-tone') || '' }
+                    : null;
+                pushAiPickVariant(state.currentLeadId, pickLabel, pickText, pickMeta);
                 state.aiChatDraft = '';
                 rerenderContent();
                 return;
@@ -4498,6 +4918,16 @@
             case 'ai-copy-to-wa':
                 var msgText = target.getAttribute('data-text') || '';
                 state.draftMessage = msgText;
+                // v1.15 (Pieza C): draft_copied al momento del rellenado, SOLO si vino de un draft
+                //   configurado (data-source="draft"). PII-safe (solo metadata, nunca el texto).
+                if (target.getAttribute('data-source') === 'draft') {
+                    sendAssistantEvent('draft_copied', {
+                        lead_id: state.currentLeadId,
+                        variant_name: target.getAttribute('data-variant-name') || '',
+                        length: target.getAttribute('data-length') || '',
+                        tone_style: target.getAttribute('data-tone') || ''
+                    });
+                }
                 rerenderContent();
                 // Focus al textarea de WhatsApp y cursor al final.
                 setTimeout(function () {
@@ -4717,6 +5147,20 @@
             //   global del equipo) pero el rerender la re-mounta con la misma metrica activa.
             state.leaderDash.locFilter = node.value || 'all';
             rerenderContent();
+        } else if (input === 'ab-name') {
+            // v1.15: nombre de variante. Update en cada keystroke SIN rerender (no perder foco);
+            //   rerender solo en 'change' (blur) para refrescar validación/errores/Guardar.
+            var iName = parseInt(node.getAttribute('data-idx'), 10);
+            if (state.draftVariants[iName]) state.draftVariants[iName].name = node.value;
+            if (e.type === 'change') rerenderContent();
+        } else if (input === 'ab-length') {
+            var iLen = parseInt(node.getAttribute('data-idx'), 10);
+            if (state.draftVariants[iLen]) state.draftVariants[iLen].length = node.value;
+            rerenderContent();
+        } else if (input === 'ab-tone') {
+            var iTone = parseInt(node.getAttribute('data-idx'), 10);
+            if (state.draftVariants[iTone]) state.draftVariants[iTone].tone_style = node.value;
+            rerenderContent();
         }
     }
 
@@ -4733,8 +5177,18 @@
     function handleAiChip(promptId) {
         var lead = getLead(state.currentLeadId);
         if (!lead) return;
-        var resp = getAiPromptResponse(promptId);
+
+        // v1.15 (Pieza A): SOLO 'sugerir-mensaje' cambia su origen -> /recommendation (drafts
+        //   configurados por la AF). 'material-marketing' y 'reactivar-sin-presionar' quedan
+        //   EXACTAMENTE igual (mismo pipeline getAiPromptResponse). If explícito para aislar.
+        var resp;
+        if (promptId === 'sugerir-mensaje') {
+            resp = buildSuggestPayload(lead.id);
+        } else {
+            resp = getAiPromptResponse(promptId);
+        }
         if (!resp) return;
+
         // El "user message" del chip usa la label del chip como texto visible.
         var label = (promptId === 'material-marketing') ? 'Material marketing'
                   : (promptId === 'sugerir-mensaje') ? 'Sugerir mensaje'
@@ -4743,6 +5197,25 @@
         pushAiChat(lead.id, label, resp);
         state.aiChatDraft = '';
         rerenderContent();
+    }
+
+    // v1.15: construye el payload IA para "Sugerir mensaje" desde DraftService.getRecommendation.
+    //   Maneja los casos edge del plan. Cachea la respuesta por lead para no re-pedir en cada render.
+    function buildSuggestPayload(leadId) {
+        var rec = DraftService.getRecommendationSync(leadId);
+        if (state.recommendationCache) state.recommendationCache[leadId] = rec;
+
+        if (rec.should_followup_today === false) {
+            return { kind: 'free', text: 'Para este lead no hay un seguimiento sugerido para hoy.' };
+        }
+        if (rec.fallback) {
+            return { kind: 'free', text: DRAFT_FALLBACK_COPY };
+        }
+        if (!rec.drafts || !rec.drafts.length) {
+            return { kind: 'free', text: 'Sin borrador automático sugerido. Redactá manualmente.' };
+        }
+        // kind:'variants' con source:'draft' (telemetría draft_copied scoped a drafts reales).
+        return { kind: 'variants', source: 'draft', intro: 'Te propongo estas opciones:', variants: rec.drafts.slice() };
     }
 
     // v1.6: envio de query libre al chat IA. Si esta vacio, no hace nada.
@@ -4899,6 +5372,37 @@
         log('openLeadersDashboard()');
     }
 
+    // v1.15: abre "Armá tu asistente". Carga la config (lazy) en la copia de trabajo + snapshot.
+    function openAgentBuilder() {
+        if (!state.draftVariantsLoaded) {
+            var cfg = DraftService.getDraftVariantsSync(resolveAfKey());
+            state.draftVariantsSaved = deepCopyVariants(cfg.variants);
+            state.draftVariants = deepCopyVariants(cfg.variants);
+            state.draftVariantsLoaded = true;
+        }
+        state.agentBuilderConfirmDiscard = false;
+        state.view = 'agentBuilder';
+        rerenderContent();
+        log('openAgentBuilder()');
+    }
+
+    // Salida de agentBuilder hacia el dashboard. Con cambios sin guardar -> confirm.
+    function abBack() {
+        if (agentBuilderDirty()) {
+            state.agentBuilderConfirmDiscard = true;
+            rerenderContent();
+            return;
+        }
+        state.view = 'dashboard';
+        rerenderContent();
+    }
+    function abDiscardAndLeave() {
+        state.draftVariants = deepCopyVariants(state.draftVariantsSaved);
+        state.agentBuilderConfirmDiscard = false;
+        state.view = 'dashboard';
+        rerenderContent();
+    }
+
     // Keyboard global: prioridad schedule modal -> main modal.
     // v1.10: el atajo "/" para abrir el asistente y el branch Enter del input del
     //   asistente fueron eliminados (el asistente del dashboard ya no existe).
@@ -4909,8 +5413,19 @@
         var isEsc = (e.key === 'Escape' || e.keyCode === 27);
 
         if (isEsc) {
-            if (state.showScheduleModal) closeScheduleModal();
-            else closeModal();
+            if (state.showScheduleModal) { closeScheduleModal(); return; }
+            // v1.15: si el confirm de descartar está abierto, Esc lo cierra (sigue editando).
+            if (state.view === 'agentBuilder' && state.agentBuilderConfirmDiscard) {
+                setState({ agentBuilderConfirmDiscard: false });
+                return;
+            }
+            // v1.15: en agentBuilder con cambios sin guardar, Esc dispara el confirm (no cierra).
+            if (state.view === 'agentBuilder' && agentBuilderDirty()) {
+                state.agentBuilderConfirmDiscard = true;
+                rerenderContent();
+                return;
+            }
+            closeModal();
             return;
         }
     });
@@ -4922,8 +5437,9 @@
         // v1.12: si el usuario habia abierto el panel de lideres y vuelve por el badge AF,
         //   normalizamos a la vista AF. closeModal ya resetea a 'dashboard', pero hacemos
         //   esto explicito por si algo dejara view en 'leadersDashboard'.
-        if (state.view === 'leadersDashboard') {
+        if (state.view === 'leadersDashboard' || state.view === 'agentBuilder') {
             state.view = 'dashboard';
+            state.agentBuilderConfirmDiscard = false;
             rerenderContent();
         }
         var overlay = document.querySelector('.qida-overlay');
@@ -4947,6 +5463,9 @@
         state.scheduleLeadIdOverride = null;
         state.__pendingSuggestionDoneId = null;
         state.__pendingActivityDoneId = null;
+        // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
+        //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
+        state.agentBuilderConfirmDiscard = false;
         // v1.10: limpieza del dashboard de leads enfriandose.
         //   completedTodayIds PERSISTE durante toda la sesion del page load (NO se vacia
         //   aqui). Solo limpiamos el toast de undo y cancelamos cualquier timeout activo.
