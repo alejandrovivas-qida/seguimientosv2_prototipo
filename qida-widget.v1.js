@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.14.0
+ * QIDA ASSISTANT v1.14.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,18 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.14.1 (fixes visuales para igualar la estética .qida-leader-table):
+ *   - FIX alineación header vs filas: la última columna (Acción) pasa de 'auto' a ancho FIJO
+ *     (132px). Con 'auto' el header (celda vacía=0) y la fila (botón "Marcar hecho") daban
+ *     distinto ancho a esa pista, y al haber columnas fr el reparto cambiaba -> todo se corría.
+ *     grid-template idéntico en .qida-dash-header y .qida-dash-row en TODOS los breakpoints.
+ *   - Header de tabla con fondo gris #f3f4f6 + color s700 (antes se veía blanco como otra fila).
+ *   - Tabla encapsulada en card con borde redondeado (.qida-dash-table-card) + header-bar con
+ *     título por vista ("Sugerencias para hoy"/"Actividades programadas"/"Todos los leads") y
+ *     contador de leads. Replica el patrón .qida-leader-table-card de admin.
+ *   - Columna "Días" renombrada a "Sin contacto" (vocabulario que la AF ya conocía). Valor
+ *     (número + fecha) sin cambios. Ancho de columna ajustado (84px) para el header de 2 palabras.
  *
  * Cambios v1.14.0 (rediseño visual del dashboard AF - porta el sistema del Panel de Líderes):
  *   Motivo: la v1.13 superponía 5 sistemas de señalización en la fila (color de fondo por
@@ -910,7 +922,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.14.0';
+    var VERSION = '1.14.1';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -2465,11 +2477,18 @@
             /* Tabla (estética admin: fondo blanco, border-bottom sutil, th gris, hover #fafafa).
                grid-template IDENTICO en header y fila (7 cols). El rediseño v1.14 quita color
                de fila / rail / tinte: temperatura, días y estado viven en columnas propias. */
-            '.qida-dash-table{margin-top:8px;transition:opacity 160ms;}',
-            '.qida-dash-loading{opacity:.5;pointer-events:none;}',  /* atenuacion entre vistas (no vaciar) */
-            '.qida-dash-header{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 64px 150px auto;gap:14px;padding:8px 12px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--s500);font-weight:500;border-bottom:0.5px solid var(--s200);}',
+            /* Card contenedor de la tabla (patrón .qida-leader-table-card de admin) */
+            '.qida-dash-table-card{margin-top:8px;border:0.5px solid var(--s200);border-radius:10px;overflow:hidden;background:#fff;transition:opacity 160ms;}',
+            '.qida-dash-table-card.qida-dash-loading{opacity:.5;pointer-events:none;}',  /* atenuacion entre vistas (no vaciar) */
+            '.qida-dash-table-bar{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:0.5px solid var(--s200);}',
+            '.qida-dash-table-title{font-size:13px;font-weight:600;color:var(--s800);}',
+            '.qida-dash-table-count{font-size:11px;color:var(--s500);}',
+            /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
+               FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
+               distinto los fr y se desalinearían. */
+            '.qida-dash-header{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 84px 140px 132px;gap:14px;padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
             '.qida-dash-list{display:block;}',
-            '.qida-dash-row{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 64px 150px auto;gap:14px;padding:11px 12px;cursor:pointer;align-items:center;transition:background-color .12s;background:#fff;border-bottom:0.5px solid #f3f4f6;}',
+            '.qida-dash-row{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 84px 140px 132px;gap:14px;padding:11px 14px;cursor:pointer;align-items:center;transition:background-color .12s;background:#fff;border-bottom:0.5px solid #f3f4f6;}',
             '.qida-dash-row:last-child{border-bottom:0;}',
             '.qida-dash-row:hover{background:#fafafa;}',
             '.qida-dash-row:hover .qida-dash-row-actions{opacity:1;}',
@@ -2542,9 +2561,9 @@
             '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}}',
             /* v1.14 dashboard AF responsive: a 1100px se oculta "Tipo" (6 cols); a 980px se oculta
                la fecha-sub de Días y las cards apilan; a 760px se compacta la grilla. */
-            '@media (max-width:1100px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(150px,2fr) minmax(140px,2fr) 116px 60px 140px auto;}.qida-dash-header > div:nth-child(2){display:none;}.qida-cell-tipo{display:none;}}',
+            '@media (max-width:1100px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(150px,2fr) minmax(140px,2fr) 116px 80px 132px 124px;}.qida-dash-header > div:nth-child(2){display:none;}.qida-cell-tipo{display:none;}}',
             '@media (max-width:980px){.qida-cell-dias .qida-cell-date{display:none;}.qida-dash-cards{flex-direction:column;gap:10px;}}',
-            '@media (max-width:760px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(110px,1.6fr) minmax(100px,1.5fr) 86px 44px 112px auto;gap:10px;}}',
+            '@media (max-width:760px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(110px,1.6fr) minmax(100px,1.5fr) 86px 64px 110px 112px;gap:10px;}}',
 
             /* ============================================================ */
             /* v1.12: PANEL DE LIDERES                                       */
@@ -2783,12 +2802,20 @@
             for (var i = 0; i < ordered.length; i++) listHtml += renderDashRow(ordered[i]);
         }
 
-        var tableCls = 'qida-dash-table' + (state.dashLoading ? ' qida-dash-loading' : '');
+        // v1.14.1: tabla encapsulada en card con borde (patrón .qida-leader-table-card).
+        var DASH_VIEW_TITLES = { suggestions: 'Sugerencias para hoy', activities: 'Actividades programadas', leads: 'Todos los leads' };
+        var tableTitle = DASH_VIEW_TITLES[state.dashView] || 'Leads';
+        var countLabel = ordered.length + (ordered.length === 1 ? ' lead' : ' leads');
+        var cardCls = 'qida-dash-table-card' + (state.dashLoading ? ' qida-dash-loading' : '');
 
         return '<div class="qida-dash-dashboard">'
             + renderDashCards(base)
             + renderDashToolbar(base)
-            + '<div class="' + tableCls + '">'
+            + '<div class="' + cardCls + '">'
+                + '<div class="qida-dash-table-bar">'
+                    + '<span class="qida-dash-table-title">' + esc(tableTitle) + '</span>'
+                    + '<span class="qida-dash-table-count">' + countLabel + '</span>'
+                + '</div>'
                 + renderDashHeader()
                 + '<div class="qida-dash-list">' + listHtml + '</div>'
             + '</div>'
@@ -2909,7 +2936,7 @@
             + '<div>Tipo</div>'
             + '<div>Por que</div>'
             + '<div>Temp</div>'
-            + '<div>Días</div>'
+            + '<div>Sin contacto</div>'
             + '<div>Estado</div>'
             + '<div></div>'
         + '</div>';
