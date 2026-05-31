@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.13.0
+ * QIDA ASSISTANT v1.14.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,46 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.14.0 (rediseño visual del dashboard AF - porta el sistema del Panel de Líderes):
+ *   Motivo: la v1.13 superponía 5 sistemas de señalización en la fila (color de fondo por
+ *   temperatura + rail izquierdo + badges inline + tinte verde + punto rojo), con colores que
+ *   se contradecían. Se pasa de "codificar en colores de fila" a "explicitar en columnas".
+ *   - Fila SIN color de fondo por temperatura, SIN rail, SIN tinte, SIN punto de urgencia media,
+ *     SIN badges/iconos inline en el nombre. Fondo blanco + border-bottom sutil + hover #fafafa
+ *     (estética .qida-leader-table de admin). Se mantiene el grid (no se migra a <table> real).
+ *   - Tabla pasa de 5 a 7 columnas: Familia · Tipo · Por qué · Temperatura (NUEVA) · Días (NUEVA
+ *     semántica) · Estado (NUEVA) · Acción.
+ *       * Temperatura: barrita sólida monocroma + texto (Caliente/Templado/Frío/Pausa), patrón
+ *         badge-localidad de admin. Colores admin: #EF4444/#F59E0B/#3B82F6/gris(pausa).
+ *       * Días desde último contacto (renombre de "Sin contacto"): número coloreado por gravedad
+ *         (texto, no fondo): 0-3 neutro / 4-7 ámbar / 8-14 ámbar fuerte / 15+ rojo. Fecha corta
+ *         debajo (se oculta @980px). Sin icono de alerta. CAPEO: si urgency==='alta', el máximo
+ *         es ámbar fuerte (nunca rojo) -> el único rojo de la fila es el badge "Urgente".
+ *       * Estado: badges admin apilados. Verde "Mensaje nuevo" (+contador si unread>1, paleta
+ *         #ECFDF5/#047857) y/o rojo "Urgente" (solo urgency alta, #FEF2F2/#991B1B). Vacía si no.
+ *   - Cards superiores reestilizadas con estética .qida-leader-kpi (label arriba / valor Fraunces
+ *     28px / sub) y agrupadas en dos bloques con label: "Tu impacto" (Convertidos, display-only)
+ *     y "Cartera activa" (Calientes/Templados/Fríos, clicables ≡ chips de segmento). El número de
+ *     las cards de temperatura toma el color de su temperatura; activo = borde inferior + fondo.
+ *   - Leyenda explícita debajo de la tabla: Caliente · Templado · Frío · Pausa | Mensaje nuevo ·
+ *     Urgente (dots + label, colores admin). Una columna de 4 valores -> leyenda de 4.
+ *   - Bug de filtros resuelto: botón "Quitar filtros" (data-action dash-clear-filters) visible
+ *     solo con filtro activo, limpia segmento + pill de una. Se mantiene click-en-activa-desactiva.
+ *   - Divider entre "mensajes nuevos" y resto: ELIMINADO (el badge "Mensaje nuevo" en Estado lo
+ *     reemplaza). El sort "mensajes nuevos al tope" se MANTIENE.
+ *   - Responsive: @1100 oculta "Tipo" (6 cols); @980 oculta la fecha-sub de Días y apila cards;
+ *     @760 compacta la grilla. Verificado en el modal AF real (max-width 1400px, NO el de 1600
+ *     de líderes) a 1400/1280/1100/980/760.
+ *   - NO se toca: Panel de Líderes, detalle del lead, mocks/endpoints (shape intacto), loaders,
+ *     WIDGET_URL (bump interno).
+ *
+ * DEFAULTS QUE TOME EN v1.14.0:
+ *   - Urgencia 'media' deja de tener señal propia en el dashboard (antes punto rojo): la columna
+ *     Estado solo expone "Mensaje nuevo" y "Urgente" (alta). Coherente con "un rojo = urgencia alta".
+ *   - Pausa: barra gris neutra + texto "Pausa", incluida en la leyenda (4 valores -> 4 explicaciones).
+ *   - "Tu impacto"/"Cartera activa" como labels de grupo (fallback documentado: barra vertical).
+ *   - Verde de "Mensaje nuevo" = verde admin (#047857), no el verde de marca WhatsApp.
  *
  * Cambios v1.13.0 (reconstruccion del dashboard AF - reemplaza la vista "cooling" de v1.10):
  *   - La vista state.view==='dashboard' deja de ser la lista plana "cooling" (4 cols, color
@@ -870,7 +910,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.13.0';
+    var VERSION = '1.14.0';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -2368,27 +2408,35 @@
                por el bloque .qida-dash-* de abajo (cards + toolbar + tabla por temperatura). */
 
             /* ============================================================
-               v1.13 DASHBOARD AF: cards + toolbar + tabla (color por temperatura)
+               v1.14 DASHBOARD AF: cards (2 grupos) + toolbar + tabla por columnas
+               (Temperatura / Días coloreado / Estado con badges) + leyenda. Sistema visual
+               portado del Panel de Líderes. Sin color de fila / rail / tinte.
                ============================================================ */
             '.qida-dash-dashboard{padding:16px;position:relative;flex:1;overflow-y:auto;background:#fff;}',
 
-            /* Banda superior: 4 cards mismo tamaño */
-            '.qida-dash-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px;}',
-            '.qida-dash-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px 14px;border:1px solid var(--s200);border-bottom-width:3px;border-radius:10px;background:#fff;font-family:inherit;text-align:left;}',
-            '.qida-dash-card-num{font-size:26px;font-weight:600;font-family:Fraunces,Georgia,serif;line-height:1.1;color:var(--s900);}',
-            '.qida-dash-card-label{font-size:12px;color:var(--s600);}',
-            '.qida-dash-card-conv{background:var(--qg-soft);border-color:var(--qg-soft-border);border-bottom-color:var(--qg);}',
+            /* Banda superior: 2 grupos con label (estética .qida-leader-kpi de admin) */
+            '.qida-dash-cards{display:flex;align-items:stretch;gap:20px;margin-bottom:14px;}',
+            '.qida-dash-cardgroup{display:flex;flex-direction:column;gap:6px;}',
+            '.qida-dash-cardgroup-grow{flex:1;}',
+            '.qida-dash-cardgroup-label{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--s400);padding-left:2px;}',
+            '.qida-dash-cardgroup-cards{display:flex;gap:12px;flex:1;}',
+            '.qida-dash-cardgroup-temps{display:grid;grid-template-columns:repeat(3,1fr);}',
+            '.qida-dash-card{display:flex;flex-direction:column;gap:3px;padding:12px 16px;border:0.5px solid var(--s200);border-radius:10px;background:#fff;font-family:inherit;text-align:left;min-width:118px;}',
+            '.qida-dash-card-label{font-size:11px;font-weight:500;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;}',
+            '.qida-dash-card-num{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:28px;line-height:1.1;color:var(--s900);}',
+            '.qida-dash-card-sub{font-size:11px;color:var(--s500);}',
+            '.qida-dash-card-conv{background:var(--qg-soft);border-color:var(--qg-soft-border);}',
             '.qida-dash-card-conv .qida-dash-card-num{color:var(--qg);}',
-            '.qida-dash-card-temp{cursor:pointer;transition:background-color 120ms,border-color 120ms;}',
+            /* Cards de temperatura: clicables, acento de color en el numero, estado activo */
+            '.qida-dash-card-temp{cursor:pointer;transition:background-color .12s;border-bottom-width:3px;border-bottom-color:var(--s200);}',
             '.qida-dash-card-temp:hover{background:var(--s50);}',
-            '.qida-card-caliente .qida-dash-card-num{color:#dc2626;}',
-            '.qida-card-templado .qida-dash-card-num{color:#b45309;}',
-            '.qida-card-frio .qida-dash-card-num{color:#2563eb;}',
-            /* Card activa: borde inferior grueso de color + fondo tintado + label en negrita */
+            '.qida-card-caliente .qida-dash-card-num{color:#EF4444;}',
+            '.qida-card-templado .qida-dash-card-num{color:#F59E0B;}',
+            '.qida-card-frio .qida-dash-card-num{color:#3B82F6;}',
             '.qida-dash-card-temp.active .qida-dash-card-label{font-weight:600;color:var(--s800);}',
-            '.qida-card-caliente.active{border-bottom-color:#dc2626;background:#fef2f2;}',
-            '.qida-card-templado.active{border-bottom-color:#d97706;background:#fffbeb;}',
-            '.qida-card-frio.active{border-bottom-color:#2563eb;background:#eff6ff;}',
+            '.qida-card-caliente.active{border-bottom-color:#EF4444;background:#fef2f2;}',
+            '.qida-card-templado.active{border-bottom-color:#F59E0B;background:#fffbeb;}',
+            '.qida-card-frio.active{border-bottom-color:#3B82F6;background:#eff6ff;}',
 
             /* Toolbar */
             '.qida-dash-toolbar{display:flex;align-items:center;gap:12px;padding:2px 2px 10px;border-bottom:0.5px solid var(--s100);}',
@@ -2398,6 +2446,8 @@
             '.qida-dash-filter-btn{display:inline-flex;align-items:center;gap:5px;background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 12px;font-size:13px;color:var(--s700);cursor:pointer;font-family:inherit;}',
             '.qida-dash-filter-btn:hover{border-color:var(--s400);}',
             '.qida-dash-filter-btn.active{border-color:var(--qg);color:var(--qg);background:var(--qg-soft);}',
+            '.qida-dash-clear-btn{display:inline-flex;align-items:center;gap:4px;background:transparent;border:0;color:var(--s500);cursor:pointer;font-family:inherit;font-size:12px;margin-left:8px;}',
+            '.qida-dash-clear-btn:hover{color:var(--s800);}',
             '.qida-dash-segments{display:flex;flex-wrap:wrap;gap:6px;padding:10px 2px 2px;}',
             '.qida-seg-chip{background:#fff;border:0.5px solid var(--s200);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--s700);cursor:pointer;font-family:inherit;}',
             '.qida-seg-chip:hover{border-color:var(--s400);}',
@@ -2412,41 +2462,61 @@
             '.qida-wa-pill-dot{width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block;}',
             '.qida-wa-pill.active .qida-wa-pill-dot{background:#fff;}',
 
-            /* Tabla */
+            /* Tabla (estética admin: fondo blanco, border-bottom sutil, th gris, hover #fafafa).
+               grid-template IDENTICO en header y fila (7 cols). El rediseño v1.14 quita color
+               de fila / rail / tinte: temperatura, días y estado viven en columnas propias. */
             '.qida-dash-table{margin-top:8px;transition:opacity 160ms;}',
             '.qida-dash-loading{opacity:.5;pointer-events:none;}',  /* atenuacion entre vistas (no vaciar) */
-            '.qida-dash-header{display:grid;grid-template-columns:2.2fr 0.9fr 2.4fr 0.9fr auto;gap:16px;padding:8px 16px;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--s500);font-weight:500;border-bottom:0.5px solid var(--s100);}',
-            '.qida-dash-list{display:flex;flex-direction:column;gap:4px;margin-top:8px;}',
-            '.qida-dash-row{display:grid;grid-template-columns:2.2fr 0.9fr 2.4fr 0.9fr auto;gap:16px;padding:12px 16px;border-radius:8px;cursor:pointer;align-items:center;transition:filter 120ms;position:relative;background:#fff;}',
-            '.qida-dash-row:hover{filter:brightness(0.97);}',
+            '.qida-dash-header{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 64px 150px auto;gap:14px;padding:8px 12px;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--s500);font-weight:500;border-bottom:0.5px solid var(--s200);}',
+            '.qida-dash-list{display:block;}',
+            '.qida-dash-row{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 64px 150px auto;gap:14px;padding:11px 12px;cursor:pointer;align-items:center;transition:background-color .12s;background:#fff;border-bottom:0.5px solid #f3f4f6;}',
+            '.qida-dash-row:last-child{border-bottom:0;}',
+            '.qida-dash-row:hover{background:#fafafa;}',
             '.qida-dash-row:hover .qida-dash-row-actions{opacity:1;}',
-            '.qida-dash-row-actions{opacity:0;transition:opacity 120ms;}',
-            '.qida-dash-divider{height:1px;background:var(--s200);margin:6px 12px;}',
+            '.qida-dash-row-actions{opacity:0;transition:opacity .12s;text-align:right;}',
 
-            /* Color de fila por temperatura */
-            '.qida-temp-caliente{background:#fef4f2;}',
-            '.qida-temp-templado{background:#fffaf0;}',
-            '.qida-temp-frio{background:#f3f6fb;}',
-            '.qida-temp-pausa{background:#fafaf9;}',
-
-            /* Señales de fila. Rail via box-shadow inset (no desplaza el grid). Urgencia gana el rail. */
-            '.qida-rail-wa{box-shadow:inset 5px 0 0 0 #25D366;}',
-            '.qida-rail-urgent{box-shadow:inset 5px 0 0 0 #dc2626;}',
-            /* Tinte verde WhatsApp como capa encima del color de temperatura (background-image) */
-            '.qida-wa-tint{background-image:linear-gradient(0deg,rgba(37,211,102,0.07),rgba(37,211,102,0.07));}',
-
-            /* Celdas */
-            '.qida-cell-familia .qida-cell-line1{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}',
+            /* Celda Familia */
+            '.qida-cell-familia .qida-cell-line1{display:flex;align-items:center;}',
             '.qida-cell-familia .qida-cell-name{font-weight:500;font-size:13px;color:var(--s900);}',
-            '.qida-cell-familia .qida-cell-line2{font-size:12px;color:var(--s700);margin-top:2px;}',
-            '.qida-wa-icon{display:inline-flex;align-items:center;color:#1ea952;}',
-            '.qida-wa-count{display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;padding:0 3px;border-radius:999px;background:#25D366;color:#fff;font-size:10px;font-weight:600;margin-left:-3px;}',
-            '.qida-badge-urgent{display:inline-flex;align-items:center;gap:3px;background:#fee2e2;color:#b91c1c;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.03em;}',
-            '.qida-urg-dot{width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block;}',
-            '.qida-cell-tipo{font-size:13px;color:var(--s900);}',
-            '.qida-cell-porque{font-size:13px;color:var(--s700);line-height:1.4;}',
-            '.qida-cell-sincontacto .qida-cell-days{font-size:22px;font-weight:500;color:var(--s900);line-height:1.1;display:inline-flex;align-items:center;gap:4px;}',
-            '.qida-cell-sincontacto .qida-cell-date{font-size:11px;color:var(--s500);margin-top:2px;}',
+            '.qida-cell-familia .qida-cell-line2{font-size:12px;color:var(--s600);margin-top:2px;}',
+            '.qida-cell-tipo{font-size:12.5px;color:var(--s800);}',
+            /* "Por qué" con ellipsis + tooltip (title) para no romper el ancho del modal AF */
+            '.qida-cell-porque{font-size:12.5px;color:var(--s700);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+
+            /* Columna Temperatura: barrita sólida monocroma + texto (colores admin) */
+            '.qida-dash-temp{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--s700);white-space:nowrap;}',
+            '.qida-dash-temp-bar{display:inline-block;width:18px;height:8px;border-radius:4px;background:var(--s300);flex-shrink:0;}',
+            '.qida-dash-temp-caliente .qida-dash-temp-bar{background:#EF4444;}',
+            '.qida-dash-temp-templado .qida-dash-temp-bar{background:#F59E0B;}',
+            '.qida-dash-temp-frio .qida-dash-temp-bar{background:#3B82F6;}',
+            '.qida-dash-temp-pausa .qida-dash-temp-bar{background:var(--s400);}',
+
+            /* Columna Días: número coloreado por gravedad (texto, no fondo) + fecha corta */
+            '.qida-cell-dias .qida-cell-days{font-size:20px;font-weight:500;line-height:1.1;color:var(--s700);}',
+            '.qida-cell-dias .qida-cell-date{font-size:11px;color:var(--s500);margin-top:2px;}',
+            '.qida-dash-dias-normal{color:var(--s700);}',
+            '.qida-dash-dias-amber{color:#92400E;}',
+            '.qida-dash-dias-amber-strong{color:#92400E;font-weight:600;}',
+            '.qida-dash-dias-red{color:#991B1B;font-weight:600;}',
+
+            /* Columna Estado: badges admin (apilados). Mismas paletas que .qida-leader-status */
+            '.qida-cell-estado{display:flex;flex-direction:column;gap:4px;align-items:flex-start;}',
+            '.qida-dash-badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:8px;font-size:10.5px;font-weight:500;white-space:nowrap;}',
+            '.qida-dash-badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}',
+            '.qida-dash-badge-new{background:#ECFDF5;color:#047857;}',
+            '.qida-dash-badge-urgent{background:#FEF2F2;color:#991B1B;}',
+
+            /* Leyenda explícita debajo de la tabla */
+            '.qida-dash-legend{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:12px 12px 0;font-size:11.5px;color:var(--s600);}',
+            '.qida-dash-legend-item{display:inline-flex;align-items:center;gap:6px;}',
+            '.qida-dash-legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block;}',
+            '.qida-dash-legend-sep{width:1px;height:14px;background:var(--s200);display:inline-block;}',
+            '.qida-dash-legdot-caliente{background:#EF4444;}',
+            '.qida-dash-legdot-templado{background:#F59E0B;}',
+            '.qida-dash-legdot-frio{background:#3B82F6;}',
+            '.qida-dash-legdot-pausa{background:var(--s400);}',
+            '.qida-dash-legdot-new{background:#047857;}',
+            '.qida-dash-legdot-urgent{background:#991B1B;}',
 
             /* Boton "Marcar hecho" (hover) */
             '.qida-mark-done-btn{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 10px;font-size:12px;color:#0F6E56;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;}',
@@ -2469,7 +2539,12 @@
             /* Detalle: anchos por posicion estructural. En 760px se oculta la 1ra columna (WA). */
             '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 26%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
             '@media (max-width:980px){.qida-detail-body > *:nth-child(3){display:none;}}',
-            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}.qida-dash-cards{grid-template-columns:repeat(2,1fr);}.qida-dash-header{grid-template-columns:2fr 0.9fr 1.5fr 0.8fr auto;}.qida-dash-row{grid-template-columns:2fr 0.9fr 1.5fr 0.8fr auto;}}',
+            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}}',
+            /* v1.14 dashboard AF responsive: a 1100px se oculta "Tipo" (6 cols); a 980px se oculta
+               la fecha-sub de Días y las cards apilan; a 760px se compacta la grilla. */
+            '@media (max-width:1100px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(150px,2fr) minmax(140px,2fr) 116px 60px 140px auto;}.qida-dash-header > div:nth-child(2){display:none;}.qida-cell-tipo{display:none;}}',
+            '@media (max-width:980px){.qida-cell-dias .qida-cell-date{display:none;}.qida-dash-cards{flex-direction:column;gap:10px;}}',
+            '@media (max-width:760px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(110px,1.6fr) minmax(100px,1.5fr) 86px 44px 112px auto;gap:10px;}}',
 
             /* ============================================================ */
             /* v1.12: PANEL DE LIDERES                                       */
@@ -2703,15 +2778,9 @@
             listHtml = renderEmptyState();
         } else {
             listHtml = '';
-            var dividerDone = false;
-            for (var i = 0; i < ordered.length; i++) {
-                // Divider sutil en el limite entre el grupo "mensaje nuevo" y el resto.
-                if (!dividerDone && i > 0 && ordered[i - 1].hasNewMessage && !ordered[i].hasNewMessage) {
-                    listHtml += '<div class="qida-dash-divider"></div>';
-                    dividerDone = true;
-                }
-                listHtml += renderDashRow(ordered[i]);
-            }
+            // v1.14: el sort "mensajes nuevos al tope" se mantiene; el divider visual se elimina
+            //   (la columna Estado con el badge "Mensaje nuevo" ya cumple esa función).
+            for (var i = 0; i < ordered.length; i++) listHtml += renderDashRow(ordered[i]);
         }
 
         var tableCls = 'qida-dash-table' + (state.dashLoading ? ' qida-dash-loading' : '');
@@ -2723,6 +2792,7 @@
                 + renderDashHeader()
                 + '<div class="qida-dash-list">' + listHtml + '</div>'
             + '</div>'
+            + renderDashLegend()
             + '<div class="qida-dash-actions">'
                 + '<button class="qida-refresh-btn" data-action="dash-refresh">'
                     + icon('refresh-cw', 14) + ' Refrescar'
@@ -2732,20 +2802,32 @@
         + '</div>';
     }
 
-    // Banda superior: 4 cards mismo tamaño. La primera es display-only; las 3 de temperatura
-    //   filtran (escriben state.dashSegment, igual que los chips de Filtros).
+    // Banda superior: 2 grupos con label (estética .qida-leader-kpi del Panel de Líderes).
+    //   "TU IMPACTO" = Convertidos (display-only, no filtra). "CARTERA ACTIVA" = 3 cards de
+    //   temperatura clicables (escriben state.dashSegment, igual que los chips de Filtros).
     function renderDashCards(base) {
-        // "Convertidos este mes": valor mock, display-only (no filtra).
+        // "Convertidos": valor mock, display-only.
         // TODO: conectar con endpoint cuando esté disponible (GET /api/me/leads/converted?period=current_month).
         var convertidos = 7;
         return '<div class="qida-dash-cards">'
-            + '<div class="qida-dash-card qida-dash-card-conv">'
-                + '<span class="qida-dash-card-num">' + convertidos + '</span>'
-                + '<span class="qida-dash-card-label">Convertidos este mes</span>'
+            + '<div class="qida-dash-cardgroup">'
+                + '<div class="qida-dash-cardgroup-label">Tu impacto</div>'
+                + '<div class="qida-dash-cardgroup-cards">'
+                    + '<div class="qida-dash-card qida-dash-card-conv">'
+                        + '<div class="qida-dash-card-label">Convertidos</div>'
+                        + '<div class="qida-dash-card-num">' + convertidos + '</div>'
+                        + '<div class="qida-dash-card-sub">este mes</div>'
+                    + '</div>'
+                + '</div>'
             + '</div>'
-            + renderDashCard('caliente', 'Calientes', countByTemp(base, 'caliente'))
-            + renderDashCard('templado', 'Templados', countByTemp(base, 'templado'))
-            + renderDashCard('frio',     'Fríos',     countByTemp(base, 'frio'))
+            + '<div class="qida-dash-cardgroup qida-dash-cardgroup-grow">'
+                + '<div class="qida-dash-cardgroup-label">Cartera activa</div>'
+                + '<div class="qida-dash-cardgroup-cards qida-dash-cardgroup-temps">'
+                    + renderDashCard('caliente', 'Calientes', countByTemp(base, 'caliente'))
+                    + renderDashCard('templado', 'Templados', countByTemp(base, 'templado'))
+                    + renderDashCard('frio',     'Fríos',     countByTemp(base, 'frio'))
+                + '</div>'
+            + '</div>'
         + '</div>';
     }
 
@@ -2753,17 +2835,23 @@
         var active = (state.dashSegment === seg);
         return '<button class="qida-dash-card qida-dash-card-temp qida-card-' + seg + (active ? ' active' : '') + '" '
             + 'data-action="dash-set-temp" data-id="' + seg + '" aria-pressed="' + (active ? 'true' : 'false') + '">'
-            + '<span class="qida-dash-card-num">' + count + '</span>'
-            + '<span class="qida-dash-card-label">' + esc(label) + '</span>'
+            + '<div class="qida-dash-card-label">' + esc(label) + '</div>'
+            + '<div class="qida-dash-card-num">' + count + '</div>'
         + '</button>';
     }
 
     function renderDashToolbar(base) {
         var segActive = !!state.dashSegment;
+        var anyFilter = segActive || state.dashOnlyNew;
         var filterBtn = '<button class="qida-dash-filter-btn' + (state.dashFiltersExpanded || segActive ? ' active' : '') + '" data-action="dash-toggle-filters">'
             + icon('filter', 13) + ' Filtros' + (segActive ? ' (1)' : '') + '</button>';
+        // v1.14: affordance explicita para limpiar filtros (resuelve el bug de "no se puede
+        //   quitar el filtro"). Solo visible cuando hay algun filtro activo (segmento o pill).
+        var clearBtn = anyFilter
+            ? '<button class="qida-dash-clear-btn" data-action="dash-clear-filters">' + icon('x', 12) + ' Quitar filtros</button>'
+            : '';
         return '<div class="qida-dash-toolbar">'
-            + '<div class="qida-dash-toolbar-left">' + filterBtn + '</div>'
+            + '<div class="qida-dash-toolbar-left">' + filterBtn + clearBtn + '</div>'
             + '<div class="qida-dash-toolbar-center">' + renderWhatsappPill(base) + '</div>'
             + '<div class="qida-dash-toolbar-right">' + renderViewChips() + '</div>'
         + '</div>'
@@ -2820,8 +2908,74 @@
             + '<div>Familia</div>'
             + '<div>Tipo</div>'
             + '<div>Por que</div>'
-            + '<div>Sin contacto</div>'
+            + '<div>Temp</div>'
+            + '<div>Días</div>'
+            + '<div>Estado</div>'
             + '<div></div>'
+        + '</div>';
+    }
+
+    // v1.14: metadata de temperatura (label + clase). Incluye 'pausa' (gris neutro).
+    var TEMP_META = {
+        caliente: { label: 'Caliente', cls: 'caliente' },
+        templado: { label: 'Templado', cls: 'templado' },
+        frio:     { label: 'Frío',     cls: 'frio' },
+        pausa:    { label: 'Pausa',    cls: 'pausa' }
+    };
+
+    // Columna Temperatura: barrita sólida monocroma + texto (patrón badge-localidad de admin).
+    function renderTempCell(temp) {
+        var meta = TEMP_META[normalizeTemp(temp)];
+        if (!meta) return '<div class="qida-dash-cell qida-cell-temp"></div>';
+        return '<div class="qida-dash-cell qida-cell-temp">'
+            + '<span class="qida-dash-temp qida-dash-temp-' + meta.cls + '">'
+                + '<i class="qida-dash-temp-bar"></i>' + esc(meta.label)
+            + '</span>'
+        + '</div>';
+    }
+
+    // Nivel de color para "Días". Capeo: si urgencia alta, el máximo es ámbar-fuerte (nunca rojo)
+    //   -> el único rojo de la fila es el badge "Urgente" de la columna Estado.
+    function diasLevel(days, urg) {
+        var lvl = (days <= 3) ? 'normal' : (days <= 7) ? 'amber' : (days <= 14) ? 'amber-strong' : 'red';
+        if (urg === 'alta' && lvl === 'red') lvl = 'amber-strong';
+        return lvl;
+    }
+
+    // Columna Días desde último contacto: número coloreado por gravedad (texto, no fondo) +
+    //   fecha corta debajo (se oculta en @980px). Sin icono de alerta (el color comunica).
+    function renderDiasCell(row) {
+        var lvl = diasLevel(row.daysWithoutTouch, normalizeUrgency(row.urgency));
+        return '<div class="qida-dash-cell qida-cell-dias">'
+            + '<div class="qida-cell-days qida-dash-dias-' + lvl + '">' + row.daysWithoutTouch + '</div>'
+            + '<div class="qida-cell-date">' + esc(formatShortDate(row.lastTouchDate)) + '</div>'
+        + '</div>';
+    }
+
+    // Columna Estado: badges admin (apilados). Verde "Mensaje nuevo" (+contador si >1) y/o rojo
+    //   "Urgente" (solo urgency alta). Vacía si no aplica ninguno.
+    function renderEstadoCell(row) {
+        var badges = '';
+        if (row.hasNewMessage) {
+            var cnt = (row.unreadMessagesCount > 1) ? ' ' + row.unreadMessagesCount : '';
+            badges += '<span class="qida-dash-badge qida-dash-badge-new"><span class="qida-dash-badge-dot"></span>Mensaje nuevo' + cnt + '</span>';
+        }
+        if (normalizeUrgency(row.urgency) === 'alta') {
+            badges += '<span class="qida-dash-badge qida-dash-badge-urgent"><span class="qida-dash-badge-dot"></span>Urgente</span>';
+        }
+        return '<div class="qida-dash-cell qida-cell-estado">' + badges + '</div>';
+    }
+
+    // Leyenda explícita debajo de la tabla (4 temperaturas + 2 estados). Reusa el patrón
+    //   dot+label de admin con los colores exactos del sistema visual del Panel de Líderes.
+    function renderDashLegend() {
+        function item(cls, label) {
+            return '<span class="qida-dash-legend-item"><span class="qida-dash-legend-dot qida-dash-legdot-' + cls + '"></span>' + esc(label) + '</span>';
+        }
+        return '<div class="qida-dash-legend">'
+            + item('caliente', 'Caliente') + item('templado', 'Templado') + item('frio', 'Frío') + item('pausa', 'Pausa')
+            + '<span class="qida-dash-legend-sep"></span>'
+            + item('new', 'Mensaje nuevo') + item('urgent', 'Urgente')
         + '</div>';
     }
 
@@ -2829,57 +2983,28 @@
     //   caregiverInfo, serviceType, reason, daysWithoutTouch, lastTouchDate, temperature,
     //   urgency, hasNewMessage, unreadMessagesCount). Los ids reusan MOCK_LEADS -> el detalle
     //   (select-lead) resuelve contra datos reales.
+    // v1.14: paradigma "explicitar en columnas". La fila ya NO codifica con fondo/rail/tinte;
+    //   temperatura, días y estado viven en columnas propias. Fondo blanco (estética admin).
     function renderDashRow(row) {
-        var temp = normalizeTemp(row.temperature);
-        var urg = normalizeUrgency(row.urgency);
-        var hasNew = !!row.hasNewMessage;
-
-        // Color de fila por temperatura.
-        var tempClass = (temp === 'caliente' || temp === 'templado' || temp === 'frio' || temp === 'pausa')
-            ? ' qida-temp-' + temp : '';
-
-        // Conflicto urgencia+WhatsApp: el rail izquierdo es uno solo. Urgencia ALTA gana el rail
-        //   (rojo, prioridad operativa); el WhatsApp queda señalado por el icono 💬 + tinte verde.
-        //   Si no hay urgencia alta pero si mensaje nuevo, el rail es verde WhatsApp. Rail dividido
-        //   descartado por fragilidad visual/CSS dentro de Odoo.
-        var railClass = (urg === 'alta') ? ' qida-rail-urgent' : (hasNew ? ' qida-rail-wa' : '');
-        var tintClass = hasNew ? ' qida-wa-tint' : '';
-
-        // Señales en la columna Familia. 💬 ANTES del nombre; punto rojo (urgencia media) DESPUES
-        //   del nombre -> dos señales en posicion y color distintos para no confundirse.
-        var waIcon = '';
-        if (hasNew) {
-            waIcon = '<span class="qida-wa-icon" title="Mensaje nuevo de WhatsApp">' + icon('msg', 13) + '</span>';
-            if (row.unreadMessagesCount > 1) {
-                waIcon += '<span class="qida-wa-count" title="' + row.unreadMessagesCount + ' mensajes sin leer">' + row.unreadMessagesCount + '</span>';
-            }
-        }
-        var urgentBadge = (urg === 'alta')
-            ? '<span class="qida-badge-urgent">' + icon('alert-triangle', 11) + ' Urgente</span>' : '';
-        var mediaDot = (urg === 'media')
-            ? '<span class="qida-urg-dot" title="Urgencia media"></span>' : '';
-
         var cg = row.caregiverInfo || {};
         var line2 = esc(((cg.relation || '') + ' ' + (cg.name || '')).trim()) + (cg.age != null ? ', ' + cg.age + ' anos' : '');
+        var reason = row.reason || 'Sin actividad reciente';
 
-        var dangerIcon = (row.daysWithoutTouch >= 21) ? icon('alert-triangle', 14) + ' ' : '';
-
-        return '<div class="qida-dash-row' + tempClass + railClass + tintClass + '" '
-            + 'data-action="select-lead" data-id="' + esc(row.id) + '">'
+        return '<div class="qida-dash-row" data-action="select-lead" data-id="' + esc(row.id) + '">'
 
             + '<div class="qida-dash-cell qida-cell-familia">'
-                + '<div class="qida-cell-line1">' + waIcon + '<span class="qida-cell-name">' + esc(row.familyName) + ' &middot; ' + esc(row.city) + '</span>' + urgentBadge + mediaDot + '</div>'
+                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(row.familyName) + ' &middot; ' + esc(row.city) + '</span></div>'
                 + '<div class="qida-cell-line2">' + line2 + '</div>'
             + '</div>'
 
             + '<div class="qida-dash-cell qida-cell-tipo">' + esc(row.serviceType) + '</div>'
 
-            + '<div class="qida-dash-cell qida-cell-porque">' + esc(row.reason || 'Sin actividad reciente') + '</div>'
+            // "Por qué" con ellipsis + tooltip (title) para no romper el ancho del modal AF.
+            + '<div class="qida-dash-cell qida-cell-porque" title="' + esc(reason) + '">' + esc(reason) + '</div>'
 
-            + '<div class="qida-dash-cell qida-cell-sincontacto">'
-                + '<div class="qida-cell-days">' + dangerIcon + row.daysWithoutTouch + '</div>'
-                + '<div class="qida-cell-date">' + esc(formatShortDate(row.lastTouchDate)) + '</div>'
-            + '</div>'
+            + renderTempCell(row.temperature)
+            + renderDiasCell(row)
+            + renderEstadoCell(row)
 
             + '<div class="qida-dash-row-actions">'
                 + '<button class="qida-mark-done-btn" data-action="mark-done" data-id="' + esc(row.id) + '" data-stop>'
@@ -4264,6 +4389,11 @@
             // Pill WhatsApp: toggle del filtro hasNewMessage (AND con el segmento). Client-side.
             case 'dash-toggle-new': {
                 setState({ dashOnlyNew: !state.dashOnlyNew });
+                return;
+            }
+            // v1.14: limpia todos los filtros client-side de una (segmento + pill).
+            case 'dash-clear-filters': {
+                setState({ dashSegment: null, dashOnlyNew: false });
                 return;
             }
 
