@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.15.0
+ * QIDA ASSISTANT v1.16.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,26 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.16.0 (3 fixes UX en el modal del lead, quirúrgicos e independientes):
+ *   - CAMBIO 1 — Bloque "Análisis IA" en la columna del detalle, JUSTO debajo de "Resumen IA"
+ *     (renderCenterPane: renderIaSummary -> renderIaAnalysis -> renderCare ...). Mismo patrón
+ *     visual que Resumen IA (infoCard + header ✨ + acción + "Generado hace X" + body / vacío).
+ *     SIN backend ni edición inline: Generar/Regenerar hacen console.log + toast (preparación de
+ *     UI). Mock MOCK_IA_ANALYSIS (mismo shape que MOCK_IA_SUMMARIES): algunos leads con análisis,
+ *     otros vacíos. El texto junta dos contenidos: por qué se sugiere seguimiento + contexto.
+ *     Funciones nuevas: getIaAnalysis, renderIaAnalysis. Handler nuevo: regen-ia-analysis.
+ *   - CAMBIO 2 — Scroll del chat WhatsApp. overflow-y:auto ya existía (.qida-pane-wa-body) y el
+ *     scroll-al-fondo ya se disparaba al abrir el lead (select-lead) y al enviar (sendWhatsAppMock).
+ *     Se agrega el caso del botón Swap: toggle-detail-layout ahora setea __waNeedsScroll (y
+ *     __aiNeedsScroll) para re-posicionar ambos panes al fondo tras el rerender.
+ *   - CAMBIO 3 — Cruz "Cerrar" siempre a la derecha del header en TODAS las vistas
+ *     (dashboard/detail/leadersDashboard/agentBuilder). Causa: .qida-shell-header es flex
+ *     space-between y en vistas sin título a la izquierda el bloque de acciones quedaba a la
+ *     izquierda. Fix de 1 línea: .qida-shell-actions{margin-left:auto}. Orden interno ya correcto
+ *     ([acciones][Esc][✕]), sin tocar el markup de ninguna vista.
+ *   - NO se toca: dashboard cerrado (v1.14.1), lógica del agent-builder (v1.15.0, solo hereda la
+ *     cruz a la derecha), endpoints. El bloque Análisis IA es UI con mock.
  *
  * Cambios v1.15.0 (Asistente IA configurable por AF - drafts dinámicos + "Armá tu asistente"):
  *   Principio rector intacto: la IA propone, la AF edita y envía (copy-to-WA editable).
@@ -958,7 +978,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.15.0';
+    var VERSION = '1.16.0';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -1083,6 +1103,17 @@
         L121656: { text: 'Padre 79 anos, postoperatorio cadera, ayuda temporal 3-4 meses. Familia esta comparando con otras dos opciones. Presupuesto enviado hace una semana. Riesgo medio de perder por precio si las otras opciones son mas baratas.', generatedAt: 'Hace 3d', editedBy: 'Patricia V.' },
         L122131: { text: 'Caso urgente operativo: cuidadora actual deja antes del 30/05, hay deadline real. Marido con Parkinson avanzado. Ya enviamos dos perfiles con experiencia en Parkinson, familia eligio el segundo y pregunto si puede empezar el 25. Cerrar fechas y arranque ASAP.', generatedAt: 'Hace 1d', editedBy: null },
         L121399: { text: 'Madre 86 anos, alta hospitalaria manana. Urgencia muy alta. Familia necesita cobertura desde el dia 1. Solo 2 interacciones, faltan datos basicos. Llamar hoy para captar perfil y enviar propuesta esta tarde.', generatedAt: 'Hace 1h', editedBy: null }
+    };
+
+    // v1.16: "Análisis IA" del detalle (preparación de UI, sin backend). Mismo shape que
+    //   MOCK_IA_SUMMARIES. Un solo bloque que junta DOS contenidos: por qué se sugiere
+    //   seguimiento + contexto adicional del lead. Algunos leads CON análisis (estado generado),
+    //   el resto SIN (estado vacío) -> ambos estados visibles en QA.
+    //   TODO[backend]: reemplazar por el endpoint de análisis cuando exista.
+    var MOCK_IA_ANALYSIS = {
+        L122581: { text: 'Sugerimos seguimiento HOY: respondió esta mañana con dos preguntas concretas (cobertura fin de semana y fecha de inicio) tras el presupuesto del lunes — señal clara de cierre próximo. Contexto: padre de 87 años que vive solo post-caída; Maria (hija) decide. Patrón: siempre contesta por la mañana. Buen momento para confirmar cobertura de fin de semana antes de cerrar.', generatedAt: 'Hace 2h', editedBy: null },
+        L122613: { text: 'Sugerimos seguimiento: pasaron 4 días sin respuesta tras el presupuesto del viernes, dentro del patrón de decisión familiar pendiente (señalado en notas internas). Contexto: conviven dos hermanos y deciden en conjunto; el hermano mayor es el más reticente. Conviene confirmar con Jordi que el hermano sigue dentro antes de presionar con el presupuesto.', generatedAt: 'Hace 1d', editedBy: null },
+        L121399: { text: 'Sugerimos seguimiento URGENTE hoy: alta hospitalaria mañana y la familia necesita cobertura desde el día 1. Contexto: solo 2 interacciones y faltan datos básicos del perfil. Llamar hoy para captar el perfil y enviar la propuesta esta tarde.', generatedAt: 'Hace 1h', editedBy: null }
     };
 
     // Care context estructurado (la AF lo necesita resumido para no abrir Odoo).
@@ -1525,6 +1556,11 @@
     function getIaSummary(leadId) {
         if (EDITS.iaSummaries[leadId]) return EDITS.iaSummaries[leadId];
         return MOCK_IA_SUMMARIES[leadId] || null;
+    }
+
+    // v1.16: análisis IA (preparación de UI, sin backend ni edición). Solo lectura del mock.
+    function getIaAnalysis(leadId) {
+        return MOCK_IA_ANALYSIS[leadId] || null;
     }
 
     function getNotes(leadId) {
@@ -2290,7 +2326,7 @@
             '.qida-shell-mark{width:28px;height:28px;border-radius:6px;background:var(--qg);color:#fff;display:flex;align-items:center;justify-content:center;}',
             '.qida-shell-tt-main{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-weight:600;font-size:16px;line-height:1;color:var(--s900);}',
             '.qida-shell-tt-sub{font-size:11px;color:var(--s500);margin-top:2px;}',
-            '.qida-shell-actions{display:flex;align-items:center;gap:10px;}',
+            '.qida-shell-actions{display:flex;align-items:center;gap:10px;margin-left:auto;}',
             '.qida-esc{font-size:11px;color:var(--s400);}',
             '.qida-icon-btn{background:transparent;border:0;padding:6px;border-radius:6px;cursor:pointer;color:var(--s600);display:inline-flex;align-items:center;justify-content:center;transition:background .15s;}',
             '.qida-icon-btn:hover{background:var(--s100);color:var(--s900);}',
@@ -3261,6 +3297,31 @@
         return infoCard(title, actions, body);
     }
 
+    // v1.16: "Análisis IA". Mismo patrón visual que renderIaSummary (header ✨ + acción
+    //   Generar/Regenerar + "Generado hace X" + body). Sin edición inline ni backend:
+    //   Generar/Regenerar hacen console.log (preparación de UI; se conectará después).
+    function renderIaAnalysis(lead) {
+        var a = getIaAnalysis(lead.id);
+        var title = icon('sparkles', 12) + ' Análisis IA';
+
+        var actions = '';
+        if (a) {
+            if (a.editedBy) actions += 'Editado por ' + esc(a.editedBy);
+            else actions += 'Generado hace ' + esc(a.generatedAt ? a.generatedAt.replace(/^Hace\s+/i, '') : '?');
+            actions += ' &middot; <button class="qida-link-btn muted" data-action="regen-ia-analysis">' + icon('refresh', 10) + ' Regenerar</button>';
+        }
+
+        var body;
+        if (a) {
+            body = '<div class="qida-info-card-highlight"><p class="qida-ia-text">' + esc(a.text) + '</p></div>';
+        } else {
+            body = '<p class="qida-ia-empty">Análisis no generado todavía para este lead.</p>'
+                + '<div class="qida-ia-actions"><button class="qida-btn-ghost" data-action="regen-ia-analysis">' + icon('sparkles', 12) + ' Generar análisis</button></div>';
+        }
+
+        return infoCard(title, actions, body);
+    }
+
     function renderCare(lead, cached) {
         var title = icon('users', 12) + ' Contexto del cuidado';
 
@@ -3906,6 +3967,7 @@
     function renderCenterPane(lead, cached) {
         return ''
             + renderIaSummary(lead)
+            + renderIaAnalysis(lead)
             + renderCare(lead, cached)
             + renderInternalNotes(lead, cached)
             + renderActivities(lead, cached)
@@ -4857,6 +4919,12 @@
             case 'regen-ia-summary':
                 showToast('Regenerando resumen IA... (mock)');
                 return;
+            // v1.16: Análisis IA. Preparación de UI: por ahora solo console.log (sin backend).
+            //   TODO[backend]: disparar la generación real cuando exista el endpoint.
+            case 'regen-ia-analysis':
+                console.log('[QidaAssistant] regen-ia-analysis (mock, sin backend)', state.currentLeadId);
+                showToast('Generando análisis IA... (mock)');
+                return;
 
             case 'start-add-note':    setState({ addingNote: true }); return;
             case 'cancel-add-note':   setState({ addingNote: false }); return;
@@ -4948,7 +5016,11 @@
                 showToast('"' + matTitle + '" listo (mock)');
                 return;
             // v1.8: toggle del orden de columnas centro/derecha en el detail.
+            // v1.16: el rerender resetea el scroll del chat WA; re-posicionamos al fondo
+            //   (y el chat IA) tras el swap, como al abrir el lead.
             case 'toggle-detail-layout':
+                state.__waNeedsScroll = true;
+                state.__aiNeedsScroll = true;
                 setState({ detailLayoutSwapped: !state.detailLayoutSwapped });
                 return;
 
