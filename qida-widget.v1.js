@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.22.0
+ * QIDA ASSISTANT v1.23.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,25 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.23.0 (2 wires sobre el pane WhatsApp del detalle, mismo patron flag+mock):
+ *   - CAMBIO 1 — ENVIO REAL de WhatsApp (resuelve TODO[send-not-wired]): con useRealApi() el
+ *     boton Enviar deja de hacer echo local y postea POST /api/leads/{id}/conversation/messages
+ *     via apiFetchJson (body { phone, text, file_uid:null }). Loading: boton deshabilitado +
+ *     spinner (state.waSending). Success: empuja el msg al pane con el message_uid real + toast
+ *     "Mensaje enviado" (sin "(mock)"). Error: deja el texto en el textarea + banner inline con
+ *     Reintentar (wa-send-retry) + toast con userMessage. Con flag OFF: echo local intacto
+ *     (regresion zero). phone se resuelve de la fila real del dashboard (phone_normalized) y si
+ *     no, del lead del detalle. NOTA: el envio real depende de TEST_PHONE_OVERRIDE del backend
+ *     (otro PR) para no impactar familias reales en testing.
+ *   - CAMBIO 2 — "Compartir con el lead" en las cards de material del chat agent: driveChatBubble
+ *     ahora incluye resp.materials en el payload (antes TODO[ticket-materials]). renderAiPayload
+ *     muestra cada material (title + snippet + reason_chosen + url) con un boton "Compartir con el
+ *     lead" (ai-share-material). onClick: inserta en el textarea de WhatsApp "Te dejo este recurso
+ *     que te puede ayudar: {title}\n{url}", focus + scroll. NO auto-envia (principio rector: la IA
+ *     propone, la AF revisa y envia).
+ *   - State nuevo: waSending, waSendError (se resetean en select-lead / back-to-dashboard).
+ *   - useRealAPI sigue FALSE por default (TODO[leadid] aun pendiente de click test).
  *
  * Cambios v1.21.0 (wire de 3 endpoints YA existentes en qida-followup-api, mismo patron flag+mock
  *   que el spike de drafts: FEATURE_FLAG.useRealAPI / CONFIG.useRealAPI. Default OFF = cero
@@ -1134,7 +1153,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.22.0';
+    var VERSION = '1.23.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1644,6 +1663,8 @@
         editingIaSummary: false,
         addingNote: false,
         draftMessage: '',               // texto vivo del textarea de WhatsApp del pane izquierdo
+        waSending: false,               // v1.23: true mientras vuelve el POST de envio real (deshabilita Enviar + spinner)
+        waSendError: null,              // v1.23: userMessage del error de envio (banner inline + Reintentar). null = sin error.
         attachmentsExpanded: false,     // colapsable de adjuntos en el pane central
         aiChatHistory: {},              // { leadId: [{ from: 'user'|'ai', payload }] } - PERSISTENTE en sesion
         aiChatDraft: '',                // texto vivo del input del chat IA del pane central
@@ -2765,6 +2786,15 @@
             '.qida-aichat-mat-desc{font-size:12px;font-weight:400;color:var(--s600);margin-bottom:6px;line-height:1.45;}',
             '.qida-aichat-mat-action{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:400;cursor:pointer;font-family:inherit;}',
             '.qida-aichat-mat-action:hover{background:var(--s50);}',
+            /* v1.23: material del chat agent — reason_chosen + url + boton Compartir */
+            '.qida-aichat-mat-reason{font-size:11.5px;font-weight:400;color:var(--s600);font-style:italic;margin-bottom:6px;line-height:1.4;}',
+            '.qida-aichat-mat-url{display:block;font-size:11px;color:#0F6E56;text-decoration:none;word-break:break-all;margin-bottom:8px;}',
+            '.qida-aichat-mat-url:hover{text-decoration:underline;}',
+            '.qida-aichat-mat-actions{display:flex;justify-content:flex-end;}',
+            '.qida-aichat-mat-share{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;transition:background .15s;}',
+            '.qida-aichat-mat-share:hover{background:#143C32;}',
+            /* v1.23: banner de error de envio de WhatsApp + Reintentar */
+            '.qida-wa-send-error{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;padding:8px 10px;border:0.5px solid #F0C9C0;border-radius:8px;background:#FCF4F2;font-size:12px;color:#9A3A28;}',
             '.qida-aichat-input{display:flex;align-items:center;gap:8px;background:var(--s50);border:0.5px solid var(--s300);border-radius:8px;padding:8px 12px;}',
             '.qida-aichat-input:focus-within{border-color:#0F6E56;}',
             '.qida-aichat-input-icon{color:#0F6E56;flex-shrink:0;display:inline-flex;}',
@@ -3851,19 +3881,21 @@
 
     // TODO[whatsapp]: replace with real WhatsAppService.send(leadId, text) call.
     // Mock que agrega un mensaje WhatsApp saliente y actualiza los contadores del lead.
+    // v1.23: dispatcher de envio. Con useRealApi() -> POST real al backend; sin flag -> echo mock
+    //   (regresion zero). El nombre conserva "Mock" por compat con los callers (wa-send, Enter).
     function sendWhatsAppMock(leadId, text) {
         var trimmed = (text || '').trim();
         if (!trimmed) return;
+
+        if (useRealApi()) {
+            sendWhatsAppReal(leadId, trimmed);
+            return;
+        }
+
+        // --- flag OFF: echo local en MOCK_WHATSAPP (identico a v1.22) ---
         var timestamp = 'Hoy ' + nowHHMM();
         if (!MOCK_WHATSAPP[leadId]) MOCK_WHATSAPP[leadId] = [];
         MOCK_WHATSAPP[leadId].push({ from: 'af', text: trimmed, time: timestamp });
-        // v1.21: con useRealAPI el pane lee de conversationCache, no de MOCK_WHATSAPP. El POST a
-        //   /conversation/messages NO es parte de este sprint (solo GET conversation), así que
-        //   hacemos echo local del mensaje enviado para no perder feedback visual.
-        //   TODO[send-not-wired]: cablear POST /api/leads/{id}/conversation/messages.
-        if (useRealApi() && state.conversationCache[leadId] && state.conversationCache[leadId].messages) {
-            state.conversationCache[leadId].messages.push({ from: 'af', text: trimmed, time: formatConvTime(new Date().toISOString()), hasAttachment: false, status: 'sent' });
-        }
 
         var lead = getLead(leadId);
         if (lead) {
@@ -3876,6 +3908,57 @@
         state.__waNeedsScroll = true;
         rerenderContent();
         showToast('Mensaje enviado (mock)');
+    }
+
+    // v1.23: resuelve el telefono a enviar. Prioriza la fila REAL del dashboard (phone_normalized
+    //   del backend); si no, cae al lead del detalle (cache Odoo o mock). '' si no hay ninguno.
+    function resolveSendPhone(leadId) {
+        var rows = state.dashRows || [];
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].id === leadId && rows[i].phone_normalized) return rows[i].phone_normalized;
+        }
+        var cached = LeadDetailService.getFromCache(leadId);
+        var lead = (cached && cached.lead) || getLead(leadId);
+        if (lead) return lead.phone_normalized || lead.phone || '';
+        return '';
+    }
+
+    // v1.23: envio REAL via POST /api/leads/{id}/conversation/messages (resuelve TODO[send-not-wired]).
+    //   loading (waSending) -> success (push msg con uid real + toast) | error (texto restaurado +
+    //   banner Reintentar + toast). NOTA: el backend aplica TEST_PHONE_OVERRIDE en testing.
+    function sendWhatsAppReal(leadId, text) {
+        var numericId = toNumericLeadId(leadId);
+        var phone = resolveSendPhone(leadId);
+        state.waSending = true;
+        state.waSendError = null;
+        state.draftMessage = text;   // mantener el texto visible mientras se envia
+        rerenderContent();
+        apiFetchJson('POST', '/api/leads/' + numericId + '/conversation/messages',
+            { body: { phone: phone, text: text, file_uid: null }, noun: 'el mensaje de WhatsApp' }
+        ).then(function (resp) {
+            state.waSending = false;
+            state.waSendError = null;
+            // Empujar el mensaje al pane (con el message_uid real). El pane real lee de conversationCache.
+            if (state.conversationCache[leadId] && state.conversationCache[leadId].messages) {
+                state.conversationCache[leadId].messages.push({
+                    from: 'af', text: text, time: formatConvTime(new Date().toISOString()),
+                    hasAttachment: false, status: 'sent', uid: (resp && resp.message_uid) || null
+                });
+            }
+            var lead = getLead(leadId);
+            if (lead) { lead.daysWithoutTouch = 0; lead.interactionCount = (lead.interactionCount || 0) + 1; }
+            state.draftMessage = '';
+            state.__waNeedsScroll = true;
+            rerenderContent();
+            showToast('Mensaje enviado');
+        }).catch(function (err) {
+            log('wa send failed', err && (err.code || err.message));
+            state.waSending = false;
+            state.waSendError = (err && err.userMessage) || 'No se pudo enviar el mensaje. Reintentá.';
+            state.draftMessage = text;   // dejar el texto en el textarea para reintentar/editar
+            rerenderContent();
+            showToast(state.waSendError);
+        });
     }
 
     // TODO[ai]: replace with real AIService.chat(leadId, prompt) call.
@@ -4318,7 +4401,9 @@
             unreadMessagesCount: api.unread_messages_count || 0,  // el backend no lo manda -> 0 (badge sin contador)
             // urgent (bool) -> 'alta' para que renderEstadoCell muestre el badge "Urgente".
             urgency: api.urgent ? 'alta' : 'baja',
-            // step_status/priority_score/phone_normalized se reciben pero la tabla aun no los usa.
+            // v1.23: phone_normalized se preserva para el envio real de WhatsApp (resolveSendPhone).
+            //   step_status/priority_score se reciben pero la tabla aun no los usa.
+            phone_normalized: api.phone_normalized || '',
             historico: !!api.historico,  // el backend usa step_status (no historico) -> filtro Historico no matchea leads reales
             _real: true
         };
@@ -4577,6 +4662,24 @@
                     + '</div>';
                 }
             }
+            // v1.23: materiales sugeridos por el chat agent (resp.materials). Cada card trae
+            //   "Compartir con el lead" -> inserta texto en el textarea de WhatsApp (no auto-envia).
+            if (payload.materials && payload.materials.length) {
+                html += '<p class="qida-aichat-bubble-intro">Materiales sugeridos:</p>';
+                for (var mi = 0; mi < payload.materials.length; mi++) {
+                    var mat = payload.materials[mi] || {};
+                    var matReason = mat.reason_chosen || mat.reason || '';
+                    html += '<div class="qida-aichat-mat-card">'
+                        + '<div class="qida-aichat-mat-title">' + esc(mat.title || '') + '</div>'
+                        + (mat.snippet ? '<div class="qida-aichat-mat-desc">' + esc(mat.snippet) + '</div>' : '')
+                        + (matReason ? '<div class="qida-aichat-mat-reason">' + esc(matReason) + '</div>' : '')
+                        + (mat.url ? '<a class="qida-aichat-mat-url" href="' + esc(mat.url) + '" target="_blank" rel="noopener noreferrer">' + esc(mat.url) + '</a>' : '')
+                        + '<div class="qida-aichat-mat-actions">'
+                            + '<button class="qida-aichat-mat-share" data-action="ai-share-material" data-title="' + esc(mat.title || '') + '" data-url="' + esc(mat.url || '') + '">' + icon('send', 11) + ' Compartir con el lead</button>'
+                        + '</div>'
+                    + '</div>';
+                }
+            }
             if (payload.rateLimited) {
                 html += '<p class="qida-aichat-ratelimit">' + icon('alert', 11) + ' Alcanzaste el límite de mensajes por ahora. Probá de nuevo en un rato.</p>';
             }
@@ -4683,16 +4786,28 @@
         }
 
         var draft = state.draftMessage || '';
-        var sendDisabled = draft.trim() ? '' : ' disabled';
+        // v1.23: durante el envio real, deshabilitar Enviar + spinner. Banner de error con Reintentar.
+        var sending = !!state.waSending;
+        var sendDisabled = (sending || !draft.trim()) ? ' disabled' : '';
+        var sendInner = sending
+            ? '<span class="qida-spinner" aria-hidden="true"></span>'
+            : icon('send', 14);
+        var errBanner = state.waSendError
+            ? '<div class="qida-wa-send-error">'
+                + '<span>' + icon('alert-triangle', 12) + ' ' + esc(state.waSendError) + '</span>'
+                + '<button class="qida-btn-ghost" data-action="wa-send-retry">' + icon('refresh-cw', 11) + ' Reintentar</button>'
+            + '</div>'
+            : '';
 
         return ''
             + '<div class="qida-pane-wa-head">' + icon('msg', 12) + ' Conversacion</div>'
             + '<div class="qida-pane-wa-body" id="qida-wa-body">' + msgsHtml + '</div>'
             + '<div class="qida-wa-input-wrap">'
+                + errBanner
                 + '<div class="qida-wa-input">'
                     + '<button class="qida-wa-clip" data-action="wa-clip" aria-label="Adjuntar">' + icon('paperclip', 15) + '</button>'
                     + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1" placeholder="Escribe un mensaje...">' + esc(draft) + '</textarea>'
-                    + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + icon('send', 14) + '</button>'
+                    + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + sendInner + '</button>'
                 + '</div>'
             + '</div>';
     }
@@ -5648,7 +5763,7 @@
                 //   inicio y el race-guard de LeadDetailService.fetchAll compare con ===
                 //   estricto sin coercion.
                 var leadIdNum = (typeof id === 'string' && /^\d+$/.test(id)) ? parseInt(id, 10) : id;
-                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', waSending: false, waSendError: null, attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.11: SIEMPRE llamamos a fetchAll (incluso en modo mock - el service lo
                 //   detecta y hace mockHydrate sync, sin loading visible). Solo skipeamos si
                 //   ya hay cache valido (sin _error) para evitar fetchs redundantes en cache hits.
@@ -5664,7 +5779,7 @@
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
-                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waSendError: null, attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 return;
 
             // --- v1.10: dashboard de leads enfriandose ---
@@ -5792,6 +5907,13 @@
                 if (waTa) state.draftMessage = waTa.value;
                 sendWhatsAppMock(state.currentLeadId, state.draftMessage);
                 return;
+            // v1.23: Reintentar el envio tras un error (texto quedo en el textarea; puede haberse editado).
+            case 'wa-send-retry':
+                var waTaR = document.getElementById('qida-wa-textarea');
+                if (waTaR) state.draftMessage = waTaR.value;
+                state.waSendError = null;
+                sendWhatsAppMock(state.currentLeadId, state.draftMessage);
+                return;
             case 'wa-clip':
                 showToast('Adjuntar archivo (mock)');
                 return;
@@ -5861,6 +5983,23 @@
                     }
                 }, 30);
                 showToast('Mensaje copiado al campo de WhatsApp. Editalo y envialo.');
+                return;
+            // v1.23: "Compartir con el lead" desde una card de material del chat agent. Inserta el
+            //   recurso en el textarea de WhatsApp (la AF revisa y envia; NO auto-envia).
+            case 'ai-share-material':
+                var shTitle = target.getAttribute('data-title') || '';
+                var shUrl = target.getAttribute('data-url') || '';
+                state.draftMessage = 'Te dejo este recurso que te puede ayudar: ' + shTitle + (shUrl ? '\n' + shUrl : '');
+                rerenderContent();
+                setTimeout(function () {
+                    var ta = document.getElementById('qida-wa-textarea');
+                    if (ta) {
+                        ta.focus();
+                        try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (err) {}
+                        autoResizeTextarea(ta);
+                    }
+                }, 30);
+                showToast('Material listo en el campo de WhatsApp. Revisalo y envialo.');
                 return;
             case 'ai-material-action':
                 var matTitle = target.getAttribute('data-title') || 'material';
@@ -6218,14 +6357,16 @@
         return fetchAssistantChat(leadId, message, state.assistantSessions[leadId]).then(function (resp) {
             if (resp && resp.session_id) state.assistantSessions[leadId] = resp.session_id;
             var drafts = (resp && resp.updated_drafts) || [];
+            var materials = (resp && resp.materials) || [];
             bubble.payload = {
                 kind: 'free',
                 text: (resp && resp.assistant_message) || '(Sin respuesta del asistente.)',
                 drafts: drafts.length ? drafts.slice() : null,
+                // v1.23: materials del chat agent -> cards con boton "Compartir con el lead".
+                materials: materials.length ? materials.slice() : null,
                 rateLimited: !!(resp && resp.rate_limit_reached)
             };
-            // TODO[ticket-materials]: resp.materials no se renderiza todavía (consistente con el spike).
-            // TODO[ticket]: resp.turn_count tampoco se muestra (espera UI futura).
+            // TODO[ticket]: resp.turn_count no se muestra todavía (espera UI futura).
             state.__aiNeedsScroll = true;
             rerenderContent();
         }).catch(function (err) {
