@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.17.0
+ * QIDA ASSISTANT v1.18.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,17 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.18.0 (eliminar bloque "Equipo siguiendo" del detalle del lead):
+ *   - Eliminada la card "Equipo siguiendo" de la columna de info del detalle: se borra la función
+ *     renderFollowers y su llamada en renderCenterPane. No tenía handlers (cero data-action).
+ *   - CSS eliminado: .qida-followers / .qida-follower / -avatar / -name / -role (solo lo usaba esa card).
+ *   - NO se eliminan MOCK_FOLLOWERS ni DEFAULT_FOLLOWERS: los sigue usando la hidratación del detalle
+ *     (LeadDetailService, mock + rama Odoo mail.followers / cached.followers / _errors[4] / mapFollower).
+ *     Quedan como data no consumida por la UI; re-indexar la pipeline allSettled era riesgoso y fuera
+ *     de scope. // TODO[cleanup]: si se confirma que nadie más consumirá followers, limpiar el job.
+ *   - NO se toca el resto de la columna (Resumen IA, Análisis IA, Contexto del cuidado, Notas internas,
+ *     Próximas actividades, Adjuntos).
  *
  * Cambios v1.17.0 (2 fixes UX en el modal del lead):
  *   - CAMBIO 1 — sufijo "días" en "Sin contacto":
@@ -1000,7 +1011,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.17.0';
+    var VERSION = '1.18.0';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -2479,11 +2490,7 @@
             '.qida-act-row-when{font-size:11px;font-weight:400;color:var(--s500);margin-left:auto;white-space:nowrap;}',
             '.qida-act-row.overdue .qida-act-row-when{color:#993C1D;}',
             '.qida-empty-act{font-size:12px;color:var(--s500);font-style:italic;padding:2px 0;margin:0;}',
-            '.qida-followers{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}',
-            '.qida-follower{display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;background:var(--s50);border:0.5px solid var(--s200);border-radius:999px;cursor:default;}',
-            '.qida-follower-avatar{width:22px;height:22px;border-radius:50%;background:#E1F5EE;color:#0F6E56;font-size:10px;font-weight:500;display:flex;align-items:center;justify-content:center;font-family:"Manrope";}',
-            '.qida-follower-name{font-size:12px;font-weight:400;color:var(--s700);}',
-            '.qida-follower-role{font-size:10px;font-weight:400;color:var(--s500);}',
+            /* v1.18: CSS de .qida-follower* eliminado junto con el bloque "Equipo siguiendo". */
 
             /* footer / buttons */
             '.qida-btn-primary{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;background:var(--qg);color:#fff;border:0;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s;}',
@@ -3521,35 +3528,11 @@
         return infoCard(title, '', html);
     }
 
-    function renderFollowers(lead, cached) {
-        var title = icon('users', 12) + ' Equipo siguiendo';
-
-        if (cached && cached._loading) {
-            return infoCard(title, '', renderSkeletonLines(2));
-        }
-        if (cached && cached._errors && cached._errors[4] && cached.followers === null) {
-            return infoCard(title, '', '<p class="qida-empty-notes" title="' + esc(cached._errors[4]) + '">No se pudo cargar esta seccion.</p>');
-        }
-
-        // v1.11: leer del cache; fallback al mock crudo si cached === null.
-        var f;
-        if (cached && cached.followers) {
-            f = cached.followers;
-        } else {
-            f = MOCK_FOLLOWERS[lead.id] || DEFAULT_FOLLOWERS;
-        }
-        var html = '';
-        for (var i = 0; i < f.length; i++) {
-            var p = f[i];
-            var initials = (p.name || '?').split(' ').slice(0, 2).map(function (s) { return s.charAt(0); }).join('').toUpperCase();
-            html += '<span class="qida-follower" title="' + esc(p.email || '') + (p.role ? ' - ' + esc(p.role) : '') + '">'
-                + '<span class="qida-follower-avatar">' + esc(initials) + '</span>'
-                + '<span class="qida-follower-name">' + esc(p.name) + '</span>'
-                + (p.role ? '<span class="qida-follower-role">&middot; ' + esc(p.role) + '</span>' : '')
-            + '</span>';
-        }
-        return infoCard(title, 'Hover para email', '<div class="qida-followers">' + html + '</div>');
-    }
+    // v1.18: renderFollowers ("Equipo siguiendo") ELIMINADO de la UI del detalle. La data layer
+    //   (MOCK_FOLLOWERS / DEFAULT_FOLLOWERS / cached.followers / _errors[4] / mapFollower /
+    //   FOLLOWER_FIELDS + el job mail.followers de LeadDetailService) se conserva intacta: la
+    //   sigue poblando la hidratación (mock + Odoo) y re-indexar la pipeline allSettled era
+    //   riesgoso y fuera de scope. Queda como data no consumida por la UI.
 
     // v1.6: renderTemplatesPanel/renderMaterialPanel eliminadas. Plantillas y Material como
     // tabs del pane derecho ya no existen. renderAttachmentsPanel se reemplaza por
@@ -4013,7 +3996,6 @@
             + renderCare(lead, cached)
             + renderInternalNotes(lead, cached)
             + renderActivities(lead, cached)
-            + renderFollowers(lead, cached)
             + renderAttachmentsCollapsable(lead, cached);
     }
 
