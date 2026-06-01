@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.23.0
+ * QIDA ASSISTANT v1.24.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,25 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.24.0 (PRE-TRABAJO UI para enrichment de /me/leads + vista "Actividades", con MOCKS
+ *   de la shape final; cuando el backend ship los endpoints solo se cambian 2 funciones mock->fetch):
+ *   - ENRICHMENT (CAMBIO 1+2): adaptLeadRow consume family_name/patient_name/city/service_type del
+ *     /api/me/leads enriquecido. patient_name -> caregiverInfo {name, relation:'Persona cuidada',
+ *     age:null}. Fallbacks intactos ("Lead <display_id>" / "" / {}). renderDashRow NO cambia.
+ *     MOCK_LEADS_RESPONSE backfillea los 4 campos snake_case (fixture = shape final, sin drift).
+ *   - VISTA ACTIVIDADES (CAMBIO 3): shape ACTIVITY-CENTRIC (antes lead-centric). MOCK_ACTIVITIES_RESPONSE
+ *     reescrito (activity_id, lead_id, summary, note, activity_type_id/label, deadline_date, automated,
+ *     create_date, family_name, patient_name). Render dedicado renderActivitiesView/Header/Row (NO
+ *     reusa renderDashRow ni cards/filtros de temperatura). Columnas: Familia · city / Paciente /
+ *     Tarea (tooltip=note) / Fecha limite / Tipo (label || "Tipo <id>") + badge "Automatica" /
+ *     "Ir al lead" (reusa select-lead -> detail del lead_id).
+ *   - WIRE (CAMBIO 4): DashboardService.fetchView('activities') -> fetchActivitiesList()
+ *     (apiFetchJson GET /api/me/activities) con flag ON; mock con flag OFF. Mismo patron que /me/leads.
+ *     Activities NO usa adapter (renderActivityRow lee snake_case directo).
+ *   - Flag useRealAPI sigue FALSE por default (regresion zero; TODO[leadid] aun pendiente).
+ *   - TODOs: TODO[odoo-enrichment] (UI lista, falta cablear backend) y TODO[activities-endpoint]
+ *     (idem) marcados en el codigo. Swap mock->fetch = 1 PR chico cuando el backend deploye.
  *
  * Cambios v1.23.0 (2 wires sobre el pane WhatsApp del detalle, mismo patron flag+mock):
  *   - CAMBIO 1 — ENVIO REAL de WhatsApp (resuelve TODO[send-not-wired]): con useRealApi() el
@@ -1153,7 +1172,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.23.0';
+    var VERSION = '1.24.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1429,16 +1448,16 @@
     ];
 
     // Actividades programadas (~9). Vocabulario urgency del detalle. Temperatura mixta.
+    // v1.24: shape ACTIVITY-CENTRIC (espejo de GET /api/me/activities). Reemplaza la vieja shape
+    //   lead-centric. Render dedicado en renderActivityRow (NO renderDashRow). 5 entries plausibles
+    //   para Ana (hoy = 2026-06-01): mix automated/manual, con/sin note, un activity_type_label null
+    //   para ejercitar el fallback "Tipo <id>". TODO[activities-endpoint]: UI lista, falta cablear backend.
     var MOCK_ACTIVITIES_RESPONSE = [
-        { id: 'L122476', familyName: 'Familia Baena Sanz',       city: 'Madrid',               caregiverInfo: { name: 'Antonia',      relation: 'Suegra', age: 90 }, serviceType: 'Por horas',     reason: 'Llamada agendada hoy 11:00',                                     daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'Urgente',     hasNewMessage: false, unreadMessagesCount: 0 },
-        { id: 'L122131', familyName: 'Familia Roge Barcelo',     city: 'Barcelona',            caregiverInfo: { name: 'Albert',       relation: 'Marido', age: 76 }, serviceType: 'Interno',       reason: 'Cierre operativo: cuidadora antes del 30/05',                    daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: true,  unreadMessagesCount: 2 },
-        { id: 'L121656', familyName: 'Familia Parellada Canals', city: "Sant Sadurni d'Anoia", caregiverInfo: { name: 'Joan',         relation: 'Padre',  age: 79 }, serviceType: 'Externo',       reason: 'Visita a domicilio pendiente de confirmar',                      daysWithoutTouch: 6,  lastTouchDate: '2026-05-09', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: true,  unreadMessagesCount: 1 },
-        { id: 'L121749', familyName: 'Familia Ferreiro Bergino', city: 'Madrid',               caregiverInfo: { name: 'Francisco',    relation: 'Tio',    age: 81 }, serviceType: 'Interno',       reason: 'Followup tras enviar info de servicio',                          daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
-        { id: 'L122278', familyName: 'Familia Ruben Garcia',     city: 'Madrid',               caregiverInfo: { name: 'Manuel',       relation: 'Padre',  age: 83 }, serviceType: 'Por horas',     reason: 'Recordatorio: confirmar fecha de arranque',                      daysWithoutTouch: 5,  lastTouchDate: '2026-05-10', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
-        { id: 'L121547', familyName: 'Familia Sanchez Tartalo',  city: 'Madrid',               caregiverInfo: { name: 'Dolores',      relation: 'Madre',  age: 88 }, serviceType: 'Fin de semana', reason: 'Reintento de contacto programado',                               daysWithoutTouch: 10, lastTouchDate: '2026-05-05', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
-        { id: 'L122845', familyName: 'Familia Mestres Carrasco', city: 'Sabadell',             caregiverInfo: { name: 'Jordi',        relation: 'Padre',  age: 89 }, serviceType: 'Externo',       reason: 'Retomar al volver del viaje (20/05)',                            daysWithoutTouch: 3,  lastTouchDate: '2026-05-12', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
-        { id: 'L122701', familyName: 'Familia Lopez Iniesta',    city: 'Madrid',               caregiverInfo: { name: 'Isabel',       relation: 'Madre',  age: 81 }, serviceType: 'Interno',       reason: 'Primer contacto pendiente',                                      daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
-        { id: 'L122055', familyName: 'Familia Recio del Campo',  city: 'Collado Villalba',     caregiverInfo: { name: 'Mercedes',     relation: 'Madre',  age: 85 }, serviceType: 'Externo',       reason: 'Llamada de reactivacion agendada',                               daysWithoutTouch: 9,  lastTouchDate: '2026-05-06', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 }
+        { activity_id: 8801, lead_id: 123052, summary: 'Llamar para resolver dudas sobre el cuidador', note: 'Prefiere por la tarde, despues de las 17h', activity_type_id: 3, activity_type_label: 'Llamada',             deadline_date: '2026-06-02', automated: false, create_date: '2026-05-28', family_name: 'Familia Martinez Ruiz',   patient_name: 'Juan Antonio' },
+        { activity_id: 8802, lead_id: 123276, summary: 'Enviar presupuesto revisado',                  note: null,                                       activity_type_id: 1, activity_type_label: 'Email',               deadline_date: '2026-06-03', automated: false, create_date: '2026-05-29', family_name: 'Familia Ortiz Pica',       patient_name: 'Concepcion' },
+        { activity_id: 8803, lead_id: 123189, summary: 'Seguimiento automatico: 13 dias sin respuesta', note: null,                                      activity_type_id: 7, activity_type_label: 'Seguimiento general', deadline_date: '2026-06-01', automated: true,  create_date: '2026-06-01', family_name: 'Familia Heredia Solis',    patient_name: 'Lucia' },
+        { activity_id: 8804, lead_id: 123455, summary: 'Coordinar visita a domicilio',                 note: 'La hija organiza la agenda familiar',      activity_type_id: 5, activity_type_label: null,                  deadline_date: '2026-06-05', automated: false, create_date: '2026-05-30', family_name: 'Familia Roge Barcelo',     patient_name: 'Albert' },
+        { activity_id: 8805, lead_id: 123051, summary: 'Recordatorio: confirmar fecha de arranque',    note: null,                                       activity_type_id: 7, activity_type_label: 'Seguimiento general', deadline_date: '2026-06-04', automated: true,  create_date: '2026-06-01', family_name: 'Familia Recio del Campo',  patient_name: 'Mercedes' }
     ];
 
     // Todos los leads del AF (cartera completa, 16). Vocabulario urgency del detalle. Incluye
@@ -1461,6 +1480,20 @@
         { id: 'L120912', familyName: 'Familia Heredia Solis',    city: 'Madrid',               caregiverInfo: { name: 'Lucia',        relation: 'Madre',  age: 84 }, serviceType: 'Por horas',     reason: 'Sin respuesta hace 18 dias. Quedo fuera de ventana operativa.',  daysWithoutTouch: 18, lastTouchDate: '2026-04-27', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: true,  unreadMessagesCount: 1, historico: true },
         { id: 'L120478', familyName: 'Familia Bertran Casas',    city: 'Barcelona',            caregiverInfo: { name: 'Marc',         relation: 'Padre',  age: 92 }, serviceType: 'Externo',       reason: 'Sin respuesta hace 22 dias tras envio presupuesto.',             daysWithoutTouch: 22, lastTouchDate: '2026-04-23', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0, historico: true }
     ];
+
+    // v1.24: backfill de los 4 campos del ENRICHMENT real de /api/me/leads (family_name,
+    //   patient_name, city, service_type) en CADA entrada del mock, espejando los valores
+    //   widget-shape ya presentes. Asi el fixture refleja la shape final del backend sin duplicar
+    //   16 literales (cero drift entre camelCase y snake_case). Con flag OFF la UI ya renderiza la
+    //   shape final (familyName/caregiverInfo/serviceType existentes); estos campos son fidelidad
+    //   de fixture para el swap mock->fetch. TODO[odoo-enrichment]: UI lista, falta cablear backend.
+    for (var _li = 0; _li < MOCK_LEADS_RESPONSE.length; _li++) {
+        var _l = MOCK_LEADS_RESPONSE[_li];
+        if (_l.family_name === undefined)   _l.family_name = _l.familyName || null;
+        if (_l.patient_name === undefined)  _l.patient_name = (_l.caregiverInfo && _l.caregiverInfo.name) || null;
+        if (_l.city === undefined)          _l.city = _l.city || null;  // ya presente; defensivo
+        if (_l.service_type === undefined)  _l.service_type = _l.serviceType || null;
+    }
 
     // Tope visual del dashboard. v1.13: 5 -> 10 (mas altura disponible con cards + toolbar).
     var MAX_VISIBLE = 10;
@@ -1896,10 +1929,11 @@
         },
         fetchView: function (view) {
             var self = this;
-            // v1.22: flag on + vista con endpoint -> backend real (/api/me/leads). 'activities'
-            //   (sin endpoint) y flag off -> mock con simulateLatency (identico a v1.20).
-            if (useRealApi() && DASH_VIEW_QUERY[view]) {
-                return fetchLeadsList(view);
+            // v1.22/v1.24: flag on -> backend real. 'activities' -> GET /api/me/activities;
+            //   'suggestions'/'leads' -> GET /api/me/leads. flag off -> mock con simulateLatency.
+            if (useRealApi()) {
+                if (view === 'activities') return fetchActivitiesList();
+                if (DASH_VIEW_QUERY[view]) return fetchLeadsList(view);
             }
             return simulateLatency(180, 360).then(function () { return self.fetchViewSync(view); });
         },
@@ -2921,6 +2955,19 @@
             '.qida-dash-table-bar{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:0.5px solid var(--s200);}',
             '.qida-dash-table-title{font-size:13px;font-weight:600;color:var(--s800);}',
             '.qida-dash-table-count{font-size:11px;color:var(--s500);}',
+            /* v1.24: tabla de la vista "Actividades" (6 cols; grid IDENTICO header/fila). */
+            '.qida-act-header,.qida-act-row{display:grid;grid-template-columns:minmax(150px,1.8fr) minmax(90px,1fr) minmax(170px,2.4fr) 104px minmax(120px,1.3fr) 116px;gap:14px;align-items:center;}',
+            '.qida-act-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
+            '.qida-act-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);}',
+            '.qida-act-task{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.qida-act-note-dot{color:#0F6E56;font-weight:700;}',
+            '.qida-act-deadline{font-variant-numeric:tabular-nums;color:var(--s700);}',
+            '.qida-act-type{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}',
+            '.qida-act-badge-auto{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:999px;background:var(--s100);color:var(--s600);font-size:10px;font-weight:500;}',
+            '.qida-act-row-actions{display:flex;justify-content:flex-end;}',
+            '.qida-act-goto{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
+            '.qida-act-goto:hover{background:var(--s50);}',
+            '@media (max-width:1100px){.qida-act-header,.qida-act-row{grid-template-columns:minmax(130px,1.6fr) minmax(160px,2.4fr) 96px minmax(110px,1.2fr) 110px;}.qida-act-header > div:nth-child(2){display:none;}.qida-act-patient{display:none;}}',
             /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
                FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
                distinto los fr y se desalinearían. */
@@ -3304,6 +3351,12 @@
             }
         }
 
+        // v1.24: la vista "Actividades" es activity-centric (otra shape, otras columnas) -> render
+        //   dedicado. Las vistas lead-centric (suggestions/leads) siguen el render de abajo.
+        if (state.dashView === 'activities') {
+            return renderActivitiesView();
+        }
+
         var base = liveDashRows();          // vista activa menos completados en sesion
         var ordered = buildDashFeed(base);  // filtros + nuevos al tope + sort + slice
 
@@ -3347,6 +3400,85 @@
                 + '</button>'
             + '</div>'
             + renderUndoToast()
+        + '</div>';
+    }
+
+    // ============================================================
+    // v1.24: VISTA "ACTIVIDADES" (activity-centric, shape de GET /api/me/activities)
+    // ============================================================
+    // No reusa renderDashRow ni las cards/filtros de temperatura (son lead-centric). Render propio:
+    //   chips de vista (para volver) + tabla de actividades. state.dashRows trae los activity objects.
+    function renderActivitiesView() {
+        var rows = state.dashRows || [];
+        var listHtml;
+        if (state.dashError) {
+            listHtml = renderDashError(state.dashError);
+        } else if (state.dashRows === null && state.dashLoading) {
+            listHtml = renderDashLoadingState();
+        } else if (!rows.length) {
+            listHtml = '<div class="qida-empty-state">No tenés actividades pendientes.</div>';
+        } else {
+            listHtml = '';
+            for (var i = 0; i < rows.length; i++) listHtml += renderActivityRow(rows[i]);
+        }
+        var countLabel = rows.length + (rows.length === 1 ? ' actividad' : ' actividades');
+        var cardCls = 'qida-dash-table-card' + (state.dashLoading ? ' qida-dash-loading' : '');
+        return '<div class="qida-dash-dashboard">'
+            + '<div class="qida-dash-toolbar">'
+                + '<div class="qida-dash-toolbar-left"></div>'
+                + '<div class="qida-dash-toolbar-right">' + renderViewChips() + '</div>'
+            + '</div>'
+            + '<div class="' + cardCls + '">'
+                + '<div class="qida-dash-table-bar">'
+                    + '<span class="qida-dash-table-title">Actividades programadas</span>'
+                    + '<span class="qida-dash-table-count">' + countLabel + '</span>'
+                + '</div>'
+                + renderActivityHeader()
+                + '<div class="qida-dash-list">' + listHtml + '</div>'
+            + '</div>'
+            + '<div class="qida-dash-actions">'
+                + '<button class="qida-refresh-btn" data-action="dash-refresh">' + icon('refresh-cw', 14) + ' Refrescar</button>'
+            + '</div>'
+        + '</div>';
+    }
+
+    function renderActivityHeader() {
+        return '<div class="qida-act-header">'
+            + '<div>Familia</div>'
+            + '<div>Paciente</div>'
+            + '<div>Tarea</div>'
+            + '<div>Fecha limite</div>'
+            + '<div>Tipo</div>'
+            + '<div></div>'
+        + '</div>';
+    }
+
+    // Una fila de actividad. lead_id (numerico) -> "Ir al lead" reusa select-lead (detail del lead).
+    function renderActivityRow(act) {
+        act = act || {};
+        var fam = act.family_name || ('Lead ' + (act.lead_id != null ? act.lead_id : ''));
+        var famLine = esc(fam) + (act.city ? ' &middot; ' + esc(act.city) : '');
+        var patient = act.patient_name || '—';
+        var summary = act.summary || 'Actividad';
+        var note = act.note || '';
+        var typeLabel = act.activity_type_label || ('Tipo ' + (act.activity_type_id != null ? act.activity_type_id : '?'));
+        var autoBadge = act.automated
+            ? '<span class="qida-act-badge-auto">' + icon('refresh-cw', 10) + ' Automatica</span>'
+            : '';
+        return '<div class="qida-act-row">'
+            + '<div class="qida-dash-cell qida-act-fam">'
+                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + famLine + '</span></div>'
+            + '</div>'
+            + '<div class="qida-dash-cell qida-act-patient">' + esc(patient) + '</div>'
+            // Tarea: summary + tooltip con la note si existe.
+            + '<div class="qida-dash-cell qida-act-task"' + (note ? ' title="' + esc(note) + '"' : '') + '>'
+                + esc(summary) + (note ? ' <span class="qida-act-note-dot" aria-label="Tiene nota">•</span>' : '')
+            + '</div>'
+            + '<div class="qida-dash-cell qida-act-deadline">' + esc(formatShortDate(act.deadline_date)) + '</div>'
+            + '<div class="qida-dash-cell qida-act-type">' + esc(typeLabel) + autoBadge + '</div>'
+            + '<div class="qida-act-row-actions">'
+                + '<button class="qida-act-goto" data-action="select-lead" data-id="' + esc(act.lead_id != null ? act.lead_id : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
+            + '</div>'
         + '</div>';
     }
 
@@ -4347,8 +4479,8 @@
     // v1.22: fetch wrappers del DASHBOARD (GET /api/me/dashboard, GET /api/me/leads)
     // ============================================================
     // REUSAN apiFetchJson del wire v1.21 (NO duplican fetch wrapper).
-    // Vista del dashboard -> querystring de GET /api/me/leads. 'activities' NO esta aca a
-    //   proposito: no tiene endpoint todavia y cae al mock. TODO[activities-endpoint].
+    // Vista del dashboard -> querystring de GET /api/me/leads. 'activities' NO va aca: usa su propio
+    //   endpoint (GET /api/me/activities via fetchActivitiesList, v1.24), no /api/me/leads.
     var DASH_VIEW_QUERY = {
         suggestions: 'status=overdue,due_today&limit=20&sort=priority_score',
         leads:       'limit=200'
@@ -4376,10 +4508,18 @@
         });
     }
 
+    // v1.24: GET /api/me/activities -> array de actividades (shape activity-centric, SIN adapter:
+    //   renderActivityRow lee los campos snake_case directo). Normaliza array | { items:[...] }.
+    function fetchActivitiesList() {
+        return apiFetchJson('GET', '/api/me/activities', { noun: 'tus actividades' }).then(function (data) {
+            return Array.isArray(data) ? data : (data && data.items) || [];
+        });
+    }
+
     // Mapea una fila de GET /api/me/leads al shape que renderDashRow YA consume (render intacto).
     //   Shape backend (confirmada): { lead_id, display_id, temperature, step_status, priority_score,
     //   days_since_last_contact, last_contact_at(ISO), phone_normalized, has_new_inbound, urgent,
-    //   porque_snippet|null }. Campos aun NO provistos -> fallback visible. TODO[odoo-enrichment].
+    //   porque_snippet|null } + ENRICHMENT v1.24 (family_name, patient_name, city, service_type).
     function adaptLeadRow(api) {
         api = api || {};
         var displayId = api.display_id || api.id || '';
@@ -4387,11 +4527,15 @@
         var lastDate = api.last_contact_at ? String(api.last_contact_at).slice(0, 10) : '';
         return {
             id: displayId,
-            // TODO[odoo-enrichment]: family_name/city/caregiverInfo/serviceType NO vienen del backend
-            //   todavia. Fallback: "Lead <display_id>" + columnas vacias hasta el enriquecido Odoo.
+            // v1.24: enrichment de /api/me/leads (family_name/patient_name/city/service_type).
+            //   TODO[odoo-enrichment]: UI lista; estos campos pueden venir null hasta que el backend
+            //   cablee el enriquecido Odoo -> fallback "Lead <display_id>" / "" / {} sin romper render.
             familyName: api.family_name || ('Lead ' + displayId),
             city: api.city || '',
-            caregiverInfo: api.caregiver_info || {},
+            // patient_name -> caregiverInfo.{name} con relacion generica (sin edad: el backend no la manda).
+            caregiverInfo: api.patient_name
+                ? { name: api.patient_name, relation: 'Persona cuidada', age: null }
+                : {},
             serviceType: api.service_type || '',
             reason: api.porque_snippet || 'Sin actividad reciente',  // porque_snippet puede venir null
             temperature: api.temperature || '',
