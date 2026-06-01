@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.16.0
+ * QIDA ASSISTANT v1.17.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,28 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.17.0 (2 fixes UX en el modal del lead):
+ *   - CAMBIO 1 — sufijo "días" en "Sin contacto":
+ *       * Dashboard (renderDiasCell): el número grande lleva un <span> "días" más chico
+ *         (.qida-cell-days-unit, 11px/opacity .7) que no compite; la fecha pequeña se conserva.
+ *       * Header del detalle (syncShellHeader): pill "Sin contacto: N d" -> "Sin contacto: N días".
+ *   - CAMBIO 2 — temperatura visible y editable en el header del detalle:
+ *       * Botón "Swap" ELIMINADO (y el anchor vestigial qida-asst-anchor + el handler
+ *         toggle-detail-layout). El layout queda fijo en el default (detailLayoutSwapped sigue
+ *         true: IA al centro, info a la derecha; renderDetail sin cambios).
+ *       * Pill de temperatura en .qida-dsh-meta (alineado con el resto de referencias del lead):
+ *         barrita monocroma (colores admin rojo/ámbar/azul/gris) + label (Caliente/Templado/
+ *         Frío/Pausa) + lápiz. Lee getLeadTemperature(lead) (override de sesión EDITS.temperatures).
+ *       * Click -> dropdown compacto anclado al pill (position:absolute) + backdrop fixed para
+ *         click-fuera; Esc lo cierra. Opciones: Caliente/Templado/Frío/Pausa. set-temp escribe
+ *         EDITS.temperatures[leadId]={temperature,source:'AF'} (persiste en sesión; al reabrir el
+ *         lead se mantiene) + showToast "Temperatura actualizada". // TODO[odoo]: PUT
+ *         /api/leads/{id}/temperature. Sin backend por ahora.
+ *       * State nuevo: tempEditorOpen (transitorio; reset en closeModal/select-lead/back).
+ *   - Nota: las filas del dashboard vienen de otro mock (MOCK_*_RESPONSE) y NO se re-tiñen con el
+ *     cambio del pill (fuera de alcance de estos 2 cambios). El override afecta el lead (MOCK_LEADS).
+ *   - NO se toca: dashboard cerrado (v1.14.1), agent-builder (v1.15.0), bloques v1.16.0.
  *
  * Cambios v1.16.0 (3 fixes UX en el modal del lead, quirúrgicos e independientes):
  *   - CAMBIO 1 — Bloque "Análisis IA" en la columna del detalle, JUSTO debajo de "Resumen IA"
@@ -978,7 +1000,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.16.0';
+    var VERSION = '1.17.0';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -1492,6 +1514,9 @@
         // Persiste en sesion del modal (no se resetea al navegar entre leads). Se resetea
         // a false en closeModal.
         detailLayoutSwapped: true,
+
+        // v1.17: dropdown de temperatura del header del detalle abierto/cerrado (transitorio).
+        tempEditorOpen: false,
 
         // Schedule modal (reutilizado desde Detail Y desde "Marcar hecho" de sugerencias/actividades)
         showScheduleModal: false,
@@ -2361,6 +2386,22 @@
             '.qida-dsh-days.lvl-warn{background:#fff7ed;color:#9a3412;border-color:#fed7aa;}',
             '.qida-dsh-days.lvl-stale{background:#fef2f2;color:#991b1b;border-color:#fecaca;}',
 
+            /* v1.17: pill de temperatura editable en el header del detalle + selector */
+            '.qida-tbar{display:inline-block;width:16px;height:8px;border-radius:4px;flex-shrink:0;background:var(--s300);}',
+            '.qida-tbar-caliente{background:#EF4444;}',
+            '.qida-tbar-templado{background:#F59E0B;}',
+            '.qida-tbar-frio{background:#3B82F6;}',
+            '.qida-tbar-pausa{background:var(--s400);}',
+            '.qida-dsh-temp-wrap{position:relative;display:inline-flex;}',
+            '.qida-dsh-temp{display:inline-flex;align-items:center;gap:6px;background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:3px 8px;font-size:11px;font-weight:500;color:var(--s700);cursor:pointer;font-family:inherit;line-height:1.2;white-space:nowrap;}',
+            '.qida-dsh-temp:hover{border-color:var(--s400);background:var(--s50);}',
+            '.qida-dsh-temp .qa-icon{color:var(--s400);}',
+            '.qida-temp-backdrop{position:fixed;inset:0;z-index:60;}',
+            '.qida-temp-menu{position:absolute;top:100%;left:0;margin-top:4px;background:#fff;border:0.5px solid var(--s200);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.16);padding:4px;z-index:61;min-width:160px;display:flex;flex-direction:column;gap:2px;}',
+            '.qida-temp-opt{display:flex;align-items:center;gap:8px;background:transparent;border:0;border-radius:6px;padding:7px 10px;font-size:12.5px;color:var(--s800);cursor:pointer;font-family:inherit;text-align:left;}',
+            '.qida-temp-opt:hover{background:var(--s50);}',
+            '.qida-temp-opt.active{background:var(--qg-soft);color:var(--qg);font-weight:500;}',
+
             /* WhatsApp pane */
             '.qida-pane-wa{background:#ECE5DD;display:flex;flex-direction:column;min-height:0;min-width:0;}',
             '.qida-pane-wa-head{padding:10px 14px;background:rgba(255,255,255,.6);border-bottom:0.5px solid var(--s300);display:flex;align-items:center;gap:6px;color:var(--s600);flex-shrink:0;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;}',
@@ -2655,6 +2696,7 @@
 
             /* Columna Días: número coloreado por gravedad (texto, no fondo) + fecha corta */
             '.qida-cell-dias .qida-cell-days{font-size:20px;font-weight:500;line-height:1.1;color:var(--s700);}',
+            '.qida-cell-days-unit{font-size:11px;font-weight:400;margin-left:3px;opacity:.7;}',
             '.qida-cell-dias .qida-cell-date{font-size:11px;color:var(--s500);margin-top:2px;}',
             '.qida-dash-dias-normal{color:var(--s700);}',
             '.qida-dash-dias-amber{color:#92400E;}',
@@ -3156,7 +3198,7 @@
     function renderDiasCell(row) {
         var lvl = diasLevel(row.daysWithoutTouch, normalizeUrgency(row.urgency));
         return '<div class="qida-dash-cell qida-cell-dias">'
-            + '<div class="qida-cell-days qida-dash-dias-' + lvl + '">' + row.daysWithoutTouch + '</div>'
+            + '<div class="qida-cell-days qida-dash-dias-' + lvl + '">' + row.daysWithoutTouch + '<span class="qida-cell-days-unit">' + (row.daysWithoutTouch === 1 ? 'día' : 'días') + '</span></div>'
             + '<div class="qida-cell-date">' + esc(formatShortDate(row.lastTouchDate)) + '</div>'
         + '</div>';
     }
@@ -4575,6 +4617,20 @@
     // v1.6: shell header dinamico. En dashboard mantiene el bloque Sparkles + Seguimientos +
     // sub. En detail lo reemplaza por Volver + nombre + ID + badge dias + datos compactos.
     // El asistente del header (qida-asst-anchor) se preserva en el DOM aunque vacio en detail.
+    // v1.17: selector compacto de temperatura (dropdown anclado al pill + backdrop click-fuera).
+    function renderTempEditor(current) {
+        var opts = ['caliente', 'templado', 'frio', 'pausa'];
+        var items = '';
+        for (var i = 0; i < opts.length; i++) {
+            var k = opts[i], m = TEMP_META[k];
+            items += '<button class="qida-temp-opt' + (k === current ? ' active' : '') + '" data-action="set-temp" data-id="' + k + '">'
+                + '<i class="qida-tbar qida-tbar-' + m.cls + '"></i>' + esc(m.label)
+            + '</button>';
+        }
+        return '<div class="qida-temp-backdrop" data-action="close-temp-editor"></div>'
+            + '<div class="qida-temp-menu">' + items + '</div>';
+    }
+
     function syncShellHeader() {
         var header = document.querySelector('.qida-shell-header');
         if (!header) return;
@@ -4584,12 +4640,25 @@
             if (lead) {
                 var days = lead.daysWithoutTouch;
                 var lvl = daysWithoutTouchLevel(days);
-                var daysLabel = (days === 0) ? 'Hoy' : ('Sin contacto: ' + days + 'd');
+                var daysLabel = (days === 0) ? 'Hoy' : ('Sin contacto: ' + days + (days === 1 ? ' día' : ' días'));
+                // v1.17: pill de temperatura editable (lee el override de sesión EDITS.temperatures).
+                var tempKey = normalizeTemp(getLeadTemperature(lead));
+                var tMeta = TEMP_META[tempKey] || { label: '—', cls: '' };
+                var tempPill = '<span class="qida-dsh-temp-wrap">'
+                    + '<button class="qida-dsh-temp" data-action="open-temp-editor" title="Cambiar temperatura" aria-haspopup="true">'
+                        + '<i class="qida-tbar qida-tbar-' + tMeta.cls + '"></i>' + esc(tMeta.label) + ' ' + icon('edit', 10)
+                    + '</button>'
+                    + (state.tempEditorOpen ? renderTempEditor(tempKey) : '')
+                + '</span>';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
                     + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
                     + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
                     + '<span class="qida-dsh-days ' + lvl + '">' + icon('clock', 11) + ' ' + esc(daysLabel) + '</span>'
+                    + '<span class="qida-dsh-sep">&middot;</span>'
+                    // v1.17: pill de temperatura como hijo directo del head (NO dentro de .qida-dsh-meta,
+                    //   que tiene overflow:hidden y cliparía el dropdown). Queda alineado con las referencias.
+                    + tempPill
                     + '<span class="qida-dsh-sep">&middot;</span>'
                     + '<span class="qida-dsh-meta">'
                         + '<span class="qida-dsh-meta-item">' + icon('users', 11) + ' ' + esc(lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos') + '</span>'
@@ -4606,13 +4675,10 @@
                     + '<button class="qida-back" data-action="back-to-dashboard">' + icon('arrowLeft', 12) + ' Volver</button>'
                 + '</div>';
             }
-            // v1.8: boton swap entre el qida-asst-anchor y qida-esc. Active feedback cuando swapped.
-            var swapActiveCls = state.detailLayoutSwapped ? ' active' : '';
-            var swapIcons = icon('arrowLeft', 11) + icon('arrowRight', 11);
+            // v1.17: botón "Swap" eliminado. El layout queda fijo en el default (detailLayoutSwapped
+            //   sigue true: IA al centro, info a la derecha). Solo Esc + X a la derecha.
             header.innerHTML = titleHtml
                 + '<div class="qida-shell-actions">'
-                    + '<div id="qida-asst-anchor" class="qida-asst-anchor"></div>'
-                    + '<button class="qida-shell-swap' + swapActiveCls + '" data-action="toggle-detail-layout" title="Cambiar orden de columnas">' + swapIcons + ' Swap</button>'
                     + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
@@ -4815,7 +4881,7 @@
                 //   inicio y el race-guard de LeadDetailService.fetchAll compare con ===
                 //   estricto sin coercion.
                 var leadIdNum = (typeof id === 'string' && /^\d+$/.test(id)) ? parseInt(id, 10) : id;
-                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false });
+                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.11: SIEMPRE llamamos a fetchAll (incluso en modo mock - el service lo
                 //   detecta y hace mockHydrate sync, sin loading visible). Solo skipeamos si
                 //   ya hay cache valido (sin _error) para evitar fetchs redundantes en cache hits.
@@ -4826,7 +4892,7 @@
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
-                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false });
+                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 return;
 
             // --- v1.10: dashboard de leads enfriandose ---
@@ -5015,13 +5081,22 @@
                 var matTitle = target.getAttribute('data-title') || 'material';
                 showToast('"' + matTitle + '" listo (mock)');
                 return;
-            // v1.8: toggle del orden de columnas centro/derecha en el detail.
-            // v1.16: el rerender resetea el scroll del chat WA; re-posicionamos al fondo
-            //   (y el chat IA) tras el swap, como al abrir el lead.
-            case 'toggle-detail-layout':
-                state.__waNeedsScroll = true;
-                state.__aiNeedsScroll = true;
-                setState({ detailLayoutSwapped: !state.detailLayoutSwapped });
+            // v1.17: temperatura editable en el header del detalle.
+            case 'open-temp-editor':
+                setState({ tempEditorOpen: !state.tempEditorOpen });
+                return;
+            case 'close-temp-editor':
+                if (state.tempEditorOpen) setState({ tempEditorOpen: false });
+                return;
+            case 'set-temp':
+                if (id) {
+                    // TODO[odoo]: PUT /api/leads/{lead_id}/temperature { temperature: id }. Por ahora
+                    //   solo override local en sesión (EDITS.temperatures, que getLeadTemperature lee).
+                    EDITS.temperatures[state.currentLeadId] = { temperature: id, source: 'AF' };
+                    state.tempEditorOpen = false;
+                    rerenderContent();
+                    showToast('Temperatura actualizada');
+                }
                 return;
 
             case 'open-schedule':
@@ -5486,6 +5561,8 @@
 
         if (isEsc) {
             if (state.showScheduleModal) { closeScheduleModal(); return; }
+            // v1.17: si el dropdown de temperatura está abierto, Esc lo cierra (no cierra el modal).
+            if (state.view === 'detail' && state.tempEditorOpen) { setState({ tempEditorOpen: false }); return; }
             // v1.15: si el confirm de descartar está abierto, Esc lo cierra (sigue editando).
             if (state.view === 'agentBuilder' && state.agentBuilderConfirmDiscard) {
                 setState({ agentBuilderConfirmDiscard: false });
@@ -5538,6 +5615,8 @@
         // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
         //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
         state.agentBuilderConfirmDiscard = false;
+        // v1.17: cierra el dropdown de temperatura. EDITS.temperatures (el override real) PERSISTE.
+        state.tempEditorOpen = false;
         // v1.10: limpieza del dashboard de leads enfriandose.
         //   completedTodayIds PERSISTE durante toda la sesion del page load (NO se vacia
         //   aqui). Solo limpiamos el toast de undo y cancelamos cualquier timeout activo.
