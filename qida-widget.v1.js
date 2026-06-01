@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.25.0
+ * QIDA ASSISTANT v1.26.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,21 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.26.0 ("Compartir material" -> chip preview estilo Slack/Claude, en vez de ensuciar
+ *   el textarea con el URL):
+ *   - state.pendingAttachments [{kind:'material_link',title,url}]: array de chips a adjuntar.
+ *     Init [] y reset en select-lead / back-to-dashboard.
+ *   - "Compartir con el lead" (ai-share-material) ahora hace push al array (dedup por url) en vez de
+ *     insertar el URL en el textarea. El textarea queda limpio para que la AF redacte su mensaje.
+ *   - renderWaAttachArea: chips debajo del input (📎 title (url corto) + ✕). Si no hay -> no renderea.
+ *     wa-attach-remove quita por indice. shortenUrl para mostrar el dominio/path corto.
+ *   - Al enviar (sendWhatsAppMock/Real): composeMessageWithAttachments agrega las URLs al final del
+ *     texto (texto + "\n\n" + urls; o solo urls si no hay texto). Enviar habilitado con texto O chips.
+ *     Tras success se limpian los chips; en error quedan (para reintentar). El textarea nunca recibe
+ *     las URLs (solo el body enviado / el echo del pane).
+ *   - NO se toca el boton 📎 (file picker real queda TODO[attachments-ui] post-demo).
+ *   - Flag useRealAPI sigue FALSE por default (regresion zero).
  *
  * Cambios v1.25.0 (5 fixes de UX del click test en browser; 1 PR combinado):
  *   - ISSUE A (AF switcher no refrescaba datos): setViewingAs ahora, ademas de invalidar caches,
@@ -1195,7 +1210,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.25.0';
+    var VERSION = '1.26.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1721,6 +1736,7 @@
         draftMessage: '',               // texto vivo del textarea de WhatsApp del pane izquierdo
         waSending: false,               // v1.23: true mientras vuelve el POST de envio real (deshabilita Enviar + spinner)
         waSendError: null,              // v1.23: userMessage del error de envio (banner inline + Reintentar). null = sin error.
+        pendingAttachments: [],         // v1.26: chips de material a adjuntar [{kind:'material_link',title,url}]. Se suman al texto al enviar; se limpian tras envio.
         attachmentsExpanded: false,     // colapsable de adjuntos en el pane central
         aiChatHistory: {},              // { leadId: [{ from: 'user'|'ai', payload }] } - PERSISTENTE en sesion
         aiChatDraft: '',                // texto vivo del input del chat IA del pane central
@@ -2691,6 +2707,14 @@
             '.qida-pane-wa-head{padding:10px 14px;background:rgba(255,255,255,.6);border-bottom:0.5px solid var(--s300);display:flex;align-items:center;gap:6px;color:var(--s600);flex-shrink:0;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;}',
             '.qida-pane-wa-body{flex:1;overflow-y:auto;padding:14px 12px;min-height:0;}',
             '.qida-wa-input-wrap{padding:10px 12px;border-top:0.5px solid var(--s300);background:rgba(255,255,255,.35);flex-shrink:0;}',
+            /* v1.26: chips de attachments (material a compartir) entre el input y el envio */
+            '.qida-wa-attach-area{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}',
+            '.qida-wa-attach-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:4px 6px 4px 9px;background:#F1F8EE;border:0.5px solid var(--qg-soft-border,#cfe3c7);border-radius:999px;font-size:11.5px;color:var(--s800);}',
+            '.qida-wa-attach-chip > .qa-icon{color:#0F6E56;flex-shrink:0;}',
+            '.qida-wa-attach-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px;}',
+            '.qida-wa-attach-url{color:var(--s500);}',
+            '.qida-wa-attach-x{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--s500);cursor:pointer;}',
+            '.qida-wa-attach-x:hover{background:rgba(0,0,0,.06);color:var(--s900);}',
             '.qida-wa-input{display:flex;align-items:flex-end;gap:8px;background:#fff;border:0.5px solid var(--s300);border-radius:18px;padding:6px 8px 6px 10px;}',
             '.qida-wa-input:focus-within{border-color:#0F6E56;}',
             '.qida-wa-clip{background:transparent;border:0;padding:6px;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}',
@@ -4051,19 +4075,33 @@
     // Mock que agrega un mensaje WhatsApp saliente y actualiza los contadores del lead.
     // v1.23: dispatcher de envio. Con useRealApi() -> POST real al backend; sin flag -> echo mock
     //   (regresion zero). El nombre conserva "Mock" por compat con los callers (wa-send, Enter).
+    // v1.26: compone el texto final = mensaje del AF + URLs de los attachments (chips) al final,
+    //   en linea nueva. Si no hay texto, manda solo los links. NO muta el textarea.
+    function composeMessageWithAttachments(text, atts) {
+        atts = atts || [];
+        var urls = [];
+        for (var i = 0; i < atts.length; i++) { if (atts[i] && atts[i].url) urls.push(atts[i].url); }
+        if (!urls.length) return text;
+        var joined = urls.join('\n');
+        return text ? (text + '\n\n' + joined) : joined;
+    }
+
     function sendWhatsAppMock(leadId, text) {
         var trimmed = (text || '').trim();
-        if (!trimmed) return;
+        var atts = state.pendingAttachments || [];
+        // v1.26: permitir enviar si hay texto O attachments (chip-only).
+        if (!trimmed && !atts.length) return;
 
         if (useRealApi()) {
             sendWhatsAppReal(leadId, trimmed);
             return;
         }
 
-        // --- flag OFF: echo local en MOCK_WHATSAPP (identico a v1.22) ---
+        // --- flag OFF: echo local en MOCK_WHATSAPP. El texto enviado incluye los links. ---
+        var finalText = composeMessageWithAttachments(trimmed, atts);
         var timestamp = 'Hoy ' + nowHHMM();
         if (!MOCK_WHATSAPP[leadId]) MOCK_WHATSAPP[leadId] = [];
-        MOCK_WHATSAPP[leadId].push({ from: 'af', text: trimmed, time: timestamp });
+        MOCK_WHATSAPP[leadId].push({ from: 'af', text: finalText, time: timestamp });
 
         var lead = getLead(leadId);
         if (lead) {
@@ -4073,6 +4111,7 @@
         }
 
         state.draftMessage = '';
+        state.pendingAttachments = [];   // v1.26: limpiar chips tras enviar
         state.__waNeedsScroll = true;
         rerenderContent();
         showToast('Mensaje enviado (mock)');
@@ -4097,25 +4136,29 @@
     function sendWhatsAppReal(leadId, text) {
         var numericId = toNumericLeadId(leadId);
         var phone = resolveSendPhone(leadId);
+        // v1.26: el body lleva texto + links de los chips; el textarea sigue mostrando SOLO lo
+        //   tipeado por el AF (sin urls). Los chips permanecen hasta el success.
+        var finalText = composeMessageWithAttachments(text, state.pendingAttachments || []);
         state.waSending = true;
         state.waSendError = null;
-        state.draftMessage = text;   // mantener el texto visible mientras se envia
+        state.draftMessage = text;   // mantener el texto visible (sin urls) mientras se envia
         rerenderContent();
         apiFetchJson('POST', '/api/leads/' + numericId + '/conversation/messages',
-            { body: { phone: phone, text: text, file_uid: null }, noun: 'el mensaje de WhatsApp' }
+            { body: { phone: phone, text: finalText, file_uid: null }, noun: 'el mensaje de WhatsApp' }
         ).then(function (resp) {
             state.waSending = false;
             state.waSendError = null;
             // Empujar el mensaje al pane (con el message_uid real). El pane real lee de conversationCache.
             if (state.conversationCache[leadId] && state.conversationCache[leadId].messages) {
                 state.conversationCache[leadId].messages.push({
-                    from: 'af', text: text, time: formatConvTime(new Date().toISOString()),
+                    from: 'af', text: finalText, time: formatConvTime(new Date().toISOString()),
                     hasAttachment: false, status: 'sent', uid: (resp && resp.message_uid) || null
                 });
             }
             var lead = getLead(leadId);
             if (lead) { lead.daysWithoutTouch = 0; lead.interactionCount = (lead.interactionCount || 0) + 1; }
             state.draftMessage = '';
+            state.pendingAttachments = [];   // v1.26: limpiar chips solo tras success
             state.__waNeedsScroll = true;
             rerenderContent();
             showToast('Mensaje enviado');
@@ -4123,7 +4166,7 @@
             log('wa send failed', err && (err.code || err.message));
             state.waSending = false;
             state.waSendError = (err && err.userMessage) || 'No se pudo enviar el mensaje. Reintentá.';
-            state.draftMessage = text;   // dejar el texto en el textarea para reintentar/editar
+            state.draftMessage = text;   // dejar el texto tipeado; los chips quedan para reintentar
             rerenderContent();
             showToast(state.waSendError);
         });
@@ -4979,7 +5022,9 @@
         var draft = state.draftMessage || '';
         // v1.23: durante el envio real, deshabilitar Enviar + spinner. Banner de error con Reintentar.
         var sending = !!state.waSending;
-        var sendDisabled = (sending || !draft.trim()) ? ' disabled' : '';
+        // v1.26: habilitar Enviar si hay texto O al menos un attachment (chip-only permitido).
+        var hasAtt = !!(state.pendingAttachments && state.pendingAttachments.length);
+        var sendDisabled = (sending || (!draft.trim() && !hasAtt)) ? ' disabled' : '';
         var sendInner = sending
             ? '<span class="qida-spinner" aria-hidden="true"></span>'
             : icon('send', 14);
@@ -4995,12 +5040,39 @@
             + '<div class="qida-pane-wa-body" id="qida-wa-body">' + msgsHtml + '</div>'
             + '<div class="qida-wa-input-wrap">'
                 + errBanner
+                + renderWaAttachArea()
                 + '<div class="qida-wa-input">'
                     + '<button class="qida-wa-clip" data-action="wa-clip" aria-label="Adjuntar">' + icon('paperclip', 15) + '</button>'
                     + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1" placeholder="Escribe un mensaje...">' + esc(draft) + '</textarea>'
                     + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + sendInner + '</button>'
                 + '</div>'
             + '</div>';
+    }
+
+    // v1.26: URL corta para el chip ("https://www.qida.es/x/" -> "qida.es/x").
+    function shortenUrl(url) {
+        if (!url) return '';
+        return String(url).replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+    }
+
+    // v1.26: area de chips de attachments (estilo Slack/Claude), debajo del input. Si no hay
+    //   attachments no renderea nada. Cada chip = 📎 title (url corto) + boton ✕ para quitar.
+    function renderWaAttachArea() {
+        var atts = state.pendingAttachments || [];
+        if (!atts.length) return '';
+        var chips = '';
+        for (var i = 0; i < atts.length; i++) {
+            var a = atts[i] || {};
+            var short = shortenUrl(a.url);
+            chips += '<span class="qida-wa-attach-chip" title="' + esc((a.title || '') + ' — ' + (a.url || '')) + '">'
+                + icon('paperclip', 11)
+                + '<span class="qida-wa-attach-label">' + esc(a.title || 'Material')
+                    + (short ? ' <span class="qida-wa-attach-url">(' + esc(short) + ')</span>' : '')
+                + '</span>'
+                + '<button class="qida-wa-attach-x" data-action="wa-attach-remove" data-id="' + i + '" aria-label="Quitar adjunto">' + icon('x', 11) + '</button>'
+            + '</span>';
+        }
+        return '<div class="qida-wa-attach-area">' + chips + '</div>';
     }
 
     // v1.11: renderCenterPane recibe cached y lo propaga a los renderers de paneles
@@ -5954,7 +6026,7 @@
                 //   inicio y el race-guard de LeadDetailService.fetchAll compare con ===
                 //   estricto sin coercion.
                 var leadIdNum = (typeof id === 'string' && /^\d+$/.test(id)) ? parseInt(id, 10) : id;
-                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', waSending: false, waSendError: null, attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', waSending: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.11: SIEMPRE llamamos a fetchAll (incluso en modo mock - el service lo
                 //   detecta y hace mockHydrate sync, sin loading visible). Solo skipeamos si
                 //   ya hay cache valido (sin _error) para evitar fetchs redundantes en cache hits.
@@ -5970,7 +6042,7 @@
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
-                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waSendError: null, attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 return;
 
             // --- v1.10: dashboard de leads enfriandose ---
@@ -6178,22 +6250,28 @@
             // v1.23/v1.25: "Compartir con el lead" desde una card de material del chat agent.
             //   v1.25 (ISSUE C): inserta SOLO el {url} en el textarea (sin prefijo armado). La AF
             //   escribe alrededor lo que quiera. NO auto-envia.
+            // v1.26: "Compartir con el lead" -> chip persistente debajo del input (NO ensucia el
+            //   textarea). El url se agrega al texto recien al enviar. La AF redacta libre.
             case 'ai-share-material':
                 var shUrl = target.getAttribute('data-url') || '';
+                var shTitle = target.getAttribute('data-title') || '';
                 if (!shUrl) { showToast('Este material no tiene link para compartir.'); return; }
-                // Si ya hay texto, agregamos el link en una linea nueva; si no, solo el link.
-                var prev = (state.draftMessage || '');
-                state.draftMessage = prev ? (prev.replace(/\s+$/, '') + '\n' + shUrl) : shUrl;
+                if (!state.pendingAttachments) state.pendingAttachments = [];
+                var dup = false;
+                for (var pai = 0; pai < state.pendingAttachments.length; pai++) {
+                    if (state.pendingAttachments[pai].url === shUrl) { dup = true; break; }
+                }
+                if (!dup) state.pendingAttachments.push({ kind: 'material_link', title: shTitle, url: shUrl });
                 rerenderContent();
-                setTimeout(function () {
-                    var ta = document.getElementById('qida-wa-textarea');
-                    if (ta) {
-                        ta.focus();
-                        try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (err) {}
-                        autoResizeTextarea(ta);
-                    }
-                }, 30);
-                showToast('Link agregado al campo de WhatsApp. Escribí tu mensaje y enviá.');
+                showToast(dup ? 'Ese material ya está adjunto.' : 'Material adjuntado. Escribí tu mensaje y enviá.');
+                return;
+            // v1.26: quitar un chip de attachment por indice.
+            case 'wa-attach-remove':
+                var rmIdx = parseInt(id, 10);
+                if (state.pendingAttachments && rmIdx >= 0 && rmIdx < state.pendingAttachments.length) {
+                    state.pendingAttachments.splice(rmIdx, 1);
+                }
+                rerenderContent();
                 return;
             case 'ai-material-action':
                 var matTitle = target.getAttribute('data-title') || 'material';
