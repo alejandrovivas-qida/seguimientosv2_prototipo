@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.12.1
+ * QIDA ASSISTANT v1.20.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,266 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.20.0 (SPIKE: "Sugerir mensaje" consume el endpoint real de recomendacion del
+ *   chat agent v2 — qida-followup-api — con fallback al mock detras de un toggle):
+ *   - TOGGLE: FEATURE_FLAG.useRealAPI (false por default -> mock; true -> fetch real). Overridable
+ *     via CONFIG.useRealAPI en QidaAssistant.init(...). API_BASE_URL_DEFAULT = la prod de Vercel,
+ *     overridable via CONFIG.apiBaseUrl. Con el flag en false el widget se comporta EXACTAMENTE
+ *     como v1.19 (cero regresion): el mock sigue siendo la unica fuente.
+ *   - FETCH WRAPPER: fetchRecommendation(leadId) -> POST {apiBaseUrl}/api/leads/{id}/recommendation
+ *     con afEmailHeaders() (X-AF-Email). Resuelve a la MISMA shape que getRecommendationSync, asi
+ *     que el resto del pipeline (suggestPayloadFromRec -> renderAiPayload) no cambia. Maneja
+ *     200/4xx/5xx + fallo de red, devolviendo Error con .userMessage para la UI.
+ *   - LEAD ID: toNumericLeadId() strippea el prefijo de display ('L122581' -> 122581). En Odoo real
+ *     el id ya es numerico, asi que es no-op alli. ASUNCION a confirmar con Odoo (ver TODO[leadid]).
+ *   - UI ASYNC: "Sugerir mensaje" deja de ser sincrono. startSuggestFlow -> burbuja IA en estado
+ *     loading (spinner) -> al resolver, variants/free; al fallar, mensaje claro + boton Reintentar
+ *     (ai-retry-suggest, reusa la misma burbuja). Casos edge (should_followup_today:false /
+ *     fallback / drafts:[]) intactos via suggestPayloadFromRec.
+ *   - DraftService.getRecommendation ahora ramifica: flag on -> fetchRecommendation; flag off ->
+ *     mock con simulateLatency (igual que antes). getRecommendationSync queda SOLO para el mock
+ *     (no se puede hacer fetch sincrono); ya no se usa en el flujo de UI (era el unico caller).
+ *   - Render nuevo: renderAiPayload soporta kind:'loading' y kind:'error'. CSS: .qida-aichat-loading
+ *     (+ spinner @keyframes qida-spin) y .qida-aichat-error/-retry.
+ *   - NO se toca el backend (solo lectura), NO se mergea, el mock queda como fallback. Las
+ *     inconsistencias backend<->frontend detectadas quedan como TODO[ticket], no se "arreglan"
+ *     tocando el contrato.
+ *
+ * DEFAULTS / ASUNCIONES QUE TOME EN v1.20.0:
+ *   - toNumericLeadId asume que el id de display del widget ('L<numero>') mapea 1:1 al lead_id
+ *     numerico de Odoo/backend. Validado por contrato (curl) pero NO end-to-end con un lead del
+ *     dashboard mock (esos ids no existen en prod). TODO[leadid]: confirmar el mapeo con Odoo.
+ *   - El backend devuelve suggested_materials EN LA MISMA respuesta de /recommendation, pero el
+ *     chip "Sugerir mensaje" sigue ignorandolos (el chip "Material marketing" usa su propio mock).
+ *     Oportunidad futura, fuera de scope del spike. TODO[ticket-materials].
+ *   - El backend devuelve rationale/mode/channel/tone/signature_mode/motor_available/
+ *     suppression_reason/wait_until que la UI todavia NO muestra. Esperan UI futura.
+ *     TODO[ticket-plan-fields].
+ *   - char_count viene del backend y el front lo ignora (no molesta, no se renombra).
+ *
+ * Cambios v1.19.0 (AF switcher: admins pueden "ver como" cualquier AF para QA/training/support):
+ *   - Adaptación de framework: NO hay Next.js (widget vanilla servido desde Blob), así que NO existe
+ *     NEXT_PUBLIC_ADMIN_EMAILS. La lista de admins se configura via CONFIG.adminEmails en
+ *     QidaAssistant.init(...) (string CSV o array), con fallback ADMIN_EMAILS_DEFAULT =
+ *     ['alejandro.vivas@qida.es']. NO requiere env var nueva en ningún Vercel del frontend.
+ *   - AFs impersonables: IMPERSONATABLE_AFS hardcode (v1: Ana Pinilla). TODO[afs]: fetch a
+ *     GET /api/admin/afs cuando se sumen más (F5).
+ *   - Identidad efectiva: getActiveAfEmail() = email impersonado (admin) || email real. Es el valor
+ *     de X-AF-Email. Helper afEmailHeaders() -> { 'X-AF-Email': ... } listo para los fetch reales a
+ *     qida-followup-api (endpoints AF-facing). Los /api/admin/* NO lo usan. // TODO[api]: adjuntarlo
+ *     cuando se cableen los endpoints (hoy el widget consume mocks, no llama a la API todavía).
+ *     resolveAfKey() ahora usa getActiveAfEmail() -> la impersonación cambia visiblemente los drafts.
+ *   - UI: barra global #qida-af-switch-bar entre el shell-header y el content (syncAfSwitcher, llamado
+ *     en cada rerender + tras init). No-admin -> no se renderiza (display:none). Admin -> dropdown
+ *     "Como yo (email) / Ver como <AF>". Impersonando -> banner AMARILLO "Viendo como <X> · email"
+ *     + botón "Volver a mi vista" + dropdown. Visible en TODAS las vistas (dashboard/detail/leaders/
+ *     agentBuilder) porque vive en el shell, no en el content.
+ *   - Persistencia: localStorage 'qida_viewing_as' (validado contra IMPERSONATABLE_AFS al hidratar en
+ *     init). Reset (botón banner o "Como yo") limpia el storage y restaura el email real.
+ *   - Al cambiar de AF: console.log('[AF SWITCHER] viewing as <email>') + se invalidan
+ *     recommendationCache y draftVariantsLoaded (dependen de af_key).
+ *   - Honor system: NO se valida server-side que el user sea admin (llega con auth real). NO cambia
+ *     el comportamiento para no-admins. NO toca endpoints admin ni el backend.
+ *   - State nuevo: viewingAsEmail. Handlers: af-switch (select), af-switch-reset (banner). Dev local
+ *     (!IS_ODOO_MODE) = admin para poder testear.
+ *
+ * Cambios v1.18.0 (eliminar bloque "Equipo siguiendo" del detalle del lead):
+ *   - Eliminada la card "Equipo siguiendo" de la columna de info del detalle: se borra la función
+ *     renderFollowers y su llamada en renderCenterPane. No tenía handlers (cero data-action).
+ *   - CSS eliminado: .qida-followers / .qida-follower / -avatar / -name / -role (solo lo usaba esa card).
+ *   - NO se eliminan MOCK_FOLLOWERS ni DEFAULT_FOLLOWERS: los sigue usando la hidratación del detalle
+ *     (LeadDetailService, mock + rama Odoo mail.followers / cached.followers / _errors[4] / mapFollower).
+ *     Quedan como data no consumida por la UI; re-indexar la pipeline allSettled era riesgoso y fuera
+ *     de scope. // TODO[cleanup]: si se confirma que nadie más consumirá followers, limpiar el job.
+ *   - NO se toca el resto de la columna (Resumen IA, Análisis IA, Contexto del cuidado, Notas internas,
+ *     Próximas actividades, Adjuntos).
+ *
+ * Cambios v1.17.0 (2 fixes UX en el modal del lead):
+ *   - CAMBIO 1 — sufijo "días" en "Sin contacto":
+ *       * Dashboard (renderDiasCell): el número grande lleva un <span> "días" más chico
+ *         (.qida-cell-days-unit, 11px/opacity .7) que no compite; la fecha pequeña se conserva.
+ *       * Header del detalle (syncShellHeader): pill "Sin contacto: N d" -> "Sin contacto: N días".
+ *   - CAMBIO 2 — temperatura visible y editable en el header del detalle:
+ *       * Botón "Swap" ELIMINADO (y el anchor vestigial qida-asst-anchor + el handler
+ *         toggle-detail-layout). El layout queda fijo en el default (detailLayoutSwapped sigue
+ *         true: IA al centro, info a la derecha; renderDetail sin cambios).
+ *       * Pill de temperatura en .qida-dsh-meta (alineado con el resto de referencias del lead):
+ *         barrita monocroma (colores admin rojo/ámbar/azul/gris) + label (Caliente/Templado/
+ *         Frío/Pausa) + lápiz. Lee getLeadTemperature(lead) (override de sesión EDITS.temperatures).
+ *       * Click -> dropdown compacto anclado al pill (position:absolute) + backdrop fixed para
+ *         click-fuera; Esc lo cierra. Opciones: Caliente/Templado/Frío/Pausa. set-temp escribe
+ *         EDITS.temperatures[leadId]={temperature,source:'AF'} (persiste en sesión; al reabrir el
+ *         lead se mantiene) + showToast "Temperatura actualizada". // TODO[odoo]: PUT
+ *         /api/leads/{id}/temperature. Sin backend por ahora.
+ *       * State nuevo: tempEditorOpen (transitorio; reset en closeModal/select-lead/back).
+ *   - Nota: las filas del dashboard vienen de otro mock (MOCK_*_RESPONSE) y NO se re-tiñen con el
+ *     cambio del pill (fuera de alcance de estos 2 cambios). El override afecta el lead (MOCK_LEADS).
+ *   - NO se toca: dashboard cerrado (v1.14.1), agent-builder (v1.15.0), bloques v1.16.0.
+ *
+ * Cambios v1.16.0 (3 fixes UX en el modal del lead, quirúrgicos e independientes):
+ *   - CAMBIO 1 — Bloque "Análisis IA" en la columna del detalle, JUSTO debajo de "Resumen IA"
+ *     (renderCenterPane: renderIaSummary -> renderIaAnalysis -> renderCare ...). Mismo patrón
+ *     visual que Resumen IA (infoCard + header ✨ + acción + "Generado hace X" + body / vacío).
+ *     SIN backend ni edición inline: Generar/Regenerar hacen console.log + toast (preparación de
+ *     UI). Mock MOCK_IA_ANALYSIS (mismo shape que MOCK_IA_SUMMARIES): algunos leads con análisis,
+ *     otros vacíos. El texto junta dos contenidos: por qué se sugiere seguimiento + contexto.
+ *     Funciones nuevas: getIaAnalysis, renderIaAnalysis. Handler nuevo: regen-ia-analysis.
+ *   - CAMBIO 2 — Scroll del chat WhatsApp. overflow-y:auto ya existía (.qida-pane-wa-body) y el
+ *     scroll-al-fondo ya se disparaba al abrir el lead (select-lead) y al enviar (sendWhatsAppMock).
+ *     Se agrega el caso del botón Swap: toggle-detail-layout ahora setea __waNeedsScroll (y
+ *     __aiNeedsScroll) para re-posicionar ambos panes al fondo tras el rerender.
+ *   - CAMBIO 3 — Cruz "Cerrar" siempre a la derecha del header en TODAS las vistas
+ *     (dashboard/detail/leadersDashboard/agentBuilder). Causa: .qida-shell-header es flex
+ *     space-between y en vistas sin título a la izquierda el bloque de acciones quedaba a la
+ *     izquierda. Fix de 1 línea: .qida-shell-actions{margin-left:auto}. Orden interno ya correcto
+ *     ([acciones][Esc][✕]), sin tocar el markup de ninguna vista.
+ *   - NO se toca: dashboard cerrado (v1.14.1), lógica del agent-builder (v1.15.0, solo hereda la
+ *     cruz a la derecha), endpoints. El bloque Análisis IA es UI con mock.
+ *
+ * Cambios v1.15.0 (Asistente IA configurable por AF - drafts dinámicos + "Armá tu asistente"):
+ *   Principio rector intacto: la IA propone, la AF edita y envía (copy-to-WA editable).
+ *   - PIEZA A — "Sugerir mensaje" pasa de 2 variantes hardcoded (MOCK_AI_RESPONSES) a las
+ *     variantes configuradas por la AF vía DraftService.getRecommendation(leadId).getRecommendation
+ *     devuelve drafts:[{name,length,tone_style,text}]. Header de cada card = humanizeVariantName
+ *     (corto_directo -> "Corto directo"). El flujo posterior ("Esta me gusta más" -> refine ->
+ *     "Copiar al WhatsApp") NO cambia. Casos edge: should_followup_today:false / fallback:true /
+ *     drafts:[] -> burbuja IA con copy específico. AISLADO con un if explícito en handleAiChip:
+ *     'material-marketing' y 'reactivar-sin-presionar' quedan EXACTAMENTE igual (sin regresión).
+ *   - PIEZA B — pantalla "Armá tu asistente" (state.view==='agentBuilder', precedente Panel de
+ *     Líderes). Acceso: botón chico en el shell header del dashboard (al lado de "Esc para
+ *     cerrar"), visible para todas las AFs. 1-3 variantes; cada una = name + length + tone_style.
+ *     Validación live (1-3; name <40, único, no vacío; enums cerrados) gatea "Guardar". Tooltips
+ *     en length/tone. Dropdowns .qida-leader-select, botones .qida-btn-primary/ghost, showToast.
+ *     Cambios sin guardar + Volver/Esc -> confirm "¿Descartar cambios?".
+ *   - PIEZA C — sendAssistantEvent(eventType, payload): wrapper PII-ESTRICTO (solo metadata,
+ *     nunca el texto del draft/lead) con try/catch silencioso (F2.9 puede no existir). Dispara
+ *     draft_copied al copiar un draft al WhatsApp. thumbs_explicit: el wrapper lo acepta pero la
+ *     UI de 👍/👎 NO se agrega todavía (decisión de producto). draft_sent lo emite el backend.
+ *   - Mocks nuevos: DRAFT_LENGTHS/TONE_STYLES (+labels/tooltips), MOCK_ACTIVE_AFS (email->af_key,
+ *     espejo de ACTIVE_AFS_JSON), MOCK_DRAFT_VARIANTS_DEFAULT/_BY_AF, TONE_TEMPLATES,
+ *     MOCK_RECOMMENDATION_OVERRIDES (QA de edge cases). af_key se deriva de _currentUserEmail
+ *     vía resolveAfKey() (dev: fallback al primer AF activo). DraftService centraliza el mapeo
+ *     (cuando llegue el spec real, swap = 1 función). NINGÚN endpoint real cableado aún.
+ *   - State nuevo: draftVariants/draftVariantsSaved/draftVariantsLoaded/agentBuilderConfirmDiscard/
+ *     recommendationCache. Persisten en sesión (salvo el confirm, transitorio en closeModal).
+ *   - NO se toca: dashboard de Seguimientos (otra feature), Panel de Líderes, detalle del lead
+ *     más allá de Pieza A, loaders, WIDGET_URL.
+ *
+ * DEFAULTS QUE TOME EN v1.15.0:
+ *   - Anexo del spec del backend llegó vacío: shapes inferidas del cuerpo del prompt (enums
+ *     length{short,medium}/tone{neutral,direct,empathic}, /recommendation con drafts). Copy de
+ *     fallback = placeholder marcado // TODO[spec]. Todo centralizado en DraftService.
+ *   - draft_copied scoped SOLO a drafts (source==='draft'); reactivar/material NO lo disparan.
+ *   - Botón "Armá tu asistente" visible para todas las AFs (sin flag por rol en MVP).
+ *
+ * Cambios v1.14.1 (fixes visuales para igualar la estética .qida-leader-table):
+ *   - FIX alineación header vs filas: la última columna (Acción) pasa de 'auto' a ancho FIJO
+ *     (132px). Con 'auto' el header (celda vacía=0) y la fila (botón "Marcar hecho") daban
+ *     distinto ancho a esa pista, y al haber columnas fr el reparto cambiaba -> todo se corría.
+ *     grid-template idéntico en .qida-dash-header y .qida-dash-row en TODOS los breakpoints.
+ *   - Header de tabla con fondo gris #f3f4f6 + color s700 (antes se veía blanco como otra fila).
+ *   - Tabla encapsulada en card con borde redondeado (.qida-dash-table-card) + header-bar con
+ *     título por vista ("Sugerencias para hoy"/"Actividades programadas"/"Todos los leads") y
+ *     contador de leads. Replica el patrón .qida-leader-table-card de admin.
+ *   - Columna "Días" renombrada a "Sin contacto" (vocabulario que la AF ya conocía). Valor
+ *     (número + fecha) sin cambios. Ancho de columna ajustado (84px) para el header de 2 palabras.
+ *
+ * Cambios v1.14.0 (rediseño visual del dashboard AF - porta el sistema del Panel de Líderes):
+ *   Motivo: la v1.13 superponía 5 sistemas de señalización en la fila (color de fondo por
+ *   temperatura + rail izquierdo + badges inline + tinte verde + punto rojo), con colores que
+ *   se contradecían. Se pasa de "codificar en colores de fila" a "explicitar en columnas".
+ *   - Fila SIN color de fondo por temperatura, SIN rail, SIN tinte, SIN punto de urgencia media,
+ *     SIN badges/iconos inline en el nombre. Fondo blanco + border-bottom sutil + hover #fafafa
+ *     (estética .qida-leader-table de admin). Se mantiene el grid (no se migra a <table> real).
+ *   - Tabla pasa de 5 a 7 columnas: Familia · Tipo · Por qué · Temperatura (NUEVA) · Días (NUEVA
+ *     semántica) · Estado (NUEVA) · Acción.
+ *       * Temperatura: barrita sólida monocroma + texto (Caliente/Templado/Frío/Pausa), patrón
+ *         badge-localidad de admin. Colores admin: #EF4444/#F59E0B/#3B82F6/gris(pausa).
+ *       * Días desde último contacto (renombre de "Sin contacto"): número coloreado por gravedad
+ *         (texto, no fondo): 0-3 neutro / 4-7 ámbar / 8-14 ámbar fuerte / 15+ rojo. Fecha corta
+ *         debajo (se oculta @980px). Sin icono de alerta. CAPEO: si urgency==='alta', el máximo
+ *         es ámbar fuerte (nunca rojo) -> el único rojo de la fila es el badge "Urgente".
+ *       * Estado: badges admin apilados. Verde "Mensaje nuevo" (+contador si unread>1, paleta
+ *         #ECFDF5/#047857) y/o rojo "Urgente" (solo urgency alta, #FEF2F2/#991B1B). Vacía si no.
+ *   - Cards superiores reestilizadas con estética .qida-leader-kpi (label arriba / valor Fraunces
+ *     28px / sub) y agrupadas en dos bloques con label: "Tu impacto" (Convertidos, display-only)
+ *     y "Cartera activa" (Calientes/Templados/Fríos, clicables ≡ chips de segmento). El número de
+ *     las cards de temperatura toma el color de su temperatura; activo = borde inferior + fondo.
+ *   - Leyenda explícita debajo de la tabla: Caliente · Templado · Frío · Pausa | Mensaje nuevo ·
+ *     Urgente (dots + label, colores admin). Una columna de 4 valores -> leyenda de 4.
+ *   - Bug de filtros resuelto: botón "Quitar filtros" (data-action dash-clear-filters) visible
+ *     solo con filtro activo, limpia segmento + pill de una. Se mantiene click-en-activa-desactiva.
+ *   - Divider entre "mensajes nuevos" y resto: ELIMINADO (el badge "Mensaje nuevo" en Estado lo
+ *     reemplaza). El sort "mensajes nuevos al tope" se MANTIENE.
+ *   - Responsive: @1100 oculta "Tipo" (6 cols); @980 oculta la fecha-sub de Días y apila cards;
+ *     @760 compacta la grilla. Verificado en el modal AF real (max-width 1400px, NO el de 1600
+ *     de líderes) a 1400/1280/1100/980/760.
+ *   - NO se toca: Panel de Líderes, detalle del lead, mocks/endpoints (shape intacto), loaders,
+ *     WIDGET_URL (bump interno).
+ *
+ * DEFAULTS QUE TOME EN v1.14.0:
+ *   - Urgencia 'media' deja de tener señal propia en el dashboard (antes punto rojo): la columna
+ *     Estado solo expone "Mensaje nuevo" y "Urgente" (alta). Coherente con "un rojo = urgencia alta".
+ *   - Pausa: barra gris neutra + texto "Pausa", incluida en la leyenda (4 valores -> 4 explicaciones).
+ *   - "Tu impacto"/"Cartera activa" como labels de grupo (fallback documentado: barra vertical).
+ *   - Verde de "Mensaje nuevo" = verde admin (#047857), no el verde de marca WhatsApp.
+ *
+ * Cambios v1.13.0 (reconstruccion del dashboard AF - reemplaza la vista "cooling" de v1.10):
+ *   - La vista state.view==='dashboard' deja de ser la lista plana "cooling" (4 cols, color
+ *     por dias). Ahora es: banda de 4 cards arriba + toolbar (Filtros/pill WhatsApp/chips de
+ *     vista) + tabla con color por TEMPERATURA + señales de WhatsApp/urgencia por fila.
+ *   - 3 vistas = 3 endpoints separados (mocks): cada chip Sugerencias/Actividades/Leads hace
+ *     un "fetch" distinto (DashboardService.fetchView), NO un re-filtro client-side.
+ *       GET /api/me/leads/suggestions  -> MOCK_SUGGESTIONS_RESPONSE (~6 items)
+ *       GET /api/me/leads/activities   -> MOCK_ACTIVITIES_RESPONSE  (~9 items)
+ *       GET /api/me/leads/leads        -> MOCK_LEADS_RESPONSE       (16 items, cartera completa)
+ *     Los 3 comparten shape comun nuevo (familyName, city, caregiverInfo{name,relation,age},
+ *     serviceType, reason, daysWithoutTouch, lastTouchDate ISO, temperature, urgency,
+ *     hasNewMessage, unreadMessagesCount). Los ids reusan MOCK_LEADS para que el detalle resuelva.
+ *   - Banda superior: 4 cards mismo tamaño. [Convertidos este mes (hardcoded 7, display-only)]
+ *     [Calientes][Templados][Fríos]. Las 3 de temperatura son clicables y escriben el MISMO
+ *     state.dashSegment que los chips de Filtros (cards ≡ chips). Sin donut/grafico.
+ *   - Toolbar: izquierda boton "Filtros" -> chips de segmento (caliente|templado|frio|pausa|
+ *     urgente|historico); centro pill "N leads con mensaje nuevo" (rojo, filtra hasNewMessage,
+ *     AND con el segmento); derecha 3 chips de vista. Filtros y pill son client-side; los chips
+ *     de vista re-fetchean.
+ *   - Tabla: color de fila por temperatura (caliente rojo suave / templado ambar / frio gris-azul
+ *     / pausa neutro). Filas con mensaje nuevo van AL TOPE (sort interno por urgencia desc +
+ *     dias desc), separadas del resto por un divider sutil. Señal WhatsApp = rail izquierdo
+ *     verde (#25D366 via box-shadow inset, sin layout shift) + icono 💬 antes del nombre +
+ *     tinte verde sutil sobre el color de temperatura. Urgencia alta = rail rojo + badge
+ *     "Urgente" en Familia; urgencia media = punto rojo DESPUES del nombre (distinto del 💬,
+ *     que va antes). unreadMessagesCount>1 = badge pequeño con la cantidad junto al 💬.
+ *   - Conflicto WhatsApp+urgencia alta en la misma fila: gana el rail ROJO (urgencia es prioridad
+ *     operativa); el WhatsApp queda señalado por el icono 💬 + tinte verde. Rail dividido
+ *     descartado por fragilidad visual/CSS dentro de Odoo (documentado en renderDashRow).
+ *   - Refresh manual: boton Refrescar re-fetchea la vista activa (refresca el badge WhatsApp).
+ *     Sin polling ni push en este sprint (TODO documentado en handleClick/DashboardService).
+ *   - Marcar hecho + toast Deshacer: SIN cambios (state.completedTodayIds global por id, undo 4s).
+ *   - MAX_VISIBLE: 5 -> 10 (hay mas altura disponible con cards + toolbar).
+ *   - normalizeUrgency() acepta vocabulario nuevo (alta/media/baja) Y el del detalle
+ *     (Muy urgente/Urgente/Estandar). TODO: unificar cuando aterrice el backend F3.
+ *   - State nuevo: dashView, dashRows, dashLoading, dashSegment, dashFiltersExpanded, dashOnlyNew.
+ *     Se resetean en closeModal. Funciones nuevas: renderDash..., buildDashFeed, DashboardService.
+ *   - NO se toca: Panel de Lideres (ApexCharts/mountLeaderCharts), detalle del lead, loaders
+ *     (gtm-loader.html/tempermonkey.js), WIDGET_URL (bump interno, mismo filename).
+ *
+ * DEFAULTS QUE TOME EN v1.13.0 (no especificados explicitamente):
+ *   - cards ≡ chips de segmento (resolucion §6.1): la card "Calientes/Templados/Fríos" escribe
+ *     state.dashSegment = 'caliente'/'templado'/'frio'. El chip de Filtros para frio se rotula
+ *     "Frío · reactivar" pero usa el mismo id 'frio' (un solo estado de frio, no dos).
+ *   - El pill WhatsApp muestra cantidad de LEADS ("N leads con mensaje nuevo"), no suma de
+ *     mensajes (§6.2). La cantidad individual de mensajes va como badge en la fila si >1.
+ *   - Counts de cards y del pill se calculan sobre el dataset de la vista activa MENOS los
+ *     completados en sesion, pero ANTES de aplicar segmento/pill (asi no se "vacian" al filtrar).
+ *   - Cambio de vista (chip): resetea dashSegment y dashOnlyNew (los segmentos difieren por vista).
+ *     Refrescar NO resetea filtros (re-fetch en sitio).
+ *   - Loading entre vistas (resolucion ajuste #1): se mantiene la tabla previa atenuada
+ *     (opacity .5 + pointer-events:none) hasta que vuelve el fetch. No skeleton, no spinner,
+ *     nunca tabla vacia.
+ *   - rail via box-shadow inset (no border-left) para no desplazar el grid de la fila.
+ *   - urgencia 'Urgente' (sin "Muy") del vocabulario viejo mapea a 'media'; 'Muy urgente' a 'alta'.
  *
  * Cambios v1.12.1 (fixes pre-demo del martes - 7 ajustes al panel de lideres):
  *   - Modal de lideres mas grande: .qida-shell.qida-view-leaders (max-width:1600px,
@@ -814,8 +1074,20 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.12.1';
+    var VERSION = '1.20.0';
     var CONFIG = null;
+
+    // ============================================================
+    // v1.20: INTEGRACION REAL del endpoint de recomendacion (chat agent v2)
+    // ============================================================
+    // Toggle simple para cablear "Sugerir mensaje" al backend real (qida-followup-api) sin romper
+    //   el widget: con useRealAPI=false el flujo usa el mock de siempre (cero regresion); con
+    //   useRealAPI=true hace fetch real via fetchRecommendation(). Overridable en init via
+    //   CONFIG.useRealAPI (boolean). Default false = seguro para prod hasta validar.
+    var FEATURE_FLAG = { useRealAPI: false };
+    // Base URL del backend. Override via CONFIG.apiBaseUrl. Sin barra final.
+    var API_BASE_URL_DEFAULT = 'https://qida-followup-api.vercel.app';
+    var API_BASE_URL = API_BASE_URL_DEFAULT;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
     //   queda false y el detalle se hidrata via mockHydrate. Se setea en init() y puede
@@ -941,6 +1213,17 @@
         L121399: { text: 'Madre 86 anos, alta hospitalaria manana. Urgencia muy alta. Familia necesita cobertura desde el dia 1. Solo 2 interacciones, faltan datos basicos. Llamar hoy para captar perfil y enviar propuesta esta tarde.', generatedAt: 'Hace 1h', editedBy: null }
     };
 
+    // v1.16: "Análisis IA" del detalle (preparación de UI, sin backend). Mismo shape que
+    //   MOCK_IA_SUMMARIES. Un solo bloque que junta DOS contenidos: por qué se sugiere
+    //   seguimiento + contexto adicional del lead. Algunos leads CON análisis (estado generado),
+    //   el resto SIN (estado vacío) -> ambos estados visibles en QA.
+    //   TODO[backend]: reemplazar por el endpoint de análisis cuando exista.
+    var MOCK_IA_ANALYSIS = {
+        L122581: { text: 'Sugerimos seguimiento HOY: respondió esta mañana con dos preguntas concretas (cobertura fin de semana y fecha de inicio) tras el presupuesto del lunes — señal clara de cierre próximo. Contexto: padre de 87 años que vive solo post-caída; Maria (hija) decide. Patrón: siempre contesta por la mañana. Buen momento para confirmar cobertura de fin de semana antes de cerrar.', generatedAt: 'Hace 2h', editedBy: null },
+        L122613: { text: 'Sugerimos seguimiento: pasaron 4 días sin respuesta tras el presupuesto del viernes, dentro del patrón de decisión familiar pendiente (señalado en notas internas). Contexto: conviven dos hermanos y deciden en conjunto; el hermano mayor es el más reticente. Conviene confirmar con Jordi que el hermano sigue dentro antes de presionar con el presupuesto.', generatedAt: 'Hace 1d', editedBy: null },
+        L121399: { text: 'Sugerimos seguimiento URGENTE hoy: alta hospitalaria mañana y la familia necesita cobertura desde el día 1. Contexto: solo 2 interacciones y faltan datos básicos del perfil. Llamar hoy para captar el perfil y enviar la propuesta esta tarde.', generatedAt: 'Hace 1h', editedBy: null }
+    };
+
     // Care context estructurado (la AF lo necesita resumido para no abrir Odoo).
     // v1.5: caredPerson y caredAge migrados a MOCK_LEADS (lead.relation, lead.age).
     // Aqui queda solo info propia del care context que no esta en el lead base.
@@ -1045,25 +1328,63 @@
     // El array YA esta filtrado (solo enfriandose), YA priorizado (orden por urgencia),
     // y YA excluye leads con seguimiento agendado futuro (lógica del backend).
     // Cubre los 5 rangos de urgencia: warn (4-7), orange (8-14), stale (15-20), danger (21+).
-    // v1.11: TODOS los leadIds apuntan a 123333 (number) para que cualquier fila del
-    //   dashboard cooling abra el unico lead validado en prod (Jeronimo Goyarrola Ugalde).
-    //   El resto del row (contact / location / relation / caredPersonName / age / reason /
-    //   serviceType / daysWithoutTouch / lastMessageDate) se mantiene como mock visual
-    //   para testear el flow end-to-end. Cuando Fase D cablee el cooling a Odoo real,
-    //   estos valores vienen del endpoint.
-    var MOCK_COOLING_LEADS_RESPONSE = [
-        { leadId: 123333, contact: 'Marta Ortiz',          location: 'Madrid',                relation: 'Madre', caredPersonName: 'Concepcion', age: 86, serviceType: 'Interno',       daysWithoutTouch: 22, lastMessageDate: '27-abr', reason: 'Pidio pensarlo en familia, sin respuesta' },
-        { leadId: 123333, contact: 'Maria Jesus Sanchez',  location: 'Madrid',                relation: 'Madre', caredPersonName: 'Dolores',    age: 88, serviceType: 'Fin de semana', daysWithoutTouch: 17, lastMessageDate: '02-may', reason: 'No responde desde la propuesta hace 17 dias' },
-        { leadId: 123333, contact: 'David Campos',         location: 'Alcala de Henares',     relation: 'Madre', caredPersonName: 'Pilar',      age: 84, serviceType: 'Interno',       daysWithoutTouch: 11, lastMessageDate: '08-may', reason: 'Dijo que llamaria, hace 11 dias sin respuesta' },
-        { leadId: 123333, contact: 'Jose Maria Recio',     location: 'Collado Villalba',      relation: 'Madre', caredPersonName: 'Mercedes',   age: 85, serviceType: 'Externo',       daysWithoutTouch: 9,  lastMessageDate: '10-may', reason: 'No contesta WhatsApp ni llamadas hace 9 dias' },
-        { leadId: 123333, contact: 'Marina Ruben',         location: 'Madrid',                relation: 'Padre', caredPersonName: 'Manuel',     age: 83, serviceType: 'Por horas',     daysWithoutTouch: 5,  lastMessageDate: '14-may', reason: 'Esperando respuesta tras enviarle el presupuesto' },
-        { leadId: 123333, contact: 'Teresa Parellada',     location: "Sant Sadurni d'Anoia",  relation: 'Padre', caredPersonName: 'Joan',       age: 79, serviceType: 'Externo',       daysWithoutTouch: 6,  lastMessageDate: '13-may', reason: 'Familia comparando con otras dos opciones' },
-        { leadId: 123333, contact: 'Jordi Vidal',          location: 'Barcelona',             relation: 'Madre', caredPersonName: 'Carmen',     age: 82, serviceType: 'Interno',       daysWithoutTouch: 4,  lastMessageDate: '15-may', reason: 'Pidio pensarlo en familia, han pasado 4 dias' }
+    // v1.13: 3 respuestas mock, una por vista del dashboard. Shape comun (ver header):
+    //   { id, familyName, city, caregiverInfo:{name,relation,age}, serviceType, reason,
+    //     daysWithoutTouch, lastTouchDate (ISO), temperature, urgency, hasNewMessage,
+    //     unreadMessagesCount, historico? }.
+    //   Los ids reusan MOCK_LEADS para que select-lead -> detalle resuelva contra datos reales.
+    //   urgency: las suggestions usan vocabulario NUEVO (alta/media/baja); activities/leads usan
+    //   el del detalle (Muy urgente/Urgente/Estandar) -> ambos los normaliza normalizeUrgency().
+    //   Fechas asumen hoy = 2026-05-15 (igual que el resto del mock).
+    //   TODO[odoo]: reemplazar por GET /api/me/leads/{suggestions|activities|leads}.
+
+    // Sugerencias del dia (~6). 3 caliente / 1 templado / 2 frio. EDGE CASE: L122581 con
+    //   WhatsApp nuevo + urgencia alta + caliente (render visual extremo).
+    var MOCK_SUGGESTIONS_RESPONSE = [
+        { id: 'L122581', familyName: 'Familia Martinez Ruiz',    city: 'Madrid',               caregiverInfo: { name: 'Juan Antonio', relation: 'Padre',  age: 87 }, serviceType: 'Por horas',     reason: 'Pidio presupuesto ayer y respondio hoy con preguntas concretas', daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'caliente', urgency: 'alta',  hasNewMessage: true,  unreadMessagesCount: 3 },
+        { id: 'L121399', familyName: 'Familia Ortiz Pica',       city: 'Madrid',               caregiverInfo: { name: 'Concepcion',   relation: 'Madre',  age: 86 }, serviceType: 'Interno',       reason: 'Alta hospitalaria manana, sin alguien en casa',                  daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'alta',  hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122131', familyName: 'Familia Roge Barcelo',     city: 'Barcelona',            caregiverInfo: { name: 'Albert',       relation: 'Marido', age: 76 }, serviceType: 'Interno',       reason: 'Necesita cuidadora antes del 30/05',                             daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'caliente', urgency: 'media', hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122613', familyName: 'Familia Vidal Pons',       city: 'Barcelona',            caregiverInfo: { name: 'Carmen',       relation: 'Madre',  age: 82 }, serviceType: 'Interno',       reason: 'Pidio pensarlo en familia, han pasado 4 dias',                   daysWithoutTouch: 4,  lastTouchDate: '2026-05-11', temperature: 'templado', urgency: 'media', hasNewMessage: true,  unreadMessagesCount: 1 },
+        { id: 'L121708', familyName: 'Familia Campos Rivera',    city: 'Alcala de Henares',    caregiverInfo: { name: 'Pilar',        relation: 'Madre',  age: 84 }, serviceType: 'Interno',       reason: 'Dijo que llamaria, hace 11 dias sin respuesta',                  daysWithoutTouch: 11, lastTouchDate: '2026-05-04', temperature: 'frio',     urgency: 'media', hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122055', familyName: 'Familia Recio del Campo',  city: 'Collado Villalba',     caregiverInfo: { name: 'Mercedes',     relation: 'Madre',  age: 85 }, serviceType: 'Externo',       reason: 'No contesta WhatsApp ni llamadas hace 9 dias',                   daysWithoutTouch: 9,  lastTouchDate: '2026-05-06', temperature: 'frio',     urgency: 'baja',  hasNewMessage: false, unreadMessagesCount: 0 }
     ];
 
-    // Tope visual del dashboard. El backend ya devuelve la cohorte priorizada;
-    // el frontend muestra como mucho MAX_VISIBLE filas para no abrumar a la AF.
-    var MAX_VISIBLE = 5;
+    // Actividades programadas (~9). Vocabulario urgency del detalle. Temperatura mixta.
+    var MOCK_ACTIVITIES_RESPONSE = [
+        { id: 'L122476', familyName: 'Familia Baena Sanz',       city: 'Madrid',               caregiverInfo: { name: 'Antonia',      relation: 'Suegra', age: 90 }, serviceType: 'Por horas',     reason: 'Llamada agendada hoy 11:00',                                     daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'Urgente',     hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122131', familyName: 'Familia Roge Barcelo',     city: 'Barcelona',            caregiverInfo: { name: 'Albert',       relation: 'Marido', age: 76 }, serviceType: 'Interno',       reason: 'Cierre operativo: cuidadora antes del 30/05',                    daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: true,  unreadMessagesCount: 2 },
+        { id: 'L121656', familyName: 'Familia Parellada Canals', city: "Sant Sadurni d'Anoia", caregiverInfo: { name: 'Joan',         relation: 'Padre',  age: 79 }, serviceType: 'Externo',       reason: 'Visita a domicilio pendiente de confirmar',                      daysWithoutTouch: 6,  lastTouchDate: '2026-05-09', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: true,  unreadMessagesCount: 1 },
+        { id: 'L121749', familyName: 'Familia Ferreiro Bergino', city: 'Madrid',               caregiverInfo: { name: 'Francisco',    relation: 'Tio',    age: 81 }, serviceType: 'Interno',       reason: 'Followup tras enviar info de servicio',                          daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122278', familyName: 'Familia Ruben Garcia',     city: 'Madrid',               caregiverInfo: { name: 'Manuel',       relation: 'Padre',  age: 83 }, serviceType: 'Por horas',     reason: 'Recordatorio: confirmar fecha de arranque',                      daysWithoutTouch: 5,  lastTouchDate: '2026-05-10', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121547', familyName: 'Familia Sanchez Tartalo',  city: 'Madrid',               caregiverInfo: { name: 'Dolores',      relation: 'Madre',  age: 88 }, serviceType: 'Fin de semana', reason: 'Reintento de contacto programado',                               daysWithoutTouch: 10, lastTouchDate: '2026-05-05', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122845', familyName: 'Familia Mestres Carrasco', city: 'Sabadell',             caregiverInfo: { name: 'Jordi',        relation: 'Padre',  age: 89 }, serviceType: 'Externo',       reason: 'Retomar al volver del viaje (20/05)',                            daysWithoutTouch: 3,  lastTouchDate: '2026-05-12', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122701', familyName: 'Familia Lopez Iniesta',    city: 'Madrid',               caregiverInfo: { name: 'Isabel',       relation: 'Madre',  age: 81 }, serviceType: 'Interno',       reason: 'Primer contacto pendiente',                                      daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122055', familyName: 'Familia Recio del Campo',  city: 'Collado Villalba',     caregiverInfo: { name: 'Mercedes',     relation: 'Madre',  age: 85 }, serviceType: 'Externo',       reason: 'Llamada de reactivacion agendada',                               daysWithoutTouch: 9,  lastTouchDate: '2026-05-06', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 }
+    ];
+
+    // Todos los leads del AF (cartera completa, 16). Vocabulario urgency del detalle. Incluye
+    //   pausa e historico. WhatsApp nuevo repartido por temperaturas (caliente, pausa, frio).
+    var MOCK_LEADS_RESPONSE = [
+        { id: 'L122581', familyName: 'Familia Martinez Ruiz',    city: 'Madrid',               caregiverInfo: { name: 'Juan Antonio', relation: 'Padre',  age: 87 }, serviceType: 'Por horas',     reason: 'Pidio presupuesto ayer y respondio hoy con preguntas concretas', daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: true,  unreadMessagesCount: 2 },
+        { id: 'L122613', familyName: 'Familia Vidal Pons',       city: 'Barcelona',            caregiverInfo: { name: 'Carmen',       relation: 'Madre',  age: 82 }, serviceType: 'Interno',       reason: 'Pidio pensarlo en familia, han pasado 4 dias',                   daysWithoutTouch: 4,  lastTouchDate: '2026-05-11', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122476', familyName: 'Familia Baena Sanz',       city: 'Madrid',               caregiverInfo: { name: 'Antonia',      relation: 'Suegra', age: 90 }, serviceType: 'Por horas',     reason: 'Llamada agendada para manana 11:00',                             daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'Urgente',     hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121656', familyName: 'Familia Parellada Canals', city: "Sant Sadurni d'Anoia", caregiverInfo: { name: 'Joan',         relation: 'Padre',  age: 79 }, serviceType: 'Externo',       reason: 'Familia comparando con otras dos opciones',                      daysWithoutTouch: 6,  lastTouchDate: '2026-05-09', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121708', familyName: 'Familia Campos Rivera',    city: 'Alcala de Henares',    caregiverInfo: { name: 'Pilar',        relation: 'Madre',  age: 84 }, serviceType: 'Interno',       reason: 'Dijo que llamaria, hace 11 dias sin respuesta',                  daysWithoutTouch: 11, lastTouchDate: '2026-05-04', temperature: 'frio',     urgency: 'Urgente',     hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121547', familyName: 'Familia Sanchez Tartalo',  city: 'Madrid',               caregiverInfo: { name: 'Dolores',      relation: 'Madre',  age: 88 }, serviceType: 'Fin de semana', reason: 'No responde desde la propuesta hace 10 dias',                    daysWithoutTouch: 10, lastTouchDate: '2026-05-05', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121749', familyName: 'Familia Ferreiro Bergino', city: 'Madrid',               caregiverInfo: { name: 'Francisco',    relation: 'Tio',    age: 81 }, serviceType: 'Interno',       reason: 'Esperando que organice visita al domicilio',                     daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122131', familyName: 'Familia Roge Barcelo',     city: 'Barcelona',            caregiverInfo: { name: 'Albert',       relation: 'Marido', age: 76 }, serviceType: 'Interno',       reason: 'Urgencia operativa: necesita cuidadora antes del 30/05',         daysWithoutTouch: 2,  lastTouchDate: '2026-05-13', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122055', familyName: 'Familia Recio del Campo',  city: 'Collado Villalba',     caregiverInfo: { name: 'Mercedes',     relation: 'Madre',  age: 85 }, serviceType: 'Externo',       reason: 'No contesta WhatsApp ni llamadas hace 9 dias',                   daysWithoutTouch: 9,  lastTouchDate: '2026-05-06', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121843', familyName: 'Familia Avelino Redondo',  city: 'Madrid',               caregiverInfo: { name: 'Rosa',         relation: 'Mujer',  age: 78 }, serviceType: 'Por horas',     reason: 'Pidio no contactar hasta junio (viaje familiar)',                daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: true,  unreadMessagesCount: 1 },
+        { id: 'L122278', familyName: 'Familia Ruben Garcia',     city: 'Madrid',               caregiverInfo: { name: 'Manuel',       relation: 'Padre',  age: 83 }, serviceType: 'Por horas',     reason: 'Esperando respuesta tras enviarle el presupuesto',               daysWithoutTouch: 5,  lastTouchDate: '2026-05-10', temperature: 'templado', urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L121399', familyName: 'Familia Ortiz Pica',       city: 'Madrid',               caregiverInfo: { name: 'Concepcion',   relation: 'Madre',  age: 86 }, serviceType: 'Interno',       reason: 'Urgente: alta hospitalaria manana, sin alguien en casa',         daysWithoutTouch: 0,  lastTouchDate: '2026-05-15', temperature: 'caliente', urgency: 'Muy urgente', hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122701', familyName: 'Familia Lopez Iniesta',    city: 'Madrid',               caregiverInfo: { name: 'Isabel',       relation: 'Madre',  age: 81 }, serviceType: 'Interno',       reason: 'Sin contactar todavia, lead recien asignado',                    daysWithoutTouch: 1,  lastTouchDate: '2026-05-14', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L122845', familyName: 'Familia Mestres Carrasco', city: 'Sabadell',             caregiverInfo: { name: 'Jordi',        relation: 'Padre',  age: 89 }, serviceType: 'Externo',       reason: 'Pausa hasta que vuelva del viaje el 20/05',                      daysWithoutTouch: 3,  lastTouchDate: '2026-05-12', temperature: 'pausa',    urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0 },
+        { id: 'L120912', familyName: 'Familia Heredia Solis',    city: 'Madrid',               caregiverInfo: { name: 'Lucia',        relation: 'Madre',  age: 84 }, serviceType: 'Por horas',     reason: 'Sin respuesta hace 18 dias. Quedo fuera de ventana operativa.',  daysWithoutTouch: 18, lastTouchDate: '2026-04-27', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: true,  unreadMessagesCount: 1, historico: true },
+        { id: 'L120478', familyName: 'Familia Bertran Casas',    city: 'Barcelona',            caregiverInfo: { name: 'Marc',         relation: 'Padre',  age: 92 }, serviceType: 'Externo',       reason: 'Sin respuesta hace 22 dias tras envio presupuesto.',             daysWithoutTouch: 22, lastTouchDate: '2026-04-23', temperature: 'frio',     urgency: 'Estandar',    hasNewMessage: false, unreadMessagesCount: 0, historico: true }
+    ];
+
+    // Tope visual del dashboard. v1.13: 5 -> 10 (mas altura disponible con cards + toolbar).
+    var MAX_VISIBLE = 10;
 
     // ============================================================
     // MOCKS v1.6 (chat IA del pane central del detalle)
@@ -1093,6 +1414,79 @@
                 { title: 'Compartir valor primero',         rationale: 'En lugar de pedir respuesta, ofrecer algo util. Crea reciprocidad sin obligacion.',          example: 'Hola {contactName}, te paso un articulo que escribio una colega sobre cuidados a domicilio. Por si os sirve. Cualquier cosa, aqui estoy.' }
             ]
         }
+    };
+
+    // ============================================================
+    // v1.15: ASISTENTE IA CONFIGURABLE (drafts por AF) - mocks + servicio
+    // ============================================================
+    // Enums cerrados (asunción del plan §5; confirmar contra spec real cuando llegue).
+    var DRAFT_LENGTHS = ['short', 'medium'];
+    var TONE_STYLES = ['neutral', 'direct', 'empathic'];
+    var LENGTH_LABELS = { short: 'Corto', medium: 'Medio' };
+    var TONE_LABELS = { neutral: 'Neutral', direct: 'Directo', empathic: 'Empático' };
+    var LENGTH_TOOLTIP = 'short = ~100-200 chars. medium = ~200-450 chars.';
+    var TONE_TOOLTIP = 'neutral = balanceado. direct = al punto. empathic = empático y cálido.';
+    // TODO[spec]: copy real de fallback cuando llegue el Anexo del backend.
+    var DRAFT_FALLBACK_COPY = 'No pude generar un borrador automático para este caso. Redactá el mensaje manualmente con el contexto del lead.';
+
+    // Espejo de ACTIVE_AFS_JSON del backend: email del AF logueado -> af_key.
+    //   af_key se deriva de _currentUserEmail (sess.username). NO se hardcodea por lead.
+    var MOCK_ACTIVE_AFS = {
+        'patricia.vega@qida.es':    'patricia_vega',
+        'alejandro.vivas@qida.es':  'alejandro_vivas',
+        'eva.martin@qida.es':       'eva_martin',
+        'ana.pinilla@qida.es':      'ana_pinilla'
+    };
+
+    // ============================================================
+    // v1.19: AF SWITCHER (admins "ven como" cualquier AF) - config
+    // ============================================================
+    // Lista de admins. Sin Next.js (widget vanilla en Blob) no hay NEXT_PUBLIC_*: se configura
+    //   via CONFIG.adminEmails en QidaAssistant.init(...) (string CSV o array), con fallback.
+    var ADMIN_EMAILS_DEFAULT = ['alejandro.vivas@qida.es'];
+    // AFs impersonables (hardcode v1). TODO[afs]: reemplazar por fetch a GET /api/admin/afs.
+    var IMPERSONATABLE_AFS = [
+        { key: 'ana_pinilla', email: 'ana.pinilla@qida.es', display_name: 'Ana Pinilla' }
+    ];
+    var AF_SWITCH_STORAGE_KEY = 'qida_viewing_as';
+
+    // Config de variantes por AF (mock de GET/PUT /draft-variants). saveDraftVariants muta este
+    //   mapa. Si un af_key no está, getDraftVariantsSync devuelve los defaults (is_default:true).
+    var MOCK_DRAFT_VARIANTS_DEFAULT = [
+        { name: 'corto_directo', length: 'short',  tone_style: 'direct' },
+        { name: 'calido_medio',  length: 'medium', tone_style: 'empathic' }
+    ];
+    var MOCK_DRAFT_VARIANTS_BY_AF = {
+        // Ejemplo de AF con config custom (3 variantes).
+        'patricia_vega': [
+            { name: 'saludo_breve',        length: 'short',  tone_style: 'neutral' },
+            { name: 'seguimiento_calido',  length: 'medium', tone_style: 'empathic' },
+            { name: 'cierre_directo',      length: 'short',  tone_style: 'direct' }
+        ]
+    };
+
+    // Plantillas mock de texto por tono × largo (placeholders {contactName}/{relation}/
+    //   {caredPersonName} se resuelven contra el lead). Mientras no haya LLM real.
+    var TONE_TEMPLATES = {
+        neutral: {
+            short:  'Hola {contactName}, queria retomar el tema de {relation} {caredPersonName}. Cuando puedas, me decis y seguimos.',
+            medium: 'Hola {contactName}, espero que esten bien. Queria retomar lo que hablamos sobre el cuidado de {relation} {caredPersonName} y ver como seguimos. Cuando tengas un momento me escribis y coordinamos los proximos pasos.'
+        },
+        direct: {
+            short:  'Hola {contactName}, sigo a la espera de tu confirmacion. Tienes alguna duda que pueda resolver?',
+            medium: 'Hola {contactName}, te escribo para cerrar el tema del cuidado de {relation} {caredPersonName}. Necesito tu confirmacion para avanzar. Si quedo alguna duda con el presupuesto o el servicio, decime y lo resolvemos hoy mismo.'
+        },
+        empathic: {
+            short:  'Hola {contactName}, pensaba en {relation} {caredPersonName} estos dias. Como estan en casa? Sin prisa.',
+            medium: 'Hola {contactName}, espero que {relation} {caredPersonName} este lo mejor posible. Se que son momentos delicados, asi que sin ninguna prisa: cuando esten listos para retomar, aca estoy para ayudarles con lo que necesiten.'
+        }
+    };
+
+    // Overrides de escenario para QA de /recommendation (edge cases del plan).
+    var MOCK_RECOMMENDATION_OVERRIDES = {
+        'L120478': { should_followup_today: true,  fallback: false, drafts: [] },   // drafts vacíos
+        'L120912': { should_followup_today: true,  fallback: true,  drafts: [] }    // fallback
+        // (lead en 'pausa' -> should_followup_today:false, resuelto dinámicamente abajo)
     };
 
     // v1.10: TEMP_CONFIG, URGENCY_ORDER, TEMP_ORDER, STALE_THRESHOLD eliminados.
@@ -1165,6 +1559,21 @@
         undoToast: null,                // { leadId, expiresAt } | null
         undoTimeoutId: null,            // ID del setTimeout activo (o null)
 
+        // v1.13: dashboard AF reconstruido (3 vistas + filtros + señales WhatsApp/urgencia).
+        //   dashView: 'suggestions' | 'activities' | 'leads' (cada una = un endpoint).
+        //   dashRows: filas de la vista activa (cache de la "respuesta"). null = sin cargar.
+        //   dashLoading: true mientras vuelve el fetch de cambio de vista (atenua la tabla previa).
+        //   dashSegment: filtro de segmento client-side (compartido entre cards y chips de Filtros).
+        //   dashFiltersExpanded: bool del panel de chips de segmento.
+        //   dashOnlyNew: filtro del pill WhatsApp (hasNewMessage), se combina (AND) con dashSegment.
+        //   Se resetean en closeModal.
+        dashView: 'suggestions',
+        dashRows: null,
+        dashLoading: false,
+        dashSegment: null,              // null | 'caliente' | 'templado' | 'frio' | 'pausa' | 'urgente' | 'historico'
+        dashFiltersExpanded: false,
+        dashOnlyNew: false,
+
         // Detail state
         // v1.6: state.activePanel y state.editingTemp eliminados (no hay tabs ni temp editable
         // en el detalle). Se agregan draftMessage (textarea WhatsApp), attachmentsExpanded
@@ -1187,12 +1596,30 @@
         __waNeedsScroll: false,         // flag para auto-scroll al fondo del pane WhatsApp post-rerender
         __aiNeedsScroll: false,         // v1.9.1: flag para auto-scroll al fondo del pane Chat IA post-rerender
 
+        // v1.15: pantalla "Armá tu asistente" (state.view==='agentBuilder') + drafts dinámicos.
+        //   draftVariants: copia de trabajo en edición. draftVariantsSaved: último snapshot guardado
+        //   (dirty-check + descartar). draftVariantsLoaded: lazy. agentBuilderConfirmDiscard: modal.
+        //   recommendationCache: respuesta de /recommendation por lead (evita re-pedir por render).
+        //   Persisten en sesión (igual política que aiChatHistory); se resetea solo lo transitorio.
+        draftVariants: [],
+        draftVariantsSaved: [],
+        draftVariantsLoaded: false,
+        agentBuilderConfirmDiscard: false,
+        recommendationCache: {},
+
         // v1.8: toggle de orden de columnas del detalle (info vs IA en centro/derecha).
         //   false (default) -> WA | Info | IA   (orden actual de v1.7).
         //   true            -> WA | IA   | Info (swap entre centro y derecha).
         // Persiste en sesion del modal (no se resetea al navegar entre leads). Se resetea
         // a false en closeModal.
         detailLayoutSwapped: true,
+
+        // v1.17: dropdown de temperatura del header del detalle abierto/cerrado (transitorio).
+        tempEditorOpen: false,
+
+        // v1.19: AF switcher. Email del AF que un admin está "viendo como" (null = como yo).
+        //   Persiste en localStorage (AF_SWITCH_STORAGE_KEY); se hidrata en init.
+        viewingAsEmail: null,
 
         // Schedule modal (reutilizado desde Detail Y desde "Marcar hecho" de sugerencias/actividades)
         showScheduleModal: false,
@@ -1257,6 +1684,11 @@
     function getIaSummary(leadId) {
         if (EDITS.iaSummaries[leadId]) return EDITS.iaSummaries[leadId];
         return MOCK_IA_SUMMARIES[leadId] || null;
+    }
+
+    // v1.16: análisis IA (preparación de UI, sin backend ni edición). Solo lectura del mock.
+    function getIaAnalysis(leadId) {
+        return MOCK_IA_ANALYSIS[leadId] || null;
     }
 
     function getNotes(leadId) {
@@ -1349,28 +1781,28 @@
         close: function (id, reason) {
             // TODO[odoo]: POST /api/leads/:id/close { reason }
             return simulateLatency(80, 180).then(function () { return { ok: true, reason: reason }; });
-        },
+        }
+        // v1.13: getCoolingLeadsSync/getCoolingLeads ELIMINADOS. El dashboard ahora consume
+        //   DashboardService (3 vistas = 3 endpoints), ver abajo.
+    };
 
-        // v1.10: lista de leads enfriandose. El backend devuelve la cohorte ya filtrada
-        // y priorizada (ver TODOs al final del archivo). El frontend solo filtra los que
-        // la AF marco hechos en sesion (state.completedTodayIds).
-        //
-        // getCoolingLeadsSync: version sincrona, consumida por renderDashboard.
-        getCoolingLeadsSync: function () {
-            var out = [];
-            for (var i = 0; i < MOCK_COOLING_LEADS_RESPONSE.length; i++) {
-                var row = MOCK_COOLING_LEADS_RESPONSE[i];
-                if (state.completedTodayIds && state.completedTodayIds.has(row.leadId)) continue;
-                out.push(row);
-            }
-            return out;
+    // v1.13: capa de servicio del dashboard AF. 3 vistas = 3 endpoints separados, mismo shape.
+    //   fetchViewSync(view) -> lectura sincrona del mock (primer paint y refresh sin flash).
+    //   fetchView(view)     -> version async (simulateLatency) que usan el cambio de vista y el
+    //                          Refrescar. TODO[odoo]: reemplazar el cuerpo por fetch() real a
+    //                          GET /api/me/leads/{view} preservando esta API.
+    var DASH_MOCKS = {
+        suggestions: MOCK_SUGGESTIONS_RESPONSE,
+        activities:  MOCK_ACTIVITIES_RESPONSE,
+        leads:       MOCK_LEADS_RESPONSE
+    };
+    var DashboardService = {
+        fetchViewSync: function (view) {
+            return (DASH_MOCKS[view] || MOCK_SUGGESTIONS_RESPONSE).slice();
         },
-        // TODO[odoo]: GET /api/me/leads/cooling. Cuando se cablee, getCoolingLeadsSync
-        // pasa a leer state.coolingLeads (cacheado) y este getCoolingLeads dispara el
-        // fetch + setea el cache. En v1.10 ambos comparten el mismo mock.
-        getCoolingLeads: function () {
+        fetchView: function (view) {
             var self = this;
-            return simulateLatency(120, 280).then(function () { return self.getCoolingLeadsSync(); });
+            return simulateLatency(180, 360).then(function () { return self.fetchViewSync(view); });
         }
     };
 
@@ -2022,7 +2454,7 @@
             '.qida-shell-mark{width:28px;height:28px;border-radius:6px;background:var(--qg);color:#fff;display:flex;align-items:center;justify-content:center;}',
             '.qida-shell-tt-main{font-family:"Fraunces",Georgia,serif;font-feature-settings:"ss01";font-weight:600;font-size:16px;line-height:1;color:var(--s900);}',
             '.qida-shell-tt-sub{font-size:11px;color:var(--s500);margin-top:2px;}',
-            '.qida-shell-actions{display:flex;align-items:center;gap:10px;}',
+            '.qida-shell-actions{display:flex;align-items:center;gap:10px;margin-left:auto;}',
             '.qida-esc{font-size:11px;color:var(--s400);}',
             '.qida-icon-btn{background:transparent;border:0;padding:6px;border-radius:6px;cursor:pointer;color:var(--s600);display:inline-flex;align-items:center;justify-content:center;transition:background .15s;}',
             '.qida-icon-btn:hover{background:var(--s100);color:var(--s900);}',
@@ -2031,6 +2463,20 @@
             '.qida-shell-swap:hover{background:var(--s100);}',
             '.qida-shell-swap.active{background:#E1F5EE;color:#0F6E56;border-color:#c5e8dc;}',
             '.qida-content{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0;}',
+
+            /* v1.19: barra del AF switcher (admins). Banner amarillo en modo impersonación. */
+            '.qida-af-switch-bar{flex-shrink:0;display:flex;align-items:center;gap:10px;padding:7px 16px;border-bottom:0.5px solid var(--s200);background:#fff;font-size:12px;}',
+            '.qida-af-switch-bar.impersonating{background:#FEF3C7;border-bottom-color:#FCD34D;}',
+            '.qida-af-switch-label{display:inline-flex;align-items:center;gap:5px;color:var(--s500);font-weight:500;}',
+            '.qida-af-switch-label .qa-icon,.qida-af-switch-msg .qa-icon{flex-shrink:0;}',
+            '.qida-af-switch-hint{color:var(--s500);}',
+            '.qida-af-switch-msg{display:inline-flex;align-items:center;gap:6px;color:#92400E;font-weight:500;}',
+            '.qida-af-switch-msg strong{font-weight:700;}',
+            '.qida-af-switch-email{color:#b45309;font-weight:400;}',
+            '.qida-af-switch-right{display:flex;align-items:center;gap:8px;margin-left:auto;}',
+            '.qida-af-switch-select{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:12px;color:var(--s800);cursor:pointer;outline:none;}',
+            '.qida-af-switch-reset{background:#92400E;border:0;color:#fff;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;white-space:nowrap;}',
+            '.qida-af-switch-reset:hover{background:#78350f;}',
             '.qida-shell.qida-view-leaders .qida-content{overflow-y:auto;overflow-x:hidden;display:block;}',
 
             /* v1.10: coverage widget, dashboard search/chips/table, badges util ELIMINADOS.
@@ -2056,6 +2502,22 @@
             '.qida-dsh-days.lvl-fresh{background:#E1F5EE;color:#0F6E56;border-color:#c5e8dc;}',
             '.qida-dsh-days.lvl-warn{background:#fff7ed;color:#9a3412;border-color:#fed7aa;}',
             '.qida-dsh-days.lvl-stale{background:#fef2f2;color:#991b1b;border-color:#fecaca;}',
+
+            /* v1.17: pill de temperatura editable en el header del detalle + selector */
+            '.qida-tbar{display:inline-block;width:16px;height:8px;border-radius:4px;flex-shrink:0;background:var(--s300);}',
+            '.qida-tbar-caliente{background:#EF4444;}',
+            '.qida-tbar-templado{background:#F59E0B;}',
+            '.qida-tbar-frio{background:#3B82F6;}',
+            '.qida-tbar-pausa{background:var(--s400);}',
+            '.qida-dsh-temp-wrap{position:relative;display:inline-flex;}',
+            '.qida-dsh-temp{display:inline-flex;align-items:center;gap:6px;background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:3px 8px;font-size:11px;font-weight:500;color:var(--s700);cursor:pointer;font-family:inherit;line-height:1.2;white-space:nowrap;}',
+            '.qida-dsh-temp:hover{border-color:var(--s400);background:var(--s50);}',
+            '.qida-dsh-temp .qa-icon{color:var(--s400);}',
+            '.qida-temp-backdrop{position:fixed;inset:0;z-index:60;}',
+            '.qida-temp-menu{position:absolute;top:100%;left:0;margin-top:4px;background:#fff;border:0.5px solid var(--s200);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.16);padding:4px;z-index:61;min-width:160px;display:flex;flex-direction:column;gap:2px;}',
+            '.qida-temp-opt{display:flex;align-items:center;gap:8px;background:transparent;border:0;border-radius:6px;padding:7px 10px;font-size:12.5px;color:var(--s800);cursor:pointer;font-family:inherit;text-align:left;}',
+            '.qida-temp-opt:hover{background:var(--s50);}',
+            '.qida-temp-opt.active{background:var(--qg-soft);color:var(--qg);font-weight:500;}',
 
             /* WhatsApp pane */
             '.qida-pane-wa{background:#ECE5DD;display:flex;flex-direction:column;min-height:0;min-width:0;}',
@@ -2134,11 +2596,7 @@
             '.qida-act-row-when{font-size:11px;font-weight:400;color:var(--s500);margin-left:auto;white-space:nowrap;}',
             '.qida-act-row.overdue .qida-act-row-when{color:#993C1D;}',
             '.qida-empty-act{font-size:12px;color:var(--s500);font-style:italic;padding:2px 0;margin:0;}',
-            '.qida-followers{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}',
-            '.qida-follower{display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 4px;background:var(--s50);border:0.5px solid var(--s200);border-radius:999px;cursor:default;}',
-            '.qida-follower-avatar{width:22px;height:22px;border-radius:50%;background:#E1F5EE;color:#0F6E56;font-size:10px;font-weight:500;display:flex;align-items:center;justify-content:center;font-family:"Manrope";}',
-            '.qida-follower-name{font-size:12px;font-weight:400;color:var(--s700);}',
-            '.qida-follower-role{font-size:10px;font-weight:400;color:var(--s500);}',
+            /* v1.18: CSS de .qida-follower* eliminado junto con el bloque "Equipo siguiendo". */
 
             /* footer / buttons */
             '.qida-btn-primary{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;background:var(--qg);color:#fff;border:0;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s;}',
@@ -2199,6 +2657,15 @@
             '.qida-aichat-copy-wa{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;transition:background .15s;}',
             '.qida-aichat-copy-wa:hover{background:#143C32;}',
             '.qida-aichat-rationale{font-size:12px;font-weight:400;color:var(--s600);font-style:italic;margin:0 0 8px;}',
+            /* v1.20: estados loading / error del fetch real de recomendacion */
+            '.qida-aichat-loading{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:12.5px;padding:2px 0;}',
+            '.qida-aichat-loading-text{font-weight:400;}',
+            '.qida-spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--s200);border-top-color:#0F6E56;border-radius:50%;animation:qida-spin .7s linear infinite;flex:0 0 auto;}',
+            '@keyframes qida-spin{to{transform:rotate(360deg);}}',
+            '.qida-aichat-error{margin-top:4px;padding:10px 12px;border:0.5px solid #F0C9C0;border-radius:10px;background:#FCF4F2;}',
+            '.qida-aichat-error-text{display:flex;align-items:center;gap:5px;margin:0 0 8px;font-size:12.5px;color:#9A3A28;line-height:1.4;}',
+            '.qida-aichat-retry{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#fff;color:#9A3A28;border:0.5px solid #E0A99B;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
+            '.qida-aichat-retry:hover{background:#FBEEEA;}',
             '.qida-aichat-mat-card{margin-top:6px;padding:10px 12px;border:0.5px solid var(--s200);border-radius:10px;background:#fff;}',
             '.qida-aichat-mat-title{font-size:12.5px;font-weight:500;color:var(--s800);margin-bottom:3px;}',
             '.qida-aichat-mat-desc{font-size:12px;font-weight:400;color:var(--s600);margin-bottom:6px;line-height:1.45;}',
@@ -2255,42 +2722,134 @@
             '.qida-toast{position:absolute;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--s900);color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 8px 20px rgba(0,0,0,.25);z-index:6;opacity:0;transition:opacity .2s,transform .2s;display:inline-flex;align-items:center;gap:8px;font-family:"Manrope",system-ui,sans-serif;pointer-events:none;}',
             '.qida-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}',
 
-            /* v1.10: bloque "v1.4 DASHBOARD" (container + cobertura + tabla unificada +
-               asistente header) ELIMINADO. Se reemplaza por el bloque del dashboard nuevo
-               (qida-cooling-*). */
+            /* v1.13: el bloque del dashboard "cooling" (v1.10, .qida-cooling-*) fue reemplazado
+               por el bloque .qida-dash-* de abajo (cards + toolbar + tabla por temperatura). */
 
             /* ============================================================
-               v1.10 DASHBOARD: lista priorizada de leads enfriandose
+               v1.14 DASHBOARD AF: cards (2 grupos) + toolbar + tabla por columnas
+               (Temperatura / Días coloreado / Estado con badges) + leyenda. Sistema visual
+               portado del Panel de Líderes. Sin color de fila / rail / tinte.
                ============================================================ */
-            '.qida-cooling-dashboard{padding:16px;position:relative;flex:1;overflow-y:auto;background:#fff;}',
-            '.qida-cooling-header{display:grid;grid-template-columns:2fr 1fr 2.5fr 1fr 0fr;gap:16px;padding:8px 16px;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--s500);font-weight:500;border-bottom:0.5px solid var(--s100);}',
-            '.qida-cooling-list{display:flex;flex-direction:column;gap:4px;margin-top:8px;}',
-            '.qida-cooling-row{display:grid;grid-template-columns:2fr 1fr 2.5fr 1fr 0fr;gap:16px;padding:12px 16px;border-radius:8px;cursor:pointer;align-items:center;transition:background-color 120ms;position:relative;}',
-            '.qida-cooling-row:hover{background:var(--s50);}',
-            '.qida-cooling-row:hover .qida-cooling-row-actions{opacity:1;}',
-            '.qida-cooling-row-actions{opacity:0;transition:opacity 120ms;}',
+            '.qida-dash-dashboard{padding:16px;position:relative;flex:1;overflow-y:auto;background:#fff;}',
 
-            /* Bandas de urgencia (background sutil sobre fondo blanco del dashboard) */
-            '.qida-cooling-lvl-warn   {background:rgba(245,158,11,0.05);}',
-            '.qida-cooling-lvl-orange {background:rgba(234,88,12,0.07);}',
-            '.qida-cooling-lvl-stale  {background:rgba(220,38,38,0.06);}',
-            '.qida-cooling-lvl-danger {background:rgba(220,38,38,0.10);}',
+            /* Banda superior: 2 grupos con label (estética .qida-leader-kpi de admin) */
+            '.qida-dash-cards{display:flex;align-items:stretch;gap:20px;margin-bottom:14px;}',
+            '.qida-dash-cardgroup{display:flex;flex-direction:column;gap:6px;}',
+            '.qida-dash-cardgroup-grow{flex:1;}',
+            '.qida-dash-cardgroup-label{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--s400);padding-left:2px;}',
+            '.qida-dash-cardgroup-cards{display:flex;gap:12px;flex:1;}',
+            '.qida-dash-cardgroup-temps{display:grid;grid-template-columns:repeat(3,1fr);}',
+            '.qida-dash-card{display:flex;flex-direction:column;gap:3px;padding:12px 16px;border:0.5px solid var(--s200);border-radius:10px;background:#fff;font-family:inherit;text-align:left;min-width:118px;}',
+            '.qida-dash-card-label{font-size:11px;font-weight:500;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;}',
+            '.qida-dash-card-num{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:28px;line-height:1.1;color:var(--s900);}',
+            '.qida-dash-card-sub{font-size:11px;color:var(--s500);}',
+            '.qida-dash-card-conv{background:var(--qg-soft);border-color:var(--qg-soft-border);}',
+            '.qida-dash-card-conv .qida-dash-card-num{color:var(--qg);}',
+            /* Cards de temperatura: clicables, acento de color en el numero, estado activo */
+            '.qida-dash-card-temp{cursor:pointer;transition:background-color .12s;border-bottom-width:3px;border-bottom-color:var(--s200);}',
+            '.qida-dash-card-temp:hover{background:var(--s50);}',
+            '.qida-card-caliente .qida-dash-card-num{color:#EF4444;}',
+            '.qida-card-templado .qida-dash-card-num{color:#F59E0B;}',
+            '.qida-card-frio .qida-dash-card-num{color:#3B82F6;}',
+            '.qida-dash-card-temp.active .qida-dash-card-label{font-weight:600;color:var(--s800);}',
+            '.qida-card-caliente.active{border-bottom-color:#EF4444;background:#fef2f2;}',
+            '.qida-card-templado.active{border-bottom-color:#F59E0B;background:#fffbeb;}',
+            '.qida-card-frio.active{border-bottom-color:#3B82F6;background:#eff6ff;}',
 
-            /* Celdas */
-            '.qida-cell-familia .qida-cell-line1{font-weight:500;font-size:13px;color:var(--s900);}',
-            '.qida-cell-familia .qida-cell-line2{font-size:12px;color:var(--s700);}',
-            '.qida-cell-tipo{font-size:13px;color:var(--s900);}',
-            '.qida-cell-porque{font-size:13px;color:var(--s700);line-height:1.4;}',
-            '.qida-cell-sincontacto .qida-cell-days{font-size:22px;font-weight:500;color:var(--s900);line-height:1.1;display:inline-flex;align-items:center;gap:4px;}',
-            '.qida-cell-sincontacto .qida-cell-date{font-size:11px;color:var(--s500);margin-top:2px;}',
-            '.qida-cooling-lvl-danger .qida-cell-days{color:var(--red600);}',
+            /* Toolbar */
+            '.qida-dash-toolbar{display:flex;align-items:center;gap:12px;padding:2px 2px 10px;border-bottom:0.5px solid var(--s100);}',
+            '.qida-dash-toolbar-left{display:flex;align-items:center;}',
+            '.qida-dash-toolbar-center{flex:1;display:flex;justify-content:center;}',
+            '.qida-dash-toolbar-right{display:flex;align-items:center;gap:6px;margin-left:auto;}',
+            '.qida-dash-filter-btn{display:inline-flex;align-items:center;gap:5px;background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 12px;font-size:13px;color:var(--s700);cursor:pointer;font-family:inherit;}',
+            '.qida-dash-filter-btn:hover{border-color:var(--s400);}',
+            '.qida-dash-filter-btn.active{border-color:var(--qg);color:var(--qg);background:var(--qg-soft);}',
+            '.qida-dash-clear-btn{display:inline-flex;align-items:center;gap:4px;background:transparent;border:0;color:var(--s500);cursor:pointer;font-family:inherit;font-size:12px;margin-left:8px;}',
+            '.qida-dash-clear-btn:hover{color:var(--s800);}',
+            '.qida-dash-segments{display:flex;flex-wrap:wrap;gap:6px;padding:10px 2px 2px;}',
+            '.qida-seg-chip{background:#fff;border:0.5px solid var(--s200);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--s700);cursor:pointer;font-family:inherit;}',
+            '.qida-seg-chip:hover{border-color:var(--s400);}',
+            '.qida-seg-chip.active{background:var(--qg);border-color:var(--qg);color:#fff;}',
+            '.qida-view-chip{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 12px;font-size:13px;color:var(--s700);cursor:pointer;font-family:inherit;}',
+            '.qida-view-chip:hover{border-color:var(--s400);}',
+            '.qida-view-chip.active{background:var(--qg);border-color:var(--qg);color:#fff;}',
+            /* Pill WhatsApp (centro): rojo de alerta, mismo rojo que el badge de urgencia */
+            '.qida-wa-pill{display:inline-flex;align-items:center;gap:7px;background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:999px;padding:5px 14px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;}',
+            '.qida-wa-pill:hover{background:#fee2e2;}',
+            '.qida-wa-pill.active{background:#dc2626;border-color:#dc2626;color:#fff;}',
+            '.qida-wa-pill-dot{width:8px;height:8px;border-radius:50%;background:#dc2626;display:inline-block;}',
+            '.qida-wa-pill.active .qida-wa-pill-dot{background:#fff;}',
+
+            /* Tabla (estética admin: fondo blanco, border-bottom sutil, th gris, hover #fafafa).
+               grid-template IDENTICO en header y fila (7 cols). El rediseño v1.14 quita color
+               de fila / rail / tinte: temperatura, días y estado viven en columnas propias. */
+            /* Card contenedor de la tabla (patrón .qida-leader-table-card de admin) */
+            '.qida-dash-table-card{margin-top:8px;border:0.5px solid var(--s200);border-radius:10px;overflow:hidden;background:#fff;transition:opacity 160ms;}',
+            '.qida-dash-table-card.qida-dash-loading{opacity:.5;pointer-events:none;}',  /* atenuacion entre vistas (no vaciar) */
+            '.qida-dash-table-bar{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:0.5px solid var(--s200);}',
+            '.qida-dash-table-title{font-size:13px;font-weight:600;color:var(--s800);}',
+            '.qida-dash-table-count{font-size:11px;color:var(--s500);}',
+            /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
+               FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
+               distinto los fr y se desalinearían. */
+            '.qida-dash-header{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 84px 140px 132px;gap:14px;padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
+            '.qida-dash-list{display:block;}',
+            '.qida-dash-row{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 84px 140px 132px;gap:14px;padding:11px 14px;cursor:pointer;align-items:center;transition:background-color .12s;background:#fff;border-bottom:0.5px solid #f3f4f6;}',
+            '.qida-dash-row:last-child{border-bottom:0;}',
+            '.qida-dash-row:hover{background:#fafafa;}',
+            '.qida-dash-row:hover .qida-dash-row-actions{opacity:1;}',
+            '.qida-dash-row-actions{opacity:0;transition:opacity .12s;text-align:right;}',
+
+            /* Celda Familia */
+            '.qida-cell-familia .qida-cell-line1{display:flex;align-items:center;}',
+            '.qida-cell-familia .qida-cell-name{font-weight:500;font-size:13px;color:var(--s900);}',
+            '.qida-cell-familia .qida-cell-line2{font-size:12px;color:var(--s600);margin-top:2px;}',
+            '.qida-cell-tipo{font-size:12.5px;color:var(--s800);}',
+            /* "Por qué" con ellipsis + tooltip (title) para no romper el ancho del modal AF */
+            '.qida-cell-porque{font-size:12.5px;color:var(--s700);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+
+            /* Columna Temperatura: barrita sólida monocroma + texto (colores admin) */
+            '.qida-dash-temp{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--s700);white-space:nowrap;}',
+            '.qida-dash-temp-bar{display:inline-block;width:18px;height:8px;border-radius:4px;background:var(--s300);flex-shrink:0;}',
+            '.qida-dash-temp-caliente .qida-dash-temp-bar{background:#EF4444;}',
+            '.qida-dash-temp-templado .qida-dash-temp-bar{background:#F59E0B;}',
+            '.qida-dash-temp-frio .qida-dash-temp-bar{background:#3B82F6;}',
+            '.qida-dash-temp-pausa .qida-dash-temp-bar{background:var(--s400);}',
+
+            /* Columna Días: número coloreado por gravedad (texto, no fondo) + fecha corta */
+            '.qida-cell-dias .qida-cell-days{font-size:20px;font-weight:500;line-height:1.1;color:var(--s700);}',
+            '.qida-cell-days-unit{font-size:11px;font-weight:400;margin-left:3px;opacity:.7;}',
+            '.qida-cell-dias .qida-cell-date{font-size:11px;color:var(--s500);margin-top:2px;}',
+            '.qida-dash-dias-normal{color:var(--s700);}',
+            '.qida-dash-dias-amber{color:#92400E;}',
+            '.qida-dash-dias-amber-strong{color:#92400E;font-weight:600;}',
+            '.qida-dash-dias-red{color:#991B1B;font-weight:600;}',
+
+            /* Columna Estado: badges admin (apilados). Mismas paletas que .qida-leader-status */
+            '.qida-cell-estado{display:flex;flex-direction:column;gap:4px;align-items:flex-start;}',
+            '.qida-dash-badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:8px;font-size:10.5px;font-weight:500;white-space:nowrap;}',
+            '.qida-dash-badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}',
+            '.qida-dash-badge-new{background:#ECFDF5;color:#047857;}',
+            '.qida-dash-badge-urgent{background:#FEF2F2;color:#991B1B;}',
+
+            /* Leyenda explícita debajo de la tabla */
+            '.qida-dash-legend{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:12px 12px 0;font-size:11.5px;color:var(--s600);}',
+            '.qida-dash-legend-item{display:inline-flex;align-items:center;gap:6px;}',
+            '.qida-dash-legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block;}',
+            '.qida-dash-legend-sep{width:1px;height:14px;background:var(--s200);display:inline-block;}',
+            '.qida-dash-legdot-caliente{background:#EF4444;}',
+            '.qida-dash-legdot-templado{background:#F59E0B;}',
+            '.qida-dash-legdot-frio{background:#3B82F6;}',
+            '.qida-dash-legdot-pausa{background:var(--s400);}',
+            '.qida-dash-legdot-new{background:#047857;}',
+            '.qida-dash-legdot-urgent{background:#991B1B;}',
 
             /* Boton "Marcar hecho" (hover) */
             '.qida-mark-done-btn{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 10px;font-size:12px;color:#0F6E56;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;}',
             '.qida-mark-done-btn:hover{border-color:#0F6E56;background:#F7FAF8;}',
 
             /* Boton Refrescar abajo de la lista */
-            '.qida-cooling-actions{display:flex;justify-content:center;margin-top:16px;}',
+            '.qida-dash-actions{display:flex;justify-content:center;margin-top:16px;}',
             '.qida-refresh-btn{background:transparent;border:0.5px solid var(--s200);border-radius:8px;padding:8px 14px;font-size:13px;color:var(--s900);cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:inherit;}',
             '.qida-refresh-btn:hover{border-color:var(--s400);background:var(--s50);}',
 
@@ -2306,7 +2865,12 @@
             /* Detalle: anchos por posicion estructural. En 760px se oculta la 1ra columna (WA). */
             '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 26%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
             '@media (max-width:980px){.qida-detail-body > *:nth-child(3){display:none;}}',
-            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}.qida-cooling-header{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}.qida-cooling-row{grid-template-columns:2fr 1fr 1.5fr 0.8fr 0fr;}}',
+            '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}}',
+            /* v1.14 dashboard AF responsive: a 1100px se oculta "Tipo" (6 cols); a 980px se oculta
+               la fecha-sub de Días y las cards apilan; a 760px se compacta la grilla. */
+            '@media (max-width:1100px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(150px,2fr) minmax(140px,2fr) 116px 80px 132px 124px;}.qida-dash-header > div:nth-child(2){display:none;}.qida-cell-tipo{display:none;}}',
+            '@media (max-width:980px){.qida-cell-dias .qida-cell-date{display:none;}.qida-dash-cards{flex-direction:column;gap:10px;}}',
+            '@media (max-width:760px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(110px,1.6fr) minmax(100px,1.5fr) 86px 64px 110px 112px;gap:10px;}}',
 
             /* ============================================================ */
             /* v1.12: PANEL DE LIDERES                                       */
@@ -2393,7 +2957,46 @@
 
             /* Responsive panel de lideres */
             '@media (max-width:980px){.qida-leader-kpis{grid-template-columns:repeat(2,1fr);}.qida-leader-charts{grid-template-columns:1fr;}}',
-            '@media (max-width:680px){.qida-leader-search{min-width:140px;}.qida-leader-kpis{grid-template-columns:1fr;}}'
+            '@media (max-width:680px){.qida-leader-search{min-width:140px;}.qida-leader-kpis{grid-template-columns:1fr;}}',
+
+            /* ============================================================ */
+            /* v1.15: ASISTENTE CONFIGURABLE — "Armá tu asistente"           */
+            /* ============================================================ */
+            /* Botón de acceso en el shell header (dashboard) */
+            '.qida-ab-open-btn{display:inline-flex;align-items:center;gap:5px;background:transparent;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--qg);cursor:pointer;font-family:inherit;font-weight:500;}',
+            '.qida-ab-open-btn:hover{border-color:var(--qg);background:var(--qg-soft);}',
+            /* Pantalla */
+            '.qida-ab{position:relative;flex:1;overflow-y:auto;background:#fff;padding:20px 16px;}',
+            '.qida-ab-inner{max-width:720px;margin:0 auto;}',
+            '.qida-ab-lead{font-size:13px;color:var(--s600);line-height:1.5;margin:0 0 16px;}',
+            '.qida-ab-list{display:flex;flex-direction:column;gap:10px;}',
+            '.qida-ab-row{border:0.5px solid var(--s200);border-radius:10px;padding:12px;background:#fff;}',
+            '.qida-ab-row.has-error{border-color:#fca5a5;}',
+            '.qida-ab-fields{display:grid;grid-template-columns:1fr 140px 150px auto;gap:10px;align-items:end;}',
+            '.qida-ab-field{display:flex;flex-direction:column;gap:4px;}',
+            '.qida-ab-label{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--s500);display:inline-flex;align-items:center;gap:3px;}',
+            '.qida-ab-label .qa-icon{color:var(--s400);cursor:help;}',
+            '.qida-ab-input{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px;color:var(--s900);outline:none;width:100%;box-sizing:border-box;}',
+            '.qida-ab-input:focus{border-color:var(--qg);}',
+            '.qida-ab-select{max-width:none;width:100%;}',
+            '.qida-ab-remove{background:transparent;border:0.5px solid var(--s200);border-radius:8px;padding:7px;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;height:34px;}',
+            '.qida-ab-remove:hover:not([disabled]){border-color:#fca5a5;color:#991B1B;background:#FEF2F2;}',
+            '.qida-ab-remove[disabled]{opacity:.4;cursor:not-allowed;}',
+            '.qida-ab-error{font-size:11.5px;color:#991B1B;margin:8px 0 0;}',
+            '.qida-ab-general-error{font-size:12px;color:#991B1B;margin:12px 0 0;}',
+            '.qida-ab-add{margin-top:12px;}',
+            '.qida-ab-add[disabled]{opacity:.5;cursor:not-allowed;}',
+            '.qida-ab-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;padding-top:16px;border-top:0.5px solid var(--s100);}',
+            '.qida-btn-primary[disabled]{opacity:.5;cursor:not-allowed;}',
+            /* Confirm "¿Descartar cambios?" */
+            '.qida-ab-confirm-overlay{position:absolute;inset:0;background:rgba(28,25,23,.35);display:flex;align-items:center;justify-content:center;z-index:20;}',
+            '.qida-ab-confirm{background:#fff;border-radius:12px;padding:20px;max-width:320px;width:90%;box-shadow:0 16px 40px rgba(0,0,0,.25);}',
+            '.qida-ab-confirm-title{font-size:15px;font-weight:600;color:var(--s900);margin:0 0 6px;}',
+            '.qida-ab-confirm-sub{font-size:12.5px;color:var(--s600);margin:0 0 16px;}',
+            '.qida-ab-confirm-actions{display:flex;justify-content:flex-end;gap:8px;}',
+            '.qida-ab-discard-btn{background:#dc2626;}',
+            '.qida-ab-discard-btn:hover{background:#b91c1c;}',
+            '@media (max-width:680px){.qida-ab-fields{grid-template-columns:1fr 1fr auto;}.qida-ab-field-name{grid-column:1 / -1;}}'
         ].join('');
 
         var style = document.createElement('style');
@@ -2410,27 +3013,161 @@
     //   renderAssistant{Pill,Expanded,HeaderChip,Panel} ELIMINADAS.
     //   El dashboard pasa a una vista unica enfocada: maximo 5 leads enfriandose,
     //   sin tabs, sin filtros, sin asistente.
-    function renderDashboard() {
-        var feed = LeadService.getCoolingLeadsSync();
-        var visible = feed.slice(0, MAX_VISIBLE);
+    // ============================================================
+    // v1.13: helpers del dashboard AF
+    // ============================================================
+    var MONTHS_ES_SHORT = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
-        // El estado vacio y el toast de undo son mutuamente compatibles (el toast puede
-        // estar visible incluso si la lista esta vacia, ej. la AF marco hecha la ultima fila).
-        if (visible.length === 0) {
-            return '<div class="qida-cooling-dashboard">'
-                + renderEmptyState()
-                + renderUndoToast()
-            + '</div>';
+    // Normaliza temperatura a 'caliente'|'templado'|'frio'|'pausa' (acepta 'frío' con acento).
+    function normalizeTemp(t) {
+        if (!t) return '';
+        var s = String(t).toLowerCase();
+        if (s.indexOf('cali') > -1) return 'caliente';
+        if (s.indexOf('templ') > -1) return 'templado';
+        if (s.indexOf('fr') > -1) return 'frio';   // frio / frío
+        if (s.indexOf('paus') > -1) return 'pausa';
+        return s;
+    }
+
+    // Normaliza urgencia a 'alta'|'media'|'baja'|null. Acepta el vocabulario nuevo
+    //   (alta/media/baja) Y el del detalle (Muy urgente/Urgente/Estandar).
+    //   TODO: unificar vocabulario de urgencia con el detalle cuando aterrice el backend F3.
+    function normalizeUrgency(u) {
+        if (!u) return null;
+        var s = String(u).toLowerCase();
+        if (s === 'alta' || s.indexOf('muy urgente') > -1) return 'alta';
+        if (s === 'media' || s === 'urgente') return 'media';
+        if (s === 'baja' || s.indexOf('estandar') > -1 || s.indexOf('estándar') > -1) return 'baja';
+        return null;
+    }
+
+    function priorityRank(row) {
+        var u = normalizeUrgency(row.urgency);
+        return u === 'alta' ? 3 : u === 'media' ? 2 : u === 'baja' ? 1 : 0;
+    }
+
+    function formatShortDate(iso) {
+        if (!iso) return '';
+        var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+        if (!m) return iso;
+        return parseInt(m[3], 10) + ' ' + (MONTHS_ES_SHORT[parseInt(m[2], 10) - 1] || '');
+    }
+
+    // Vista activa menos los completados en sesion (state.completedTodayIds es global por id).
+    function liveDashRows() {
+        var rows = state.dashRows || [];
+        var out = [];
+        for (var i = 0; i < rows.length; i++) {
+            if (state.completedTodayIds && state.completedTodayIds.has(rows[i].id)) continue;
+            out.push(rows[i]);
+        }
+        return out;
+    }
+
+    function matchesSegment(row, seg) {
+        if (!seg) return true;
+        switch (seg) {
+            case 'caliente':
+            case 'templado':
+            case 'frio':
+            case 'pausa':     return normalizeTemp(row.temperature) === seg;
+            case 'urgente':   return normalizeUrgency(row.urgency) === 'alta';
+            case 'historico': return !!row.historico;
+            default: return true;
+        }
+    }
+
+    function countByTemp(rows, temp) {
+        var n = 0;
+        for (var i = 0; i < rows.length; i++) if (normalizeTemp(rows[i].temperature) === temp) n++;
+        return n;
+    }
+
+    // Filtros client-side (segmento AND pill WhatsApp) + agrupado "mensajes nuevos al tope"
+    //   (sort por urgencia desc + dias desc) + resto en orden del endpoint + slice MAX_VISIBLE.
+    function buildDashFeed(base) {
+        var filtered = [];
+        for (var i = 0; i < base.length; i++) {
+            var r = base[i];
+            if (!matchesSegment(r, state.dashSegment)) continue;
+            if (state.dashOnlyNew && !r.hasNewMessage) continue;
+            filtered.push(r);
+        }
+        var news = [], rest = [];
+        for (var j = 0; j < filtered.length; j++) {
+            if (filtered[j].hasNewMessage) news.push(filtered[j]); else rest.push(filtered[j]);
+        }
+        news.sort(function (a, b) {
+            var pr = priorityRank(b) - priorityRank(a);
+            if (pr !== 0) return pr;
+            return b.daysWithoutTouch - a.daysWithoutTouch;
+        });
+        return news.concat(rest).slice(0, MAX_VISIBLE);
+    }
+
+    // Cambio de vista (chip) o Refrescar. resetFilters=true solo en cambio de vista.
+    //   MVP: refresh manual del badge WhatsApp (boton Refrescar o cambio de vista).
+    //   TODO: evaluar polling cada 30-60s o push (SignalR/SSE) en iteracion siguiente.
+    //   La logica de marcar como leido la maneja el backend al abrir el detalle del lead.
+    function loadDashView(view, resetFilters) {
+        state.dashView = view;
+        if (resetFilters) {
+            state.dashSegment = null;
+            state.dashOnlyNew = false;
+        }
+        state.dashLoading = true;
+        rerenderContent();  // mantiene la tabla previa atenuada mientras vuelve el fetch
+        DashboardService.fetchView(view).then(function (rows) {
+            if (state.dashView !== view) return;  // race guard: cambio de vista mientras cargaba
+            state.dashRows = rows;
+            state.dashLoading = false;
+            rerenderContent();
+        });
+    }
+
+    // ============================================================
+    // v1.13: render del dashboard AF
+    // ============================================================
+    function renderDashboard() {
+        // Primer paint sincrono: si la vista activa no tiene datos y no estamos cargando,
+        //   leemos el mock sync para no mostrar tabla vacia en el primer render.
+        if (state.dashRows === null && !state.dashLoading) {
+            state.dashRows = DashboardService.fetchViewSync(state.dashView);
         }
 
-        var rowsHtml = '';
-        for (var i = 0; i < visible.length; i++) rowsHtml += renderCoolingRow(visible[i]);
+        var base = liveDashRows();          // vista activa menos completados en sesion
+        var ordered = buildDashFeed(base);  // filtros + nuevos al tope + sort + slice
 
-        return '<div class="qida-cooling-dashboard">'
-            + renderCoolingHeader()
-            + '<div class="qida-cooling-list">' + rowsHtml + '</div>'
-            + '<div class="qida-cooling-actions">'
-                + '<button class="qida-refresh-btn" data-action="refresh-cooling">'
+        var listHtml;
+        if (ordered.length === 0) {
+            listHtml = renderEmptyState();
+        } else {
+            listHtml = '';
+            // v1.14: el sort "mensajes nuevos al tope" se mantiene; el divider visual se elimina
+            //   (la columna Estado con el badge "Mensaje nuevo" ya cumple esa función).
+            for (var i = 0; i < ordered.length; i++) listHtml += renderDashRow(ordered[i]);
+        }
+
+        // v1.14.1: tabla encapsulada en card con borde (patrón .qida-leader-table-card).
+        var DASH_VIEW_TITLES = { suggestions: 'Sugerencias para hoy', activities: 'Actividades programadas', leads: 'Todos los leads' };
+        var tableTitle = DASH_VIEW_TITLES[state.dashView] || 'Leads';
+        var countLabel = ordered.length + (ordered.length === 1 ? ' lead' : ' leads');
+        var cardCls = 'qida-dash-table-card' + (state.dashLoading ? ' qida-dash-loading' : '');
+
+        return '<div class="qida-dash-dashboard">'
+            + renderDashCards(base)
+            + renderDashToolbar(base)
+            + '<div class="' + cardCls + '">'
+                + '<div class="qida-dash-table-bar">'
+                    + '<span class="qida-dash-table-title">' + esc(tableTitle) + '</span>'
+                    + '<span class="qida-dash-table-count">' + countLabel + '</span>'
+                + '</div>'
+                + renderDashHeader()
+                + '<div class="qida-dash-list">' + listHtml + '</div>'
+            + '</div>'
+            + renderDashLegend()
+            + '<div class="qida-dash-actions">'
+                + '<button class="qida-refresh-btn" data-action="dash-refresh">'
                     + icon('refresh-cw', 14) + ' Refrescar'
                 + '</button>'
             + '</div>'
@@ -2438,49 +3175,212 @@
         + '</div>';
     }
 
-    // Header de columnas (sticky a la lista pero sin sticky CSS).
-    function renderCoolingHeader() {
-        return '<div class="qida-cooling-header">'
+    // Banda superior: 2 grupos con label (estética .qida-leader-kpi del Panel de Líderes).
+    //   "TU IMPACTO" = Convertidos (display-only, no filtra). "CARTERA ACTIVA" = 3 cards de
+    //   temperatura clicables (escriben state.dashSegment, igual que los chips de Filtros).
+    function renderDashCards(base) {
+        // "Convertidos": valor mock, display-only.
+        // TODO: conectar con endpoint cuando esté disponible (GET /api/me/leads/converted?period=current_month).
+        var convertidos = 7;
+        return '<div class="qida-dash-cards">'
+            + '<div class="qida-dash-cardgroup">'
+                + '<div class="qida-dash-cardgroup-label">Tu impacto</div>'
+                + '<div class="qida-dash-cardgroup-cards">'
+                    + '<div class="qida-dash-card qida-dash-card-conv">'
+                        + '<div class="qida-dash-card-label">Convertidos</div>'
+                        + '<div class="qida-dash-card-num">' + convertidos + '</div>'
+                        + '<div class="qida-dash-card-sub">este mes</div>'
+                    + '</div>'
+                + '</div>'
+            + '</div>'
+            + '<div class="qida-dash-cardgroup qida-dash-cardgroup-grow">'
+                + '<div class="qida-dash-cardgroup-label">Cartera activa</div>'
+                + '<div class="qida-dash-cardgroup-cards qida-dash-cardgroup-temps">'
+                    + renderDashCard('caliente', 'Calientes', countByTemp(base, 'caliente'))
+                    + renderDashCard('templado', 'Templados', countByTemp(base, 'templado'))
+                    + renderDashCard('frio',     'Fríos',     countByTemp(base, 'frio'))
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    function renderDashCard(seg, label, count) {
+        var active = (state.dashSegment === seg);
+        return '<button class="qida-dash-card qida-dash-card-temp qida-card-' + seg + (active ? ' active' : '') + '" '
+            + 'data-action="dash-set-temp" data-id="' + seg + '" aria-pressed="' + (active ? 'true' : 'false') + '">'
+            + '<div class="qida-dash-card-label">' + esc(label) + '</div>'
+            + '<div class="qida-dash-card-num">' + count + '</div>'
+        + '</button>';
+    }
+
+    function renderDashToolbar(base) {
+        var segActive = !!state.dashSegment;
+        var anyFilter = segActive || state.dashOnlyNew;
+        var filterBtn = '<button class="qida-dash-filter-btn' + (state.dashFiltersExpanded || segActive ? ' active' : '') + '" data-action="dash-toggle-filters">'
+            + icon('filter', 13) + ' Filtros' + (segActive ? ' (1)' : '') + '</button>';
+        // v1.14: affordance explicita para limpiar filtros (resuelve el bug de "no se puede
+        //   quitar el filtro"). Solo visible cuando hay algun filtro activo (segmento o pill).
+        var clearBtn = anyFilter
+            ? '<button class="qida-dash-clear-btn" data-action="dash-clear-filters">' + icon('x', 12) + ' Quitar filtros</button>'
+            : '';
+        return '<div class="qida-dash-toolbar">'
+            + '<div class="qida-dash-toolbar-left">' + filterBtn + clearBtn + '</div>'
+            + '<div class="qida-dash-toolbar-center">' + renderWhatsappPill(base) + '</div>'
+            + '<div class="qida-dash-toolbar-right">' + renderViewChips() + '</div>'
+        + '</div>'
+        + (state.dashFiltersExpanded ? '<div class="qida-dash-segments">' + renderFilterChips() + '</div>' : '');
+    }
+
+    // Chips de segmento (recuperados de 7f052fc). El chip de frio usa el mismo id 'frio' que la
+    //   card "Fríos" (un solo estado de frio; el rotulo "reactivar" es solo UX).
+    function renderFilterChips() {
+        var chips = [
+            { id: 'caliente',  label: 'Caliente' },
+            { id: 'templado',  label: 'Templado' },
+            { id: 'frio',      label: 'Frío · reactivar' },
+            { id: 'pausa',     label: 'Pausa' },
+            { id: 'urgente',   label: 'Urgente' },
+            { id: 'historico', label: 'Histórico' }
+        ];
+        var html = '';
+        for (var i = 0; i < chips.length; i++) {
+            var active = (state.dashSegment === chips[i].id);
+            html += '<button class="qida-seg-chip' + (active ? ' active' : '') + '" data-action="dash-set-segment" data-id="' + chips[i].id + '">' + esc(chips[i].label) + '</button>';
+        }
+        return html;
+    }
+
+    // Pill central de WhatsApp. N = cantidad de LEADS con mensaje nuevo (no suma de mensajes).
+    //   Solo visible si N>0. Filtra la tabla a esos leads (AND con el segmento activo).
+    function renderWhatsappPill(base) {
+        var n = 0;
+        for (var i = 0; i < base.length; i++) if (base[i].hasNewMessage) n++;
+        if (n === 0) return '';
+        var label = n + (n === 1 ? ' lead con mensaje nuevo' : ' leads con mensaje nuevo');
+        return '<button class="qida-wa-pill' + (state.dashOnlyNew ? ' active' : '') + '" data-action="dash-toggle-new">'
+            + '<span class="qida-wa-pill-dot"></span> ' + label + '</button>';
+    }
+
+    // 3 chips de vista. Al cambiar = fetch al endpoint correspondiente (no re-filtro client-side).
+    function renderViewChips() {
+        var views = [
+            { id: 'suggestions', label: 'Sugerencias' },
+            { id: 'activities',  label: 'Actividades' },
+            { id: 'leads',       label: 'Leads' }
+        ];
+        var html = '';
+        for (var i = 0; i < views.length; i++) {
+            var active = (state.dashView === views[i].id);
+            html += '<button class="qida-view-chip' + (active ? ' active' : '') + '" data-action="dash-set-view" data-id="' + views[i].id + '">' + esc(views[i].label) + '</button>';
+        }
+        return html;
+    }
+
+    function renderDashHeader() {
+        return '<div class="qida-dash-header">'
             + '<div>Familia</div>'
             + '<div>Tipo</div>'
             + '<div>Por que</div>'
+            + '<div>Temp</div>'
             + '<div>Sin contacto</div>'
+            + '<div>Estado</div>'
             + '<div></div>'
         + '</div>';
     }
 
-    // Una fila del dashboard. row es la shape del response del backend
-    // (NO un MOCK_LEADS lead): contact, location, relation, caredPersonName, age,
-    // serviceType, daysWithoutTouch, lastMessageDate, reason, leadId.
-    function renderCoolingRow(row) {
-        var level = daysWithoutTouchLevel(row.daysWithoutTouch);
-        var dangerIcon = (row.daysWithoutTouch >= 21)
-            ? icon('alert-triangle', 14) + ' '
-            : '';
+    // v1.14: metadata de temperatura (label + clase). Incluye 'pausa' (gris neutro).
+    var TEMP_META = {
+        caliente: { label: 'Caliente', cls: 'caliente' },
+        templado: { label: 'Templado', cls: 'templado' },
+        frio:     { label: 'Frío',     cls: 'frio' },
+        pausa:    { label: 'Pausa',    cls: 'pausa' }
+    };
 
-        return '<div class="qida-cooling-row qida-cooling-' + level + '" '
-            +   'data-action="select-lead" data-id="' + esc(row.leadId) + '">'
+    // Columna Temperatura: barrita sólida monocroma + texto (patrón badge-localidad de admin).
+    function renderTempCell(temp) {
+        var meta = TEMP_META[normalizeTemp(temp)];
+        if (!meta) return '<div class="qida-dash-cell qida-cell-temp"></div>';
+        return '<div class="qida-dash-cell qida-cell-temp">'
+            + '<span class="qida-dash-temp qida-dash-temp-' + meta.cls + '">'
+                + '<i class="qida-dash-temp-bar"></i>' + esc(meta.label)
+            + '</span>'
+        + '</div>';
+    }
 
-            + '<div class="qida-cooling-cell qida-cell-familia">'
-                + '<div class="qida-cell-line1">' + esc(row.contact) + ' &middot; ' + esc(row.location) + '</div>'
-                + '<div class="qida-cell-line2">' + esc(row.relation) + ' ' + esc(row.caredPersonName) + ', ' + row.age + ' anos</div>'
+    // Nivel de color para "Días". Capeo: si urgencia alta, el máximo es ámbar-fuerte (nunca rojo)
+    //   -> el único rojo de la fila es el badge "Urgente" de la columna Estado.
+    function diasLevel(days, urg) {
+        var lvl = (days <= 3) ? 'normal' : (days <= 7) ? 'amber' : (days <= 14) ? 'amber-strong' : 'red';
+        if (urg === 'alta' && lvl === 'red') lvl = 'amber-strong';
+        return lvl;
+    }
+
+    // Columna Días desde último contacto: número coloreado por gravedad (texto, no fondo) +
+    //   fecha corta debajo (se oculta en @980px). Sin icono de alerta (el color comunica).
+    function renderDiasCell(row) {
+        var lvl = diasLevel(row.daysWithoutTouch, normalizeUrgency(row.urgency));
+        return '<div class="qida-dash-cell qida-cell-dias">'
+            + '<div class="qida-cell-days qida-dash-dias-' + lvl + '">' + row.daysWithoutTouch + '<span class="qida-cell-days-unit">' + (row.daysWithoutTouch === 1 ? 'día' : 'días') + '</span></div>'
+            + '<div class="qida-cell-date">' + esc(formatShortDate(row.lastTouchDate)) + '</div>'
+        + '</div>';
+    }
+
+    // Columna Estado: badges admin (apilados). Verde "Mensaje nuevo" (+contador si >1) y/o rojo
+    //   "Urgente" (solo urgency alta). Vacía si no aplica ninguno.
+    function renderEstadoCell(row) {
+        var badges = '';
+        if (row.hasNewMessage) {
+            var cnt = (row.unreadMessagesCount > 1) ? ' ' + row.unreadMessagesCount : '';
+            badges += '<span class="qida-dash-badge qida-dash-badge-new"><span class="qida-dash-badge-dot"></span>Mensaje nuevo' + cnt + '</span>';
+        }
+        if (normalizeUrgency(row.urgency) === 'alta') {
+            badges += '<span class="qida-dash-badge qida-dash-badge-urgent"><span class="qida-dash-badge-dot"></span>Urgente</span>';
+        }
+        return '<div class="qida-dash-cell qida-cell-estado">' + badges + '</div>';
+    }
+
+    // Leyenda explícita debajo de la tabla (4 temperaturas + 2 estados). Reusa el patrón
+    //   dot+label de admin con los colores exactos del sistema visual del Panel de Líderes.
+    function renderDashLegend() {
+        function item(cls, label) {
+            return '<span class="qida-dash-legend-item"><span class="qida-dash-legend-dot qida-dash-legdot-' + cls + '"></span>' + esc(label) + '</span>';
+        }
+        return '<div class="qida-dash-legend">'
+            + item('caliente', 'Caliente') + item('templado', 'Templado') + item('frio', 'Frío') + item('pausa', 'Pausa')
+            + '<span class="qida-dash-legend-sep"></span>'
+            + item('new', 'Mensaje nuevo') + item('urgent', 'Urgente')
+        + '</div>';
+    }
+
+    // Una fila del dashboard. row es la shape comun de los 3 endpoints (id, familyName, city,
+    //   caregiverInfo, serviceType, reason, daysWithoutTouch, lastTouchDate, temperature,
+    //   urgency, hasNewMessage, unreadMessagesCount). Los ids reusan MOCK_LEADS -> el detalle
+    //   (select-lead) resuelve contra datos reales.
+    // v1.14: paradigma "explicitar en columnas". La fila ya NO codifica con fondo/rail/tinte;
+    //   temperatura, días y estado viven en columnas propias. Fondo blanco (estética admin).
+    function renderDashRow(row) {
+        var cg = row.caregiverInfo || {};
+        var line2 = esc(((cg.relation || '') + ' ' + (cg.name || '')).trim()) + (cg.age != null ? ', ' + cg.age + ' anos' : '');
+        var reason = row.reason || 'Sin actividad reciente';
+
+        return '<div class="qida-dash-row" data-action="select-lead" data-id="' + esc(row.id) + '">'
+
+            + '<div class="qida-dash-cell qida-cell-familia">'
+                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(row.familyName) + ' &middot; ' + esc(row.city) + '</span></div>'
+                + '<div class="qida-cell-line2">' + line2 + '</div>'
             + '</div>'
 
-            + '<div class="qida-cooling-cell qida-cell-tipo">'
-                + esc(row.serviceType)
-            + '</div>'
+            + '<div class="qida-dash-cell qida-cell-tipo">' + esc(row.serviceType) + '</div>'
 
-            + '<div class="qida-cooling-cell qida-cell-porque">'
-                + esc(row.reason || 'Sin actividad reciente')
-            + '</div>'
+            // "Por qué" con ellipsis + tooltip (title) para no romper el ancho del modal AF.
+            + '<div class="qida-dash-cell qida-cell-porque" title="' + esc(reason) + '">' + esc(reason) + '</div>'
 
-            + '<div class="qida-cooling-cell qida-cell-sincontacto">'
-                + '<div class="qida-cell-days">' + dangerIcon + row.daysWithoutTouch + '</div>'
-                + '<div class="qida-cell-date">' + esc(row.lastMessageDate) + '</div>'
-            + '</div>'
+            + renderTempCell(row.temperature)
+            + renderDiasCell(row)
+            + renderEstadoCell(row)
 
-            + '<div class="qida-cooling-row-actions">'
-                + '<button class="qida-mark-done-btn" data-action="mark-done" data-id="' + esc(row.leadId) + '" data-stop>'
+            + '<div class="qida-dash-row-actions">'
+                + '<button class="qida-mark-done-btn" data-action="mark-done" data-id="' + esc(row.id) + '" data-stop>'
                     + icon('check', 14) + ' Marcar hecho'
                 + '</button>'
             + '</div>'
@@ -2488,9 +3388,11 @@
     }
 
     function renderEmptyState() {
-        return '<div class="qida-empty-state">'
-            + 'Estás al día. No hay leads enfriándose.'
-        + '</div>';
+        // v1.13: el copy depende del filtro activo (segmento/pill) vs vista vacia.
+        var msg = (state.dashSegment || state.dashOnlyNew)
+            ? 'No hay leads que coincidan con el filtro.'
+            : 'Estás al día. No hay leads en esta vista.';
+        return '<div class="qida-empty-state">' + msg + '</div>';
     }
 
     function renderUndoToast() {
@@ -2554,6 +3456,31 @@
         } else {
             body = '<p class="qida-ia-empty">Resumen no generado todavia para este lead.</p>'
                 + '<div class="qida-ia-actions"><button class="qida-btn-ghost" data-action="regen-ia-summary">' + icon('sparkles', 12) + ' Generar resumen</button></div>';
+        }
+
+        return infoCard(title, actions, body);
+    }
+
+    // v1.16: "Análisis IA". Mismo patrón visual que renderIaSummary (header ✨ + acción
+    //   Generar/Regenerar + "Generado hace X" + body). Sin edición inline ni backend:
+    //   Generar/Regenerar hacen console.log (preparación de UI; se conectará después).
+    function renderIaAnalysis(lead) {
+        var a = getIaAnalysis(lead.id);
+        var title = icon('sparkles', 12) + ' Análisis IA';
+
+        var actions = '';
+        if (a) {
+            if (a.editedBy) actions += 'Editado por ' + esc(a.editedBy);
+            else actions += 'Generado hace ' + esc(a.generatedAt ? a.generatedAt.replace(/^Hace\s+/i, '') : '?');
+            actions += ' &middot; <button class="qida-link-btn muted" data-action="regen-ia-analysis">' + icon('refresh', 10) + ' Regenerar</button>';
+        }
+
+        var body;
+        if (a) {
+            body = '<div class="qida-info-card-highlight"><p class="qida-ia-text">' + esc(a.text) + '</p></div>';
+        } else {
+            body = '<p class="qida-ia-empty">Análisis no generado todavía para este lead.</p>'
+                + '<div class="qida-ia-actions"><button class="qida-btn-ghost" data-action="regen-ia-analysis">' + icon('sparkles', 12) + ' Generar análisis</button></div>';
         }
 
         return infoCard(title, actions, body);
@@ -2716,35 +3643,11 @@
         return infoCard(title, '', html);
     }
 
-    function renderFollowers(lead, cached) {
-        var title = icon('users', 12) + ' Equipo siguiendo';
-
-        if (cached && cached._loading) {
-            return infoCard(title, '', renderSkeletonLines(2));
-        }
-        if (cached && cached._errors && cached._errors[4] && cached.followers === null) {
-            return infoCard(title, '', '<p class="qida-empty-notes" title="' + esc(cached._errors[4]) + '">No se pudo cargar esta seccion.</p>');
-        }
-
-        // v1.11: leer del cache; fallback al mock crudo si cached === null.
-        var f;
-        if (cached && cached.followers) {
-            f = cached.followers;
-        } else {
-            f = MOCK_FOLLOWERS[lead.id] || DEFAULT_FOLLOWERS;
-        }
-        var html = '';
-        for (var i = 0; i < f.length; i++) {
-            var p = f[i];
-            var initials = (p.name || '?').split(' ').slice(0, 2).map(function (s) { return s.charAt(0); }).join('').toUpperCase();
-            html += '<span class="qida-follower" title="' + esc(p.email || '') + (p.role ? ' - ' + esc(p.role) : '') + '">'
-                + '<span class="qida-follower-avatar">' + esc(initials) + '</span>'
-                + '<span class="qida-follower-name">' + esc(p.name) + '</span>'
-                + (p.role ? '<span class="qida-follower-role">&middot; ' + esc(p.role) + '</span>' : '')
-            + '</span>';
-        }
-        return infoCard(title, 'Hover para email', '<div class="qida-followers">' + html + '</div>');
-    }
+    // v1.18: renderFollowers ("Equipo siguiendo") ELIMINADO de la UI del detalle. La data layer
+    //   (MOCK_FOLLOWERS / DEFAULT_FOLLOWERS / cached.followers / _errors[4] / mapFollower /
+    //   FOLLOWER_FIELDS + el job mail.followers de LeadDetailService) se conserva intacta: la
+    //   sigue poblando la hidratación (mock + Odoo) y re-indexar la pipeline allSettled era
+    //   riesgoso y fuera de scope. Queda como data no consumida por la UI.
 
     // v1.6: renderTemplatesPanel/renderMaterialPanel eliminadas. Plantillas y Material como
     // tabs del pane derecho ya no existen. renderAttachmentsPanel se reemplaza por
@@ -2831,6 +3734,277 @@
         if (promptId === 'reactivar-sin-presionar') return { kind: 'approaches', intro: raw.intro, approaches: raw.approaches.slice() };
         return null;
     }
+
+    // ============================================================
+    // v1.15: DraftService + telemetría + helpers del asistente configurable
+    // ============================================================
+    // af_key derivado del email del AF logueado (_currentUserEmail, set en init via sess.username)
+    //   contra MOCK_ACTIVE_AFS (espejo de ACTIVE_AFS_JSON). Dev (email null) -> primer AF activo.
+    function resolveAfKey() {
+        // v1.19: usa el AF efectivo (impersonado por admin o el real) para que el switcher cambie
+        //   visiblemente los drafts/recomendaciones.
+        var activeEmail = getActiveAfEmail();
+        if (activeEmail && MOCK_ACTIVE_AFS[activeEmail]) return MOCK_ACTIVE_AFS[activeEmail];
+        // Fallback dev/no-mapeado: primer af_key del mock + aviso. TODO[odoo]: cablear identidad real.
+        for (var email in MOCK_ACTIVE_AFS) {
+            if (Object.prototype.hasOwnProperty.call(MOCK_ACTIVE_AFS, email)) {
+                if (!activeEmail) log('resolveAfKey: sin email de sesion, usando fallback', MOCK_ACTIVE_AFS[email]);
+                return MOCK_ACTIVE_AFS[email];
+            }
+        }
+        return 'default';
+    }
+
+    // ============================================================
+    // v1.19: AF SWITCHER - helpers (identidad efectiva + impersonación)
+    // ============================================================
+    function getAdminEmails() {
+        var raw = CONFIG && CONFIG.adminEmails;
+        if (typeof raw === 'string') raw = raw.split(',');
+        if (!raw || !raw.length) raw = ADMIN_EMAILS_DEFAULT;
+        var out = [];
+        for (var i = 0; i < raw.length; i++) {
+            var e = String(raw[i] || '').trim().toLowerCase();
+            if (e) out.push(e);
+        }
+        return out;
+    }
+    // Email "real" del usuario logueado (en dev local es 'dev@local').
+    function getRealEmail() { return _currentUserEmail || null; }
+    // ¿El usuario logueado es admin? Dev local: true (para poder testear el switcher).
+    function isAdminUser() {
+        if (!IS_ODOO_MODE) return true;
+        var real = getRealEmail();
+        return !!(real && getAdminEmails().indexOf(real.toLowerCase()) > -1);
+    }
+    // Email del AF efectivo: el impersonado (si hay) o el real. Es el valor de X-AF-Email.
+    function getActiveAfEmail() {
+        if (state.viewingAsEmail && state.viewingAsEmail !== getRealEmail()) return state.viewingAsEmail;
+        return getRealEmail();
+    }
+    function isImpersonating() {
+        return !!(state.viewingAsEmail && state.viewingAsEmail !== getRealEmail());
+    }
+    function afDisplayName(email) {
+        for (var i = 0; i < IMPERSONATABLE_AFS.length; i++) {
+            if (IMPERSONATABLE_AFS[i].email === email) return IMPERSONATABLE_AFS[i].display_name;
+        }
+        return email || '';
+    }
+    // Header que el frontend debe mandar al chat agent v2 (qida-followup-api) en endpoints
+    //   AF-facing. Los endpoints /api/admin/* NO lo usan.
+    // TODO[api]: adjuntar afEmailHeaders() en el fetch() real cuando se cableen los endpoints.
+    function afEmailHeaders() {
+        var h = {};
+        var e = getActiveAfEmail();
+        if (e) h['X-AF-Email'] = e;
+        return h;
+    }
+    // Hidrata viewingAsEmail desde localStorage (validado contra la lista de AFs impersonables).
+    function initViewingAsFromStorage() {
+        try {
+            var stored = window.localStorage && window.localStorage.getItem(AF_SWITCH_STORAGE_KEY);
+            if (!stored) return;
+            for (var i = 0; i < IMPERSONATABLE_AFS.length; i++) {
+                if (IMPERSONATABLE_AFS[i].email === stored) { state.viewingAsEmail = stored; return; }
+            }
+        } catch (e) { /* localStorage no disponible: ignorar */ }
+    }
+    // Setea (o limpia) el AF impersonado, persiste y refresca caches dependientes del AF.
+    function setViewingAs(email) {
+        var real = getRealEmail();
+        if (email && email !== real) {
+            state.viewingAsEmail = email;
+            try { window.localStorage.setItem(AF_SWITCH_STORAGE_KEY, email); } catch (e) {}
+            console.log('[AF SWITCHER] viewing as ' + email);
+        } else {
+            state.viewingAsEmail = null;
+            try { window.localStorage.removeItem(AF_SWITCH_STORAGE_KEY); } catch (e) {}
+            console.log('[AF SWITCHER] viewing as self (' + (real || '') + ')');
+        }
+        // El AF efectivo cambió: invalidar caches que dependen de af_key.
+        state.recommendationCache = {};
+        state.draftVariantsLoaded = false;
+        rerenderContent();
+        syncAfSwitcher();
+    }
+
+    // 'corto_directo' -> 'Corto directo'. Robusto a snake_case / espacios / vacío.
+    function humanizeVariantName(name) {
+        var s = String(name || '').replace(/_/g, ' ').trim();
+        if (!s) return '(sin nombre)';
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    // Validación de la config (1-3 variantes; name <40, único, no vacío; enums cerrados).
+    //   Devuelve { ok, errors: { '<idx>': 'msg' } , general: 'msg'|null }.
+    function validateVariants(variants) {
+        var errors = {}, general = null;
+        if (!variants || !variants.length) { general = 'Agregá al menos 1 variante.'; return { ok: false, errors: errors, general: general }; }
+        if (variants.length > 3) general = 'Máximo 3 variantes.';
+        var seen = {};
+        for (var i = 0; i < variants.length; i++) {
+            var v = variants[i];
+            var nm = (v.name || '').trim();
+            if (!nm) errors[i] = 'El nombre no puede estar vacío.';
+            else if (nm.length >= 40) errors[i] = 'El nombre debe tener menos de 40 caracteres.';
+            else if (seen[nm.toLowerCase()]) errors[i] = 'Nombre duplicado.';
+            else if (DRAFT_LENGTHS.indexOf(v.length) === -1) errors[i] = 'Largo inválido.';
+            else if (TONE_STYLES.indexOf(v.tone_style) === -1) errors[i] = 'Tono inválido.';
+            seen[nm.toLowerCase()] = true;
+        }
+        var ok = !general && !hasOwnKeys(errors);
+        return { ok: ok, errors: errors, general: general };
+    }
+    function hasOwnKeys(o) { for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) return true; } return false; }
+
+    // Wrapper de telemetría. PII-ESTRICTA: solo metadata, NUNCA el texto del draft ni del lead.
+    //   try/catch silencioso (el endpoint F2.9 puede no existir todavía).
+    function sendAssistantEvent(eventType, payload) {
+        try {
+            var p = payload || {};
+            var body = { event_type: eventType, ts: Date.now() };
+            if (p.lead_id != null) body.lead_id = p.lead_id;
+            if (p.variant_name) body.variant_name = p.variant_name;
+            if (p.length) body.length = p.length;
+            if (p.tone_style) body.tone_style = p.tone_style;
+            // TODO[odoo]: POST /api/leads/{lead_id}/assistant/events (F2.9). Por ahora no-op + log.
+            log('assistant event', body);
+            // thumbs_explicit: el wrapper ya lo acepta; la UI de 👍/👎 queda para cuando exista F2.9.
+        } catch (e) { /* silencioso a proposito */ }
+    }
+
+    // Texto mock de un draft segun (tone_style, length), con placeholders resueltos.
+    function buildDraftText(variant, lead) {
+        var byTone = TONE_TEMPLATES[variant.tone_style] || TONE_TEMPLATES.neutral;
+        var raw = (variant.length === 'short') ? byTone.short : byTone.medium;
+        return resolveAiPlaceholders(raw, lead);
+    }
+
+    // ============================================================
+    // v1.20: fetch wrapper para el endpoint real de recomendacion
+    // ============================================================
+    // Base URL efectiva (CONFIG override > default). Sin barra final.
+    function apiBaseUrl() {
+        var b = (CONFIG && CONFIG.apiBaseUrl) || API_BASE_URL;
+        return String(b).replace(/\/+$/, '');
+    }
+    // ¿Usar la API real? CONFIG.useRealAPI (boolean) pisa el FEATURE_FLAG.
+    function useRealApi() {
+        if (CONFIG && typeof CONFIG.useRealAPI === 'boolean') return CONFIG.useRealAPI;
+        return !!FEATURE_FLAG.useRealAPI;
+    }
+    // 'L122581' -> '122581'. En Odoo real el id ya es numerico (no-op). '' si no hay digitos.
+    //   TODO[leadid]: confirmar con Odoo que el id de display mapea 1:1 al lead_id del backend.
+    function toNumericLeadId(leadId) {
+        return String(leadId == null ? '' : leadId).replace(/\D/g, '');
+    }
+    // Error tipado para la UI: .userMessage (texto claro), .code, .status.
+    function makeApiError(userMessage, code, status) {
+        var e = new Error(code || userMessage || 'API_ERROR');
+        e.userMessage = userMessage;
+        e.code = code || null;
+        e.status = (status == null ? 0 : status);
+        return e;
+    }
+    // Copy claro por rango de status. serverMsg = mensaje del backend si lo hay.
+    function httpErrorCopy(status, serverMsg) {
+        if (status === 403) return 'No tenés permiso para ver la recomendación de este lead.';
+        if (status === 404) return 'No encontramos este lead en el sistema de seguimientos.';
+        if (status === 422) return 'La petición no es válida (revisá el email de AF o el ID del lead).';
+        if (status >= 500) return 'El servicio de recomendaciones tuvo un error temporal. Reintentá en unos segundos.';
+        return serverMsg || ('Error ' + status + ' al pedir la recomendación.');
+    }
+    // Texto de error para la burbuja IA. Cubre tanto errores tipados como fallo de red (fetch reject).
+    function suggestErrorCopy(err) {
+        if (err && err.userMessage) return err.userMessage;
+        return 'No se pudo conectar con el servicio de recomendaciones. Revisá tu conexión y reintentá.';
+    }
+    // POST /api/leads/{lead_id}/recommendation contra qida-followup-api (chat agent v2).
+    //   Resuelve a la MISMA shape que getRecommendationSync (drafts:[{name,length,tone_style,text,...}]).
+    //   Rechaza con un Error que lleva .userMessage en 4xx/5xx para que la UI lo muestre + retry.
+    function fetchRecommendation(leadId) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) {
+            return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        }
+        var headers = afEmailHeaders();
+        headers['Content-Type'] = 'application/json';
+        if (!headers['X-AF-Email']) {
+            return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la petición.', 'NO_AF_EMAIL', 0));
+        }
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/recommendation';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) {
+                    log('recommendation ok', { lead: numericId, ms: Date.now() - t0, cached: data && data.cached });
+                    return data;
+                }
+                // Error: el BFF devuelve {error:{code,message}}, FastAPI valida con {detail:[{msg}]}.
+                var code = (data && data.error && data.error.code)
+                        || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || null;
+                log('recommendation error', { lead: numericId, status: res.status, code: code, ms: Date.now() - t0 });
+                throw makeApiError(httpErrorCopy(res.status, serverMsg), code, res.status);
+            });
+        });
+    }
+
+    var DraftService = {
+        // GET /api/admin/afs/{af_key}/draft-variants (mock).
+        getDraftVariantsSync: function (afKey) {
+            var custom = MOCK_DRAFT_VARIANTS_BY_AF[afKey];
+            var src = custom || MOCK_DRAFT_VARIANTS_DEFAULT;
+            // Copia profunda simple para no mutar el mock al editar.
+            var variants = [];
+            for (var i = 0; i < src.length; i++) variants.push({ name: src[i].name, length: src[i].length, tone_style: src[i].tone_style });
+            return { af_key: afKey, is_default: !custom, variants: variants };
+        },
+        getDraftVariants: function (afKey) {
+            var self = this;
+            return simulateLatency(80, 180).then(function () { return self.getDraftVariantsSync(afKey); });
+        },
+        // PUT /api/admin/afs/{af_key}/draft-variants (mock). La validación 422 se cubre client-side
+        //   (no se puede invocar con config inválida). Persiste en MOCK_DRAFT_VARIANTS_BY_AF.
+        saveDraftVariants: function (afKey, variants) {
+            var v = validateVariants(variants);
+            if (!v.ok) return simulateLatency(60, 120).then(function () { return { ok: false, status: 422, error: v }; });
+            var copy = [];
+            for (var i = 0; i < variants.length; i++) copy.push({ name: variants[i].name.trim(), length: variants[i].length, tone_style: variants[i].tone_style });
+            MOCK_DRAFT_VARIANTS_BY_AF[afKey] = copy;
+            return simulateLatency(80, 180).then(function () { return { ok: true }; });
+        },
+        // POST /api/leads/{lead_id}/recommendation (mock). Devuelve drafts derivados de la config
+        //   de la AF. Edge cases: pausa -> sin seguimiento; overrides -> vacío / fallback.
+        getRecommendationSync: function (leadId) {
+            var override = MOCK_RECOMMENDATION_OVERRIDES[leadId];
+            if (override) return override;
+            var lead = getLead(leadId);
+            if (lead && normalizeTemp(lead.temperature) === 'pausa') {
+                return { should_followup_today: false, fallback: false, drafts: [] };
+            }
+            var cfg = this.getDraftVariantsSync(resolveAfKey()).variants;
+            var drafts = [];
+            for (var i = 0; i < cfg.length; i++) {
+                drafts.push({ name: cfg[i].name, length: cfg[i].length, tone_style: cfg[i].tone_style, text: buildDraftText(cfg[i], lead) });
+            }
+            return { should_followup_today: true, fallback: false, drafts: drafts };
+        },
+        getRecommendation: function (leadId) {
+            // v1.20: flag on -> backend real (qida-followup-api). flag off -> mock (como v1.19).
+            if (useRealApi()) {
+                return fetchRecommendation(leadId);
+            }
+            var self = this;
+            return simulateLatency(120, 280).then(function () { return self.getRecommendationSync(leadId); });
+        }
+    };
+
 
     // Adjuntos colapsable (reemplaza el panel derecho v1.5). Vive dentro del .qida-center-body.
     function renderAttachmentsCollapsable(lead, cached) {
@@ -2962,13 +4136,21 @@
         if (payload.intro) html += '<p class="qida-aichat-bubble-intro">' + esc(payload.intro) + '</p>';
 
         if (payload.kind === 'variants' && payload.variants) {
+            // v1.15: las variantes pueden venir de MOCK_AI_RESPONSES (label) o de /recommendation
+            //   (name/length/tone_style -> draft). Header = label || humanize(name). Si es draft
+            //   (source==='draft'), threadeamos metadata al boton para la telemetría draft_copied.
+            var isDraft = (payload.source === 'draft');
             for (var i = 0; i < payload.variants.length; i++) {
                 var v = payload.variants[i];
                 var resolved = resolveAiPlaceholders(v.text, lead);
+                var headLabel = v.label || humanizeVariantName(v.name);
+                var metaAttrs = isDraft
+                    ? ' data-source="draft" data-variant-name="' + esc(v.name || '') + '" data-length="' + esc(v.length || '') + '" data-tone="' + esc(v.tone_style || '') + '"'
+                    : '';
                 html += '<div class="qida-aichat-variant">'
-                    + '<div class="qida-aichat-variant-label">' + esc(v.label) + '</div>'
+                    + '<div class="qida-aichat-variant-label">' + esc(headLabel) + '</div>'
                     + '<p class="qida-aichat-variant-text">' + esc(resolved) + '</p>'
-                    + '<button class="qida-aichat-variant-action" data-action="ai-pick-variant" data-label="' + esc(v.label) + '" data-text="' + esc(resolved) + '">' + icon('arrowRight', 11) + ' Esta me gusta mas</button>'
+                    + '<button class="qida-aichat-variant-action" data-action="ai-pick-variant" data-label="' + esc(headLabel) + '" data-text="' + esc(resolved) + '"' + metaAttrs + '>' + icon('arrowRight', 11) + ' Esta me gusta mas</button>'
                 + '</div>';
             }
         } else if (payload.kind === 'material' && payload.items) {
@@ -2995,12 +4177,30 @@
             // v1.8: respuesta IA al elegir una variante. Muestra el texto propuesto en una card
             //   destacada y ofrece el boton final "Copiar al WhatsApp". La AF puede iterar
             //   escribiendo texto libre en el input del chat (mockAIResponse detecta el contexto).
+            // v1.15: si el refine vino de un draft (payload.meta.source==='draft'), threadeamos la
+            //   metadata al boton para emitir draft_copied PII-safe al copiar.
+            var m = payload.meta || {};
+            var copyMeta = (m.source === 'draft')
+                ? ' data-source="draft" data-variant-name="' + esc(m.name || '') + '" data-length="' + esc(m.length || '') + '" data-tone="' + esc(m.tone_style || '') + '"'
+                : '';
             html += '<div class="qida-aichat-refine">'
                 + '<div class="qida-aichat-refine-text">' + esc(payload.text) + '</div>'
-                + '<button class="qida-aichat-copy-wa" data-action="ai-copy-to-wa" data-text="' + esc(payload.text) + '">' + icon('check', 11) + ' Copiar al WhatsApp</button>'
+                + '<button class="qida-aichat-copy-wa" data-action="ai-copy-to-wa" data-text="' + esc(payload.text) + '"' + copyMeta + '>' + icon('check', 11) + ' Copiar al WhatsApp</button>'
             + '</div>';
         } else if (payload.kind === 'free' && payload.text) {
             html += '<p class="qida-aichat-bubble-text">' + esc(payload.text) + '</p>';
+        } else if (payload.kind === 'loading') {
+            // v1.20: spinner mientras esperamos la recomendacion real (3-10s primera call).
+            html += '<div class="qida-aichat-loading">'
+                + '<span class="qida-spinner" aria-hidden="true"></span>'
+                + '<span class="qida-aichat-loading-text">' + esc(payload.text || 'Generando…') + '</span>'
+            + '</div>';
+        } else if (payload.kind === 'error') {
+            // v1.20: error claro + Reintentar. data-id = lead al que pertenece esta burbuja.
+            html += '<div class="qida-aichat-error">'
+                + '<p class="qida-aichat-error-text">' + icon('alert-triangle', 13) + ' ' + esc(payload.text || 'Ocurrió un error.') + '</p>'
+                + '<button class="qida-aichat-retry" data-action="ai-retry-suggest" data-id="' + esc(lead ? lead.id : (state.currentLeadId || '')) + '">' + icon('refresh-cw', 11) + ' Reintentar</button>'
+            + '</div>';
         }
 
         return html;
@@ -3019,13 +4219,15 @@
     //   al historial como par user("<label> - esta me gusta mas") -> ai(kind: 'refine', text).
     //   La burbuja IA con kind:'refine' muestra el texto propuesto + boton "Copiar al WhatsApp"
     //   y permite iterar via texto libre en el input del chat (mockAIResponse detecta el contexto).
-    function pushAiPickVariant(leadId, label, text) {
+    function pushAiPickVariant(leadId, label, text, meta) {
         if (!leadId || !text) return;
         var userMsg = (label ? label + ' - ' : '') + 'esta me gusta mas';
         var refinePayload = {
             kind: 'refine',
             intro: 'Genial. Te gusta asi o quieres ajustar algo? (mas corto, otro tono, agregar algo especifico).',
-            text: text
+            text: text,
+            // v1.15: arrastra la metadata del draft (si aplica) para la telemetría al copiar.
+            meta: meta || null
         };
         pushAiChat(leadId, userMsg, refinePayload);
     }
@@ -3072,10 +4274,10 @@
     function renderCenterPane(lead, cached) {
         return ''
             + renderIaSummary(lead)
+            + renderIaAnalysis(lead)
             + renderCare(lead, cached)
             + renderInternalNotes(lead, cached)
             + renderActivities(lead, cached)
-            + renderFollowers(lead, cached)
             + renderAttachmentsCollapsable(lead, cached);
     }
 
@@ -3503,10 +4705,90 @@
     }
 
     // ============================================================
+    // v1.15: RENDER "Armá tu asistente" (state.view === 'agentBuilder')
+    // ============================================================
+    function deepCopyVariants(arr) {
+        var out = [];
+        for (var i = 0; i < (arr || []).length; i++) out.push({ name: arr[i].name, length: arr[i].length, tone_style: arr[i].tone_style });
+        return out;
+    }
+    function agentBuilderDirty() {
+        return JSON.stringify(state.draftVariants) !== JSON.stringify(state.draftVariantsSaved);
+    }
+
+    function renderAgentBuilder() {
+        var variants = state.draftVariants || [];
+        var v = validateVariants(variants);
+        var dirty = agentBuilderDirty();
+        var saveDisabled = (!v.ok || !dirty) ? ' disabled' : '';
+
+        var rowsHtml = '';
+        for (var i = 0; i < variants.length; i++) rowsHtml += renderVariantRow(variants[i], i, v.errors[i]);
+
+        var addDisabled = (variants.length >= 3) ? ' disabled' : '';
+        var generalErr = v.general ? '<p class="qida-ab-general-error">' + esc(v.general) + '</p>' : '';
+
+        return '<div class="qida-ab">'
+            + '<div class="qida-ab-inner">'
+                + '<p class="qida-ab-lead">Configurá de 1 a 3 variantes de borrador. Cuando uses "Sugerir mensaje" en un lead, el asistente propondrá una opción por cada variante. La IA propone; vos editás y enviás.</p>'
+                + '<div class="qida-ab-list">' + rowsHtml + '</div>'
+                + generalErr
+                + '<button class="qida-btn-ghost qida-ab-add" data-action="ab-add-variant"' + addDisabled + '>' + icon('plus', 13) + ' Agregar variante</button>'
+                + '<div class="qida-ab-foot">'
+                    + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
+                    + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + icon('check', 13) + ' Guardar</button>'
+                + '</div>'
+            + '</div>'
+            + (state.agentBuilderConfirmDiscard ? renderDiscardConfirm() : '')
+        + '</div>';
+    }
+
+    function renderVariantRow(variant, idx, errMsg) {
+        function opt(val, label, selected) { return '<option value="' + esc(val) + '"' + (selected ? ' selected' : '') + '>' + esc(label) + '</option>'; }
+        var lenOpts = '', toneOpts = '';
+        for (var i = 0; i < DRAFT_LENGTHS.length; i++) lenOpts += opt(DRAFT_LENGTHS[i], LENGTH_LABELS[DRAFT_LENGTHS[i]], variant.length === DRAFT_LENGTHS[i]);
+        for (var j = 0; j < TONE_STYLES.length; j++) toneOpts += opt(TONE_STYLES[j], TONE_LABELS[TONE_STYLES[j]], variant.tone_style === TONE_STYLES[j]);
+        var removeDisabled = (state.draftVariants.length <= 1) ? ' disabled' : '';
+
+        return '<div class="qida-ab-row' + (errMsg ? ' has-error' : '') + '">'
+            + '<div class="qida-ab-fields">'
+                + '<div class="qida-ab-field qida-ab-field-name">'
+                    + '<label class="qida-ab-label">Nombre</label>'
+                    + '<input type="text" class="qida-ab-input" data-input="ab-name" data-idx="' + idx + '" maxlength="60" value="' + esc(variant.name || '') + '" placeholder="ej. corto_directo" />'
+                + '</div>'
+                + '<div class="qida-ab-field">'
+                    + '<label class="qida-ab-label" title="' + esc(LENGTH_TOOLTIP) + '">Largo ' + icon('alert', 10) + '</label>'
+                    + '<select class="qida-leader-select qida-ab-select" data-input="ab-length" data-idx="' + idx + '">' + lenOpts + '</select>'
+                + '</div>'
+                + '<div class="qida-ab-field">'
+                    + '<label class="qida-ab-label" title="' + esc(TONE_TOOLTIP) + '">Tono ' + icon('alert', 10) + '</label>'
+                    + '<select class="qida-leader-select qida-ab-select" data-input="ab-tone" data-idx="' + idx + '">' + toneOpts + '</select>'
+                + '</div>'
+                + '<button class="qida-ab-remove" data-action="ab-remove-variant" data-idx="' + idx + '" aria-label="Quitar variante" title="Quitar"' + removeDisabled + '>' + icon('x', 14) + '</button>'
+            + '</div>'
+            + (errMsg ? '<p class="qida-ab-error">' + esc(errMsg) + '</p>' : '')
+        + '</div>';
+    }
+
+    function renderDiscardConfirm() {
+        return '<div class="qida-ab-confirm-overlay">'
+            + '<div class="qida-ab-confirm">'
+                + '<p class="qida-ab-confirm-title">¿Descartar cambios?</p>'
+                + '<p class="qida-ab-confirm-sub">Tenés cambios sin guardar en tu asistente.</p>'
+                + '<div class="qida-ab-confirm-actions">'
+                    + '<button class="qida-btn-ghost" data-action="ab-discard-cancel">Seguir editando</button>'
+                    + '<button class="qida-btn-primary qida-ab-discard-btn" data-action="ab-discard-confirm">Descartar</button>'
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    // ============================================================
     // RENDER: content dispatcher
     // ============================================================
     function renderContent() {
         if (state.view === 'leadersDashboard') return renderLeadersDashboard();
+        if (state.view === 'agentBuilder') return renderAgentBuilder();
         return state.view === 'detail' ? renderDetail() : renderDashboard();
     }
 
@@ -3541,6 +4823,7 @@
         content.innerHTML = renderContent();
         syncShellSizing();
         syncShellHeader();
+        syncAfSwitcher();   // v1.19: barra del AF switcher (solo admins)
         syncScheduleModal();
         // v1.10: syncAssistantHeader eliminada (junto con todo el bloque del asistente).
         syncToast();
@@ -3599,6 +4882,56 @@
     // v1.6: shell header dinamico. En dashboard mantiene el bloque Sparkles + Seguimientos +
     // sub. En detail lo reemplaza por Volver + nombre + ID + badge dias + datos compactos.
     // El asistente del header (qida-asst-anchor) se preserva en el DOM aunque vacio en detail.
+    // v1.19: barra global del AF switcher (entre el header y el content del shell). Solo admins.
+    //   No-admin -> oculta. Admin sin impersonar -> "Modo admin · Ver como AF: [dropdown]".
+    //   Admin impersonando -> banner AMARILLO "Viendo como X · Volver a mi vista" + dropdown.
+    function syncAfSwitcher() {
+        var bar = document.getElementById('qida-af-switch-bar');
+        if (!bar) return;
+        if (!isAdminUser()) { bar.style.display = 'none'; bar.innerHTML = ''; bar.className = 'qida-af-switch-bar'; return; }
+        bar.style.display = '';
+
+        var real = getRealEmail();
+        var opts = '<option value=""' + (!state.viewingAsEmail ? ' selected' : '') + '>Como yo' + (real ? ' (' + esc(real) + ')' : '') + '</option>';
+        for (var i = 0; i < IMPERSONATABLE_AFS.length; i++) {
+            var af = IMPERSONATABLE_AFS[i];
+            if (af.email === real) continue;
+            opts += '<option value="' + esc(af.email) + '"' + (state.viewingAsEmail === af.email ? ' selected' : '') + '>Ver como ' + esc(af.display_name) + '</option>';
+        }
+        var dropdown = '<select class="qida-af-switch-select" data-input="af-switch" aria-label="Ver como AF">' + opts + '</select>';
+
+        if (isImpersonating()) {
+            var active = getActiveAfEmail();
+            bar.className = 'qida-af-switch-bar impersonating';
+            bar.innerHTML = '<span class="qida-af-switch-msg">' + icon('users', 13) + ' Viendo como <strong>' + esc(afDisplayName(active)) + '</strong> · <span class="qida-af-switch-email">' + esc(active) + '</span></span>'
+                + '<span class="qida-af-switch-right">'
+                    + '<button class="qida-af-switch-reset" data-action="af-switch-reset">Volver a mi vista</button>'
+                    + dropdown
+                + '</span>';
+        } else {
+            bar.className = 'qida-af-switch-bar';
+            bar.innerHTML = '<span class="qida-af-switch-label">' + icon('users', 12) + ' Modo admin</span>'
+                + '<span class="qida-af-switch-right">'
+                    + '<span class="qida-af-switch-hint">Ver como AF:</span>'
+                    + dropdown
+                + '</span>';
+        }
+    }
+
+    // v1.17: selector compacto de temperatura (dropdown anclado al pill + backdrop click-fuera).
+    function renderTempEditor(current) {
+        var opts = ['caliente', 'templado', 'frio', 'pausa'];
+        var items = '';
+        for (var i = 0; i < opts.length; i++) {
+            var k = opts[i], m = TEMP_META[k];
+            items += '<button class="qida-temp-opt' + (k === current ? ' active' : '') + '" data-action="set-temp" data-id="' + k + '">'
+                + '<i class="qida-tbar qida-tbar-' + m.cls + '"></i>' + esc(m.label)
+            + '</button>';
+        }
+        return '<div class="qida-temp-backdrop" data-action="close-temp-editor"></div>'
+            + '<div class="qida-temp-menu">' + items + '</div>';
+    }
+
     function syncShellHeader() {
         var header = document.querySelector('.qida-shell-header');
         if (!header) return;
@@ -3608,12 +4941,25 @@
             if (lead) {
                 var days = lead.daysWithoutTouch;
                 var lvl = daysWithoutTouchLevel(days);
-                var daysLabel = (days === 0) ? 'Hoy' : ('Sin contacto: ' + days + 'd');
+                var daysLabel = (days === 0) ? 'Hoy' : ('Sin contacto: ' + days + (days === 1 ? ' día' : ' días'));
+                // v1.17: pill de temperatura editable (lee el override de sesión EDITS.temperatures).
+                var tempKey = normalizeTemp(getLeadTemperature(lead));
+                var tMeta = TEMP_META[tempKey] || { label: '—', cls: '' };
+                var tempPill = '<span class="qida-dsh-temp-wrap">'
+                    + '<button class="qida-dsh-temp" data-action="open-temp-editor" title="Cambiar temperatura" aria-haspopup="true">'
+                        + '<i class="qida-tbar qida-tbar-' + tMeta.cls + '"></i>' + esc(tMeta.label) + ' ' + icon('edit', 10)
+                    + '</button>'
+                    + (state.tempEditorOpen ? renderTempEditor(tempKey) : '')
+                + '</span>';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
                     + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
                     + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
                     + '<span class="qida-dsh-days ' + lvl + '">' + icon('clock', 11) + ' ' + esc(daysLabel) + '</span>'
+                    + '<span class="qida-dsh-sep">&middot;</span>'
+                    // v1.17: pill de temperatura como hijo directo del head (NO dentro de .qida-dsh-meta,
+                    //   que tiene overflow:hidden y cliparía el dropdown). Queda alineado con las referencias.
+                    + tempPill
                     + '<span class="qida-dsh-sep">&middot;</span>'
                     + '<span class="qida-dsh-meta">'
                         + '<span class="qida-dsh-meta-item">' + icon('users', 11) + ' ' + esc(lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos') + '</span>'
@@ -3630,13 +4976,10 @@
                     + '<button class="qida-back" data-action="back-to-dashboard">' + icon('arrowLeft', 12) + ' Volver</button>'
                 + '</div>';
             }
-            // v1.8: boton swap entre el qida-asst-anchor y qida-esc. Active feedback cuando swapped.
-            var swapActiveCls = state.detailLayoutSwapped ? ' active' : '';
-            var swapIcons = icon('arrowLeft', 11) + icon('arrowRight', 11);
+            // v1.17: botón "Swap" eliminado. El layout queda fijo en el default (detailLayoutSwapped
+            //   sigue true: IA al centro, info a la derecha). Solo Esc + X a la derecha.
             header.innerHTML = titleHtml
                 + '<div class="qida-shell-actions">'
-                    + '<div id="qida-asst-anchor" class="qida-asst-anchor"></div>'
-                    + '<button class="qida-shell-swap' + swapActiveCls + '" data-action="toggle-detail-layout" title="Cambiar orden de columnas">' + swapIcons + ' Swap</button>'
                     + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
@@ -3654,12 +4997,23 @@
                     + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
+        } else if (state.view === 'agentBuilder') {
+            // v1.15: header de "Armá tu asistente". Volver a la izquierda + Esc/X a la derecha.
+            header.innerHTML = ''
+                + '<div class="qida-detail-shell-head">'
+                    + '<button class="qida-back" data-action="ab-back" aria-label="Volver">' + icon('arrowLeft', 12) + ' Volver</button>'
+                    + '<span class="qida-dsh-name">Armá tu asistente</span>'
+                + '</div>'
+                + '<div class="qida-shell-actions">'
+                    + '<span class="qida-esc">Esc para cerrar</span>'
+                    + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
+                + '</div>';
         } else {
-            // v1.10: shell header minimo en dashboard. Sin Sparkles + titulo + sub, sin
-            // anchor del asistente. Solo "Esc para cerrar" + X. Toda la atencion va a la
-            // lista de leads enfriandose en el contenido.
+            // v1.10: shell header minimo en dashboard. v1.15: + boton chico "Armá tu asistente"
+            //   a la derecha, antes de "Esc para cerrar". Visible para todas las AFs (sin flag).
             header.innerHTML = ''
                 + '<div class="qida-shell-actions">'
+                    + '<button class="qida-ab-open-btn" data-action="open-agent-builder">' + icon('sparkles', 13) + ' Armá tu asistente</button>'
                     + '<span class="qida-esc">Esc para cerrar</span>'
                     + '<button class="qida-icon-btn" data-action="close-modal" aria-label="Cerrar">' + icon('x', 18) + '</button>'
                 + '</div>';
@@ -3749,6 +5103,57 @@
             case 'open-leaders-dashboard':
                 openLeadersDashboard();
                 return;
+
+            // v1.19: AF switcher — volver a "como yo" desde el banner amarillo.
+            case 'af-switch-reset':
+                setViewingAs(null);
+                return;
+
+            // v1.15: "Armá tu asistente"
+            case 'open-agent-builder':
+                openAgentBuilder();
+                return;
+            case 'ab-back':
+                abBack();
+                return;
+            case 'ab-discard-cancel':
+                setState({ agentBuilderConfirmDiscard: false });
+                return;
+            case 'ab-discard-confirm':
+                abDiscardAndLeave();
+                return;
+            case 'ab-add-variant':
+                if (state.draftVariants.length < 3) {
+                    state.draftVariants.push({ name: '', length: 'medium', tone_style: 'neutral' });
+                    rerenderContent();
+                }
+                return;
+            case 'ab-remove-variant': {
+                var rmIdx = parseInt(target.getAttribute('data-idx'), 10);
+                if (state.draftVariants.length > 1 && rmIdx >= 0 && rmIdx < state.draftVariants.length) {
+                    state.draftVariants.splice(rmIdx, 1);
+                    rerenderContent();
+                }
+                return;
+            }
+            case 'ab-save': {
+                var val = validateVariants(state.draftVariants);
+                if (!val.ok) { rerenderContent(); return; }   // botón ya debería estar disabled
+                var afKey = resolveAfKey();
+                var working = deepCopyVariants(state.draftVariants);
+                DraftService.saveDraftVariants(afKey, working).then(function (res) {
+                    if (res && res.ok) {
+                        state.draftVariantsSaved = deepCopyVariants(working);
+                        showToast('Asistente guardado.');
+                        rerenderContent();
+                    } else {
+                        showToast('No se pudo guardar (revisá los campos).');
+                        rerenderContent();
+                    }
+                });
+                return;
+            }
+
             case 'leader-sort': {
                 var col = id;
                 var ld = state.leaderDash;
@@ -3782,7 +5187,7 @@
                 //   inicio y el race-guard de LeadDetailService.fetchAll compare con ===
                 //   estricto sin coercion.
                 var leadIdNum = (typeof id === 'string' && /^\d+$/.test(id)) ? parseInt(id, 10) : id;
-                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false });
+                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.11: SIEMPRE llamamos a fetchAll (incluso en modo mock - el service lo
                 //   detecta y hace mockHydrate sync, sin loading visible). Solo skipeamos si
                 //   ya hay cache valido (sin _error) para evitar fetchs redundantes en cache hits.
@@ -3793,7 +5198,7 @@
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
-                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false });
+                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 return;
 
             // --- v1.10: dashboard de leads enfriandose ---
@@ -3828,12 +5233,43 @@
                 rerenderContent();
                 return;
             }
-            case 'refresh-cooling': {
-                // Re-render llama a getCoolingLeadsSync() nuevamente. Los completados
-                // en sesion quedan filtrados naturalmente. Cuando esto se cablee a Odoo,
-                // este handler dispara LeadService.getCoolingLeads().then(...) y refresca
-                // el cache.
-                rerenderContent();
+            // v1.13: cambio de vista (chip) -> fetch al endpoint correspondiente. resetea filtros.
+            case 'dash-set-view': {
+                if (!id || id === state.dashView) return;
+                loadDashView(id, true);
+                return;
+            }
+            // Refrescar: re-fetch de la vista activa (refresca el badge WhatsApp). NO resetea filtros.
+            //   MVP: refresh manual del badge WhatsApp (boton Refrescar o cambio de vista).
+            //   TODO: evaluar polling cada 30-60s o push (SignalR/SSE) en iteracion siguiente.
+            //   La logica de marcar como leido la maneja el backend al abrir el detalle del lead.
+            case 'dash-refresh': {
+                loadDashView(state.dashView, false);
+                return;
+            }
+            case 'dash-toggle-filters': {
+                setState({ dashFiltersExpanded: !state.dashFiltersExpanded });
+                return;
+            }
+            // Chips de Filtros: toggle del segmento (re-click limpia). Client-side.
+            case 'dash-set-segment': {
+                setState({ dashSegment: (state.dashSegment === id) ? null : id });
+                return;
+            }
+            // Cards de temperatura: escriben el MISMO state.dashSegment que los chips (cards ≡ chips).
+            //   Re-click sobre la card activa limpia el filtro.
+            case 'dash-set-temp': {
+                setState({ dashSegment: (state.dashSegment === id) ? null : id });
+                return;
+            }
+            // Pill WhatsApp: toggle del filtro hasNewMessage (AND con el segmento). Client-side.
+            case 'dash-toggle-new': {
+                setState({ dashOnlyNew: !state.dashOnlyNew });
+                return;
+            }
+            // v1.14: limpia todos los filtros client-side de una (segmento + pill).
+            case 'dash-clear-filters': {
+                setState({ dashSegment: null, dashOnlyNew: false });
                 return;
             }
 
@@ -3854,6 +5290,12 @@
                 return;
             case 'regen-ia-summary':
                 showToast('Regenerando resumen IA... (mock)');
+                return;
+            // v1.16: Análisis IA. Preparación de UI: por ahora solo console.log (sin backend).
+            //   TODO[backend]: disparar la generación real cuando exista el endpoint.
+            case 'regen-ia-analysis':
+                console.log('[QidaAssistant] regen-ia-analysis (mock, sin backend)', state.currentLeadId);
+                showToast('Generando análisis IA... (mock)');
                 return;
 
             case 'start-add-note':    setState({ addingNote: true }); return;
@@ -3896,13 +5338,22 @@
                 var aiInp = document.getElementById('qida-aichat-input');
                 handleAiChatSend(aiInp ? aiInp.value : (state.aiChatDraft || ''));
                 return;
+            // v1.20: Reintentar la recomendacion tras un error (reusa la burbuja IA del lead).
+            case 'ai-retry-suggest':
+                retrySuggest(id || state.currentLeadId);
+                return;
             // v1.8: la AF elige una variante (sugerir mensaje o reactivar) -> push al chat
             //   como user message + respuesta IA tipo refine. Material marketing mantiene su
             //   propio handler ai-material-action (sin tocar).
             case 'ai-pick-variant':
                 var pickLabel = target.getAttribute('data-label') || 'Esta opcion';
                 var pickText = target.getAttribute('data-text') || '';
-                pushAiPickVariant(state.currentLeadId, pickLabel, pickText);
+                // v1.15: si es un draft configurado, arrastramos la metadata (PII-safe) para la
+                //   telemetría posterior al copiar. material/reactivar no traen estos data-*.
+                var pickMeta = (target.getAttribute('data-source') === 'draft')
+                    ? { source: 'draft', name: target.getAttribute('data-variant-name') || '', length: target.getAttribute('data-length') || '', tone_style: target.getAttribute('data-tone') || '' }
+                    : null;
+                pushAiPickVariant(state.currentLeadId, pickLabel, pickText, pickMeta);
                 state.aiChatDraft = '';
                 rerenderContent();
                 return;
@@ -3911,6 +5362,16 @@
             case 'ai-copy-to-wa':
                 var msgText = target.getAttribute('data-text') || '';
                 state.draftMessage = msgText;
+                // v1.15 (Pieza C): draft_copied al momento del rellenado, SOLO si vino de un draft
+                //   configurado (data-source="draft"). PII-safe (solo metadata, nunca el texto).
+                if (target.getAttribute('data-source') === 'draft') {
+                    sendAssistantEvent('draft_copied', {
+                        lead_id: state.currentLeadId,
+                        variant_name: target.getAttribute('data-variant-name') || '',
+                        length: target.getAttribute('data-length') || '',
+                        tone_style: target.getAttribute('data-tone') || ''
+                    });
+                }
                 rerenderContent();
                 // Focus al textarea de WhatsApp y cursor al final.
                 setTimeout(function () {
@@ -3930,9 +5391,22 @@
                 var matTitle = target.getAttribute('data-title') || 'material';
                 showToast('"' + matTitle + '" listo (mock)');
                 return;
-            // v1.8: toggle del orden de columnas centro/derecha en el detail.
-            case 'toggle-detail-layout':
-                setState({ detailLayoutSwapped: !state.detailLayoutSwapped });
+            // v1.17: temperatura editable en el header del detalle.
+            case 'open-temp-editor':
+                setState({ tempEditorOpen: !state.tempEditorOpen });
+                return;
+            case 'close-temp-editor':
+                if (state.tempEditorOpen) setState({ tempEditorOpen: false });
+                return;
+            case 'set-temp':
+                if (id) {
+                    // TODO[odoo]: PUT /api/leads/{lead_id}/temperature { temperature: id }. Por ahora
+                    //   solo override local en sesión (EDITS.temperatures, que getLeadTemperature lee).
+                    EDITS.temperatures[state.currentLeadId] = { temperature: id, source: 'AF' };
+                    state.tempEditorOpen = false;
+                    rerenderContent();
+                    showToast('Temperatura actualizada');
+                }
                 return;
 
             case 'open-schedule':
@@ -4130,6 +5604,23 @@
             //   global del equipo) pero el rerender la re-mounta con la misma metrica activa.
             state.leaderDash.locFilter = node.value || 'all';
             rerenderContent();
+        } else if (input === 'ab-name') {
+            // v1.15: nombre de variante. Update en cada keystroke SIN rerender (no perder foco);
+            //   rerender solo en 'change' (blur) para refrescar validación/errores/Guardar.
+            var iName = parseInt(node.getAttribute('data-idx'), 10);
+            if (state.draftVariants[iName]) state.draftVariants[iName].name = node.value;
+            if (e.type === 'change') rerenderContent();
+        } else if (input === 'ab-length') {
+            var iLen = parseInt(node.getAttribute('data-idx'), 10);
+            if (state.draftVariants[iLen]) state.draftVariants[iLen].length = node.value;
+            rerenderContent();
+        } else if (input === 'ab-tone') {
+            var iTone = parseInt(node.getAttribute('data-idx'), 10);
+            if (state.draftVariants[iTone]) state.draftVariants[iTone].tone_style = node.value;
+            rerenderContent();
+        } else if (input === 'af-switch') {
+            // v1.19: admin elige "Como yo" (value vacío) o "Ver como <AF>".
+            setViewingAs(node.value || null);
         }
     }
 
@@ -4146,16 +5637,79 @@
     function handleAiChip(promptId) {
         var lead = getLead(state.currentLeadId);
         if (!lead) return;
+
+        // v1.15 (Pieza A) / v1.20: SOLO 'sugerir-mensaje' cambia su origen -> /recommendation.
+        //   Ahora es ASINCRONO (loading -> result | error+retry) porque puede salir al backend real.
+        //   'material-marketing' y 'reactivar-sin-presionar' quedan EXACTAMENTE igual (sincronos).
+        if (promptId === 'sugerir-mensaje') {
+            startSuggestFlow(lead);
+            return;
+        }
+
         var resp = getAiPromptResponse(promptId);
         if (!resp) return;
+
         // El "user message" del chip usa la label del chip como texto visible.
         var label = (promptId === 'material-marketing') ? 'Material marketing'
-                  : (promptId === 'sugerir-mensaje') ? 'Sugerir mensaje'
                   : (promptId === 'reactivar-sin-presionar') ? 'Reactivar sin presionar'
                   : promptId;
         pushAiChat(lead.id, label, resp);
         state.aiChatDraft = '';
         rerenderContent();
+    }
+
+    // v1.15/v1.20: mapea la respuesta de /recommendation al payload de la burbuja IA. PURA (sin
+    //   side effects). Maneja los casos edge del plan. La shape es identica en mock y backend real.
+    function suggestPayloadFromRec(rec) {
+        if (!rec || rec.should_followup_today === false) {
+            return { kind: 'free', text: 'Para este lead no hay un seguimiento sugerido para hoy.' };
+        }
+        if (rec.fallback) {
+            return { kind: 'free', text: DRAFT_FALLBACK_COPY };
+        }
+        if (!rec.drafts || !rec.drafts.length) {
+            return { kind: 'free', text: 'Sin borrador automático sugerido. Redactá manualmente.' };
+        }
+        // kind:'variants' con source:'draft' (telemetría draft_copied scoped a drafts reales).
+        return { kind: 'variants', source: 'draft', intro: 'Te propongo estas opciones:', variants: rec.drafts.slice() };
+    }
+
+    // v1.20: maneja el ciclo loading -> variants/free | error+retry de UNA burbuja IA de
+    //   "Sugerir mensaje". Muta bubble.payload in-place y re-renderiza. Reusado por
+    //   startSuggestFlow (primer intento) y el handler de Reintentar (ai-retry-suggest).
+    function driveSuggestBubble(bubble, leadId) {
+        bubble.payload = { kind: 'loading', text: 'Generando recomendación…' };
+        state.__aiNeedsScroll = true;
+        rerenderContent();
+        return DraftService.getRecommendation(leadId).then(function (rec) {
+            if (state.recommendationCache) state.recommendationCache[leadId] = rec;
+            bubble.payload = suggestPayloadFromRec(rec);
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        }).catch(function (err) {
+            log('getRecommendation failed', err && (err.code || err.message));
+            bubble.payload = { kind: 'error', text: suggestErrorCopy(err) };
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        });
+    }
+
+    // v1.20: arranca "Sugerir mensaje". Empuja user msg + burbuja IA (loading) y dispara el fetch.
+    function startSuggestFlow(lead) {
+        pushAiChat(lead.id, 'Sugerir mensaje', { kind: 'loading', text: 'Generando recomendación…' });
+        state.aiChatDraft = '';
+        var hist = state.aiChatHistory[lead.id];
+        driveSuggestBubble(hist[hist.length - 1], lead.id);
+    }
+
+    // v1.20: Reintentar tras un error. Reusa la ultima burbuja IA del lead (no apila una nueva).
+    function retrySuggest(leadId) {
+        var hist = (state.aiChatHistory && state.aiChatHistory[leadId]) || [];
+        for (var i = hist.length - 1; i >= 0; i--) {
+            if (hist[i].from === 'ai') { driveSuggestBubble(hist[i], leadId); return; }
+        }
+        var lead = getLead(leadId);
+        if (lead) startSuggestFlow(lead);
     }
 
     // v1.6: envio de query libre al chat IA. Si esta vacio, no hace nada.
@@ -4197,6 +5751,7 @@
         overlay.innerHTML =
             '<div class="qida-shell" id="qida-shell">'
                 + '<div class="qida-shell-header"></div>'
+                + '<div class="qida-af-switch-bar" id="qida-af-switch-bar" style="display:none"></div>'
                 + '<div id="qida-content" class="qida-content"></div>'
             + '</div>';
         overlay.addEventListener('click', handleClick);
@@ -4312,6 +5867,37 @@
         log('openLeadersDashboard()');
     }
 
+    // v1.15: abre "Armá tu asistente". Carga la config (lazy) en la copia de trabajo + snapshot.
+    function openAgentBuilder() {
+        if (!state.draftVariantsLoaded) {
+            var cfg = DraftService.getDraftVariantsSync(resolveAfKey());
+            state.draftVariantsSaved = deepCopyVariants(cfg.variants);
+            state.draftVariants = deepCopyVariants(cfg.variants);
+            state.draftVariantsLoaded = true;
+        }
+        state.agentBuilderConfirmDiscard = false;
+        state.view = 'agentBuilder';
+        rerenderContent();
+        log('openAgentBuilder()');
+    }
+
+    // Salida de agentBuilder hacia el dashboard. Con cambios sin guardar -> confirm.
+    function abBack() {
+        if (agentBuilderDirty()) {
+            state.agentBuilderConfirmDiscard = true;
+            rerenderContent();
+            return;
+        }
+        state.view = 'dashboard';
+        rerenderContent();
+    }
+    function abDiscardAndLeave() {
+        state.draftVariants = deepCopyVariants(state.draftVariantsSaved);
+        state.agentBuilderConfirmDiscard = false;
+        state.view = 'dashboard';
+        rerenderContent();
+    }
+
     // Keyboard global: prioridad schedule modal -> main modal.
     // v1.10: el atajo "/" para abrir el asistente y el branch Enter del input del
     //   asistente fueron eliminados (el asistente del dashboard ya no existe).
@@ -4322,8 +5908,21 @@
         var isEsc = (e.key === 'Escape' || e.keyCode === 27);
 
         if (isEsc) {
-            if (state.showScheduleModal) closeScheduleModal();
-            else closeModal();
+            if (state.showScheduleModal) { closeScheduleModal(); return; }
+            // v1.17: si el dropdown de temperatura está abierto, Esc lo cierra (no cierra el modal).
+            if (state.view === 'detail' && state.tempEditorOpen) { setState({ tempEditorOpen: false }); return; }
+            // v1.15: si el confirm de descartar está abierto, Esc lo cierra (sigue editando).
+            if (state.view === 'agentBuilder' && state.agentBuilderConfirmDiscard) {
+                setState({ agentBuilderConfirmDiscard: false });
+                return;
+            }
+            // v1.15: en agentBuilder con cambios sin guardar, Esc dispara el confirm (no cierra).
+            if (state.view === 'agentBuilder' && agentBuilderDirty()) {
+                state.agentBuilderConfirmDiscard = true;
+                rerenderContent();
+                return;
+            }
+            closeModal();
             return;
         }
     });
@@ -4335,8 +5934,9 @@
         // v1.12: si el usuario habia abierto el panel de lideres y vuelve por el badge AF,
         //   normalizamos a la vista AF. closeModal ya resetea a 'dashboard', pero hacemos
         //   esto explicito por si algo dejara view en 'leadersDashboard'.
-        if (state.view === 'leadersDashboard') {
+        if (state.view === 'leadersDashboard' || state.view === 'agentBuilder') {
             state.view = 'dashboard';
+            state.agentBuilderConfirmDiscard = false;
             rerenderContent();
         }
         var overlay = document.querySelector('.qida-overlay');
@@ -4360,6 +5960,11 @@
         state.scheduleLeadIdOverride = null;
         state.__pendingSuggestionDoneId = null;
         state.__pendingActivityDoneId = null;
+        // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
+        //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
+        state.agentBuilderConfirmDiscard = false;
+        // v1.17: cierra el dropdown de temperatura. EDITS.temperatures (el override real) PERSISTE.
+        state.tempEditorOpen = false;
         // v1.10: limpieza del dashboard de leads enfriandose.
         //   completedTodayIds PERSISTE durante toda la sesion del page load (NO se vacia
         //   aqui). Solo limpiamos el toast de undo y cancelamos cualquier timeout activo.
@@ -4368,6 +5973,14 @@
             clearTimeout(state.undoTimeoutId);
             state.undoTimeoutId = null;
         }
+        // v1.13: reset del dashboard AF (vista, filtros y datos cacheados). completedTodayIds
+        //   PERSISTE en sesion (igual que antes). dashRows se re-primea en el proximo render.
+        state.dashView = 'suggestions';
+        state.dashRows = null;
+        state.dashLoading = false;
+        state.dashSegment = null;
+        state.dashFiltersExpanded = false;
+        state.dashOnlyNew = false;
         // v1.6: limpiamos draft del WhatsApp y del chat IA, y attachmentsExpanded.
         // aiChatHistory PERSISTE durante toda la sesion del page load: NO se vacia aqui.
         state.draftMessage = '';
@@ -4402,6 +6015,15 @@
             CONFIG = options || {};
             log('init() called', CONFIG);
 
+            // v1.20: toggle del endpoint real. CONFIG.useRealAPI pisa el FEATURE_FLAG default;
+            //   CONFIG.apiBaseUrl pisa la URL de prod. Ambos opcionales (default = mock + prod URL).
+            if (typeof CONFIG.useRealAPI === 'boolean') FEATURE_FLAG.useRealAPI = CONFIG.useRealAPI;
+            if (CONFIG.apiBaseUrl) API_BASE_URL = String(CONFIG.apiBaseUrl);
+            log('recommendation source', { useRealAPI: useRealApi(), apiBaseUrl: apiBaseUrl() });
+
+            // v1.19: hidratar el "viewing as" persistido (si el admin dejó una impersonación activa).
+            initViewingAsFromStorage();
+
             // v1.11: feature flag automatico por host. Si estamos en erp.qida.es, activamos
             //   modo Odoo y disparamos session_info para hidratar _baseContext. Si la sesion
             //   falla (logout, network), degradamos a modo mock para no romper el widget.
@@ -4418,7 +6040,9 @@
                     _isLeader = !!(_currentUserEmail && LEADER_EMAILS[_currentUserEmail]);
                     log('Odoo session ready', { uid: sess && sess.uid, lang: _baseContext.lang, isLeader: _isLeader });
                     if (_isLeader) activateLeaderUi();
+                    syncAfSwitcher();  // v1.19: el estado admin depende del email recién hidratado
                     console.info('[QidaAssistant] Leader mode:', _isLeader, _currentUserEmail);
+                    console.info('[QidaAssistant] Admin mode:', isAdminUser(), _currentUserEmail);
                 }).catch(function (err) {
                     log('Odoo session failed, falling back to mock mode for AF detail', err && err.message);
                     IS_ODOO_MODE = false;  // graceful fallback para el detalle de leads.
@@ -4435,7 +6059,9 @@
                 _isLeader = true;
                 _currentUserEmail = 'dev@local';
                 activateLeaderUi();
+                syncAfSwitcher();  // v1.19: dev local = admin (para testear el switcher)
                 console.info('[QidaAssistant] Leader mode:', true, '(dev local)');
+                console.info('[QidaAssistant] Admin mode:', true, '(dev local)');
             }
 
             mountWhenReady();
