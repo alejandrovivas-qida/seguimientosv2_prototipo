@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.19.0
+ * QIDA ASSISTANT v1.20.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,43 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.20.0 (SPIKE: "Sugerir mensaje" consume el endpoint real de recomendacion del
+ *   chat agent v2 — qida-followup-api — con fallback al mock detras de un toggle):
+ *   - TOGGLE: FEATURE_FLAG.useRealAPI (false por default -> mock; true -> fetch real). Overridable
+ *     via CONFIG.useRealAPI en QidaAssistant.init(...). API_BASE_URL_DEFAULT = la prod de Vercel,
+ *     overridable via CONFIG.apiBaseUrl. Con el flag en false el widget se comporta EXACTAMENTE
+ *     como v1.19 (cero regresion): el mock sigue siendo la unica fuente.
+ *   - FETCH WRAPPER: fetchRecommendation(leadId) -> POST {apiBaseUrl}/api/leads/{id}/recommendation
+ *     con afEmailHeaders() (X-AF-Email). Resuelve a la MISMA shape que getRecommendationSync, asi
+ *     que el resto del pipeline (suggestPayloadFromRec -> renderAiPayload) no cambia. Maneja
+ *     200/4xx/5xx + fallo de red, devolviendo Error con .userMessage para la UI.
+ *   - LEAD ID: toNumericLeadId() strippea el prefijo de display ('L122581' -> 122581). En Odoo real
+ *     el id ya es numerico, asi que es no-op alli. ASUNCION a confirmar con Odoo (ver TODO[leadid]).
+ *   - UI ASYNC: "Sugerir mensaje" deja de ser sincrono. startSuggestFlow -> burbuja IA en estado
+ *     loading (spinner) -> al resolver, variants/free; al fallar, mensaje claro + boton Reintentar
+ *     (ai-retry-suggest, reusa la misma burbuja). Casos edge (should_followup_today:false /
+ *     fallback / drafts:[]) intactos via suggestPayloadFromRec.
+ *   - DraftService.getRecommendation ahora ramifica: flag on -> fetchRecommendation; flag off ->
+ *     mock con simulateLatency (igual que antes). getRecommendationSync queda SOLO para el mock
+ *     (no se puede hacer fetch sincrono); ya no se usa en el flujo de UI (era el unico caller).
+ *   - Render nuevo: renderAiPayload soporta kind:'loading' y kind:'error'. CSS: .qida-aichat-loading
+ *     (+ spinner @keyframes qida-spin) y .qida-aichat-error/-retry.
+ *   - NO se toca el backend (solo lectura), NO se mergea, el mock queda como fallback. Las
+ *     inconsistencias backend<->frontend detectadas quedan como TODO[ticket], no se "arreglan"
+ *     tocando el contrato.
+ *
+ * DEFAULTS / ASUNCIONES QUE TOME EN v1.20.0:
+ *   - toNumericLeadId asume que el id de display del widget ('L<numero>') mapea 1:1 al lead_id
+ *     numerico de Odoo/backend. Validado por contrato (curl) pero NO end-to-end con un lead del
+ *     dashboard mock (esos ids no existen en prod). TODO[leadid]: confirmar el mapeo con Odoo.
+ *   - El backend devuelve suggested_materials EN LA MISMA respuesta de /recommendation, pero el
+ *     chip "Sugerir mensaje" sigue ignorandolos (el chip "Material marketing" usa su propio mock).
+ *     Oportunidad futura, fuera de scope del spike. TODO[ticket-materials].
+ *   - El backend devuelve rationale/mode/channel/tone/signature_mode/motor_available/
+ *     suppression_reason/wait_until que la UI todavia NO muestra. Esperan UI futura.
+ *     TODO[ticket-plan-fields].
+ *   - char_count viene del backend y el front lo ignora (no molesta, no se renombra).
  *
  * Cambios v1.19.0 (AF switcher: admins pueden "ver como" cualquier AF para QA/training/support):
  *   - Adaptación de framework: NO hay Next.js (widget vanilla servido desde Blob), así que NO existe
@@ -1037,8 +1074,20 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.19.0';
+    var VERSION = '1.20.0';
     var CONFIG = null;
+
+    // ============================================================
+    // v1.20: INTEGRACION REAL del endpoint de recomendacion (chat agent v2)
+    // ============================================================
+    // Toggle simple para cablear "Sugerir mensaje" al backend real (qida-followup-api) sin romper
+    //   el widget: con useRealAPI=false el flujo usa el mock de siempre (cero regresion); con
+    //   useRealAPI=true hace fetch real via fetchRecommendation(). Overridable en init via
+    //   CONFIG.useRealAPI (boolean). Default false = seguro para prod hasta validar.
+    var FEATURE_FLAG = { useRealAPI: false };
+    // Base URL del backend. Override via CONFIG.apiBaseUrl. Sin barra final.
+    var API_BASE_URL_DEFAULT = 'https://qida-followup-api.vercel.app';
+    var API_BASE_URL = API_BASE_URL_DEFAULT;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
     //   queda false y el detalle se hidrata via mockHydrate. Se setea en init() y puede
@@ -2608,6 +2657,15 @@
             '.qida-aichat-copy-wa{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;transition:background .15s;}',
             '.qida-aichat-copy-wa:hover{background:#143C32;}',
             '.qida-aichat-rationale{font-size:12px;font-weight:400;color:var(--s600);font-style:italic;margin:0 0 8px;}',
+            /* v1.20: estados loading / error del fetch real de recomendacion */
+            '.qida-aichat-loading{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:12.5px;padding:2px 0;}',
+            '.qida-aichat-loading-text{font-weight:400;}',
+            '.qida-spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--s200);border-top-color:#0F6E56;border-radius:50%;animation:qida-spin .7s linear infinite;flex:0 0 auto;}',
+            '@keyframes qida-spin{to{transform:rotate(360deg);}}',
+            '.qida-aichat-error{margin-top:4px;padding:10px 12px;border:0.5px solid #F0C9C0;border-radius:10px;background:#FCF4F2;}',
+            '.qida-aichat-error-text{display:flex;align-items:center;gap:5px;margin:0 0 8px;font-size:12.5px;color:#9A3A28;line-height:1.4;}',
+            '.qida-aichat-retry{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#fff;color:#9A3A28;border:0.5px solid #E0A99B;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
+            '.qida-aichat-retry:hover{background:#FBEEEA;}',
             '.qida-aichat-mat-card{margin-top:6px;padding:10px 12px;border:0.5px solid var(--s200);border-radius:10px;background:#fff;}',
             '.qida-aichat-mat-title{font-size:12.5px;font-weight:500;color:var(--s800);margin-bottom:3px;}',
             '.qida-aichat-mat-desc{font-size:12px;font-weight:400;color:var(--s600);margin-bottom:6px;line-height:1.45;}',
@@ -3823,6 +3881,80 @@
         return resolveAiPlaceholders(raw, lead);
     }
 
+    // ============================================================
+    // v1.20: fetch wrapper para el endpoint real de recomendacion
+    // ============================================================
+    // Base URL efectiva (CONFIG override > default). Sin barra final.
+    function apiBaseUrl() {
+        var b = (CONFIG && CONFIG.apiBaseUrl) || API_BASE_URL;
+        return String(b).replace(/\/+$/, '');
+    }
+    // ¿Usar la API real? CONFIG.useRealAPI (boolean) pisa el FEATURE_FLAG.
+    function useRealApi() {
+        if (CONFIG && typeof CONFIG.useRealAPI === 'boolean') return CONFIG.useRealAPI;
+        return !!FEATURE_FLAG.useRealAPI;
+    }
+    // 'L122581' -> '122581'. En Odoo real el id ya es numerico (no-op). '' si no hay digitos.
+    //   TODO[leadid]: confirmar con Odoo que el id de display mapea 1:1 al lead_id del backend.
+    function toNumericLeadId(leadId) {
+        return String(leadId == null ? '' : leadId).replace(/\D/g, '');
+    }
+    // Error tipado para la UI: .userMessage (texto claro), .code, .status.
+    function makeApiError(userMessage, code, status) {
+        var e = new Error(code || userMessage || 'API_ERROR');
+        e.userMessage = userMessage;
+        e.code = code || null;
+        e.status = (status == null ? 0 : status);
+        return e;
+    }
+    // Copy claro por rango de status. serverMsg = mensaje del backend si lo hay.
+    function httpErrorCopy(status, serverMsg) {
+        if (status === 403) return 'No tenés permiso para ver la recomendación de este lead.';
+        if (status === 404) return 'No encontramos este lead en el sistema de seguimientos.';
+        if (status === 422) return 'La petición no es válida (revisá el email de AF o el ID del lead).';
+        if (status >= 500) return 'El servicio de recomendaciones tuvo un error temporal. Reintentá en unos segundos.';
+        return serverMsg || ('Error ' + status + ' al pedir la recomendación.');
+    }
+    // Texto de error para la burbuja IA. Cubre tanto errores tipados como fallo de red (fetch reject).
+    function suggestErrorCopy(err) {
+        if (err && err.userMessage) return err.userMessage;
+        return 'No se pudo conectar con el servicio de recomendaciones. Revisá tu conexión y reintentá.';
+    }
+    // POST /api/leads/{lead_id}/recommendation contra qida-followup-api (chat agent v2).
+    //   Resuelve a la MISMA shape que getRecommendationSync (drafts:[{name,length,tone_style,text,...}]).
+    //   Rechaza con un Error que lleva .userMessage en 4xx/5xx para que la UI lo muestre + retry.
+    function fetchRecommendation(leadId) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) {
+            return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        }
+        var headers = afEmailHeaders();
+        headers['Content-Type'] = 'application/json';
+        if (!headers['X-AF-Email']) {
+            return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la petición.', 'NO_AF_EMAIL', 0));
+        }
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/recommendation';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) {
+                    log('recommendation ok', { lead: numericId, ms: Date.now() - t0, cached: data && data.cached });
+                    return data;
+                }
+                // Error: el BFF devuelve {error:{code,message}}, FastAPI valida con {detail:[{msg}]}.
+                var code = (data && data.error && data.error.code)
+                        || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || null;
+                log('recommendation error', { lead: numericId, status: res.status, code: code, ms: Date.now() - t0 });
+                throw makeApiError(httpErrorCopy(res.status, serverMsg), code, res.status);
+            });
+        });
+    }
+
     var DraftService = {
         // GET /api/admin/afs/{af_key}/draft-variants (mock).
         getDraftVariantsSync: function (afKey) {
@@ -3864,6 +3996,10 @@
             return { should_followup_today: true, fallback: false, drafts: drafts };
         },
         getRecommendation: function (leadId) {
+            // v1.20: flag on -> backend real (qida-followup-api). flag off -> mock (como v1.19).
+            if (useRealApi()) {
+                return fetchRecommendation(leadId);
+            }
             var self = this;
             return simulateLatency(120, 280).then(function () { return self.getRecommendationSync(leadId); });
         }
@@ -4053,6 +4189,18 @@
             + '</div>';
         } else if (payload.kind === 'free' && payload.text) {
             html += '<p class="qida-aichat-bubble-text">' + esc(payload.text) + '</p>';
+        } else if (payload.kind === 'loading') {
+            // v1.20: spinner mientras esperamos la recomendacion real (3-10s primera call).
+            html += '<div class="qida-aichat-loading">'
+                + '<span class="qida-spinner" aria-hidden="true"></span>'
+                + '<span class="qida-aichat-loading-text">' + esc(payload.text || 'Generando…') + '</span>'
+            + '</div>';
+        } else if (payload.kind === 'error') {
+            // v1.20: error claro + Reintentar. data-id = lead al que pertenece esta burbuja.
+            html += '<div class="qida-aichat-error">'
+                + '<p class="qida-aichat-error-text">' + icon('alert-triangle', 13) + ' ' + esc(payload.text || 'Ocurrió un error.') + '</p>'
+                + '<button class="qida-aichat-retry" data-action="ai-retry-suggest" data-id="' + esc(lead ? lead.id : (state.currentLeadId || '')) + '">' + icon('refresh-cw', 11) + ' Reintentar</button>'
+            + '</div>';
         }
 
         return html;
@@ -5190,6 +5338,10 @@
                 var aiInp = document.getElementById('qida-aichat-input');
                 handleAiChatSend(aiInp ? aiInp.value : (state.aiChatDraft || ''));
                 return;
+            // v1.20: Reintentar la recomendacion tras un error (reusa la burbuja IA del lead).
+            case 'ai-retry-suggest':
+                retrySuggest(id || state.currentLeadId);
+                return;
             // v1.8: la AF elige una variante (sugerir mensaje o reactivar) -> push al chat
             //   como user message + respuesta IA tipo refine. Material marketing mantiene su
             //   propio handler ai-material-action (sin tocar).
@@ -5486,20 +5638,19 @@
         var lead = getLead(state.currentLeadId);
         if (!lead) return;
 
-        // v1.15 (Pieza A): SOLO 'sugerir-mensaje' cambia su origen -> /recommendation (drafts
-        //   configurados por la AF). 'material-marketing' y 'reactivar-sin-presionar' quedan
-        //   EXACTAMENTE igual (mismo pipeline getAiPromptResponse). If explícito para aislar.
-        var resp;
+        // v1.15 (Pieza A) / v1.20: SOLO 'sugerir-mensaje' cambia su origen -> /recommendation.
+        //   Ahora es ASINCRONO (loading -> result | error+retry) porque puede salir al backend real.
+        //   'material-marketing' y 'reactivar-sin-presionar' quedan EXACTAMENTE igual (sincronos).
         if (promptId === 'sugerir-mensaje') {
-            resp = buildSuggestPayload(lead.id);
-        } else {
-            resp = getAiPromptResponse(promptId);
+            startSuggestFlow(lead);
+            return;
         }
+
+        var resp = getAiPromptResponse(promptId);
         if (!resp) return;
 
         // El "user message" del chip usa la label del chip como texto visible.
         var label = (promptId === 'material-marketing') ? 'Material marketing'
-                  : (promptId === 'sugerir-mensaje') ? 'Sugerir mensaje'
                   : (promptId === 'reactivar-sin-presionar') ? 'Reactivar sin presionar'
                   : promptId;
         pushAiChat(lead.id, label, resp);
@@ -5507,13 +5658,10 @@
         rerenderContent();
     }
 
-    // v1.15: construye el payload IA para "Sugerir mensaje" desde DraftService.getRecommendation.
-    //   Maneja los casos edge del plan. Cachea la respuesta por lead para no re-pedir en cada render.
-    function buildSuggestPayload(leadId) {
-        var rec = DraftService.getRecommendationSync(leadId);
-        if (state.recommendationCache) state.recommendationCache[leadId] = rec;
-
-        if (rec.should_followup_today === false) {
+    // v1.15/v1.20: mapea la respuesta de /recommendation al payload de la burbuja IA. PURA (sin
+    //   side effects). Maneja los casos edge del plan. La shape es identica en mock y backend real.
+    function suggestPayloadFromRec(rec) {
+        if (!rec || rec.should_followup_today === false) {
             return { kind: 'free', text: 'Para este lead no hay un seguimiento sugerido para hoy.' };
         }
         if (rec.fallback) {
@@ -5524,6 +5672,44 @@
         }
         // kind:'variants' con source:'draft' (telemetría draft_copied scoped a drafts reales).
         return { kind: 'variants', source: 'draft', intro: 'Te propongo estas opciones:', variants: rec.drafts.slice() };
+    }
+
+    // v1.20: maneja el ciclo loading -> variants/free | error+retry de UNA burbuja IA de
+    //   "Sugerir mensaje". Muta bubble.payload in-place y re-renderiza. Reusado por
+    //   startSuggestFlow (primer intento) y el handler de Reintentar (ai-retry-suggest).
+    function driveSuggestBubble(bubble, leadId) {
+        bubble.payload = { kind: 'loading', text: 'Generando recomendación…' };
+        state.__aiNeedsScroll = true;
+        rerenderContent();
+        return DraftService.getRecommendation(leadId).then(function (rec) {
+            if (state.recommendationCache) state.recommendationCache[leadId] = rec;
+            bubble.payload = suggestPayloadFromRec(rec);
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        }).catch(function (err) {
+            log('getRecommendation failed', err && (err.code || err.message));
+            bubble.payload = { kind: 'error', text: suggestErrorCopy(err) };
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        });
+    }
+
+    // v1.20: arranca "Sugerir mensaje". Empuja user msg + burbuja IA (loading) y dispara el fetch.
+    function startSuggestFlow(lead) {
+        pushAiChat(lead.id, 'Sugerir mensaje', { kind: 'loading', text: 'Generando recomendación…' });
+        state.aiChatDraft = '';
+        var hist = state.aiChatHistory[lead.id];
+        driveSuggestBubble(hist[hist.length - 1], lead.id);
+    }
+
+    // v1.20: Reintentar tras un error. Reusa la ultima burbuja IA del lead (no apila una nueva).
+    function retrySuggest(leadId) {
+        var hist = (state.aiChatHistory && state.aiChatHistory[leadId]) || [];
+        for (var i = hist.length - 1; i >= 0; i--) {
+            if (hist[i].from === 'ai') { driveSuggestBubble(hist[i], leadId); return; }
+        }
+        var lead = getLead(leadId);
+        if (lead) startSuggestFlow(lead);
     }
 
     // v1.6: envio de query libre al chat IA. Si esta vacio, no hace nada.
@@ -5828,6 +6014,12 @@
         init: function (options) {
             CONFIG = options || {};
             log('init() called', CONFIG);
+
+            // v1.20: toggle del endpoint real. CONFIG.useRealAPI pisa el FEATURE_FLAG default;
+            //   CONFIG.apiBaseUrl pisa la URL de prod. Ambos opcionales (default = mock + prod URL).
+            if (typeof CONFIG.useRealAPI === 'boolean') FEATURE_FLAG.useRealAPI = CONFIG.useRealAPI;
+            if (CONFIG.apiBaseUrl) API_BASE_URL = String(CONFIG.apiBaseUrl);
+            log('recommendation source', { useRealAPI: useRealApi(), apiBaseUrl: apiBaseUrl() });
 
             // v1.19: hidratar el "viewing as" persistido (si el admin dejó una impersonación activa).
             initViewingAsFromStorage();
