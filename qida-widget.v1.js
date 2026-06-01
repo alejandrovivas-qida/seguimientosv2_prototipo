@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.20.0
+ * QIDA ASSISTANT v1.21.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,33 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.21.0 (wire de 3 endpoints YA existentes en qida-followup-api, mismo patron flag+mock
+ *   que el spike de drafts: FEATURE_FLAG.useRealAPI / CONFIG.useRealAPI. Default OFF = cero
+ *   regresion, el mock sigue siendo la unica fuente hasta validar en prod):
+ *   - HELPER GENERICO: apiFetchJson(method, path, {afEmail, body, noun}) + apiErrorCopy(status,...)
+ *     reusan makeApiError/.userMessage del spike. Manejan 2xx/4xx/5xx/red de forma uniforme.
+ *   - ENDPOINT 1 — "Armá tu asistente" (GET/PUT /api/admin/afs/{af_key}/draft-variants; admin, SIN
+ *     X-AF-Email): DraftService.getDraftVariants/saveDraftVariants ramifican por useRealApi().
+ *     openAgentBuilder ahora es ASINCRONO: GET con loading -> popular campos | error+Reintentar
+ *     (ab-reload). "Guardar" -> PUT { variants:[...] } con loading ("Guardando…") + success(toast)
+ *     + error(toast con userMessage). El mock getDraftVariantsSync queda como fuente del fallback.
+ *     State: agentBuilderLoading/Error/Saving.
+ *   - ENDPOINT 2 — conversacion WhatsApp (GET /api/leads/{lead_id}/conversation): renderWhatsAppPane
+ *     con flag on lee state.conversationCache (loading/error/retry=wa-retry) en vez de MOCK_WHATSAPP.
+ *     normalizeConversation mapea ConversationResponse -> {from:from_me?"af":"lead", text, time,
+ *     hasAttachment...}. from_me=true a la derecha (verde), false a la izquierda (gris). loadConversation
+ *     se dispara en select-lead (flag on). El POST /conversation/messages NO es parte del sprint
+ *     (solo GET): se hace echo local del mensaje enviado. TODO[send-not-wired].
+ *   - ENDPOINT 3 — chat con el asistente (POST /api/leads/{lead_id}/assistant/chat): handleAiChatSend
+ *     con flag on hace loading -> assistant_message (+ updated_drafts como cards "Esta me gusta mas")
+ *     | error+Reintentar (ai-retry-chat). Persiste session_id por lead en state.assistantSessions
+ *     (sesion nueva al reabrir el modal). rate_limit_reached -> aviso. El mock mockAIResponse queda
+ *     como fallback. materials/turn_count: TODO[ticket], no se rompe el contract.
+ *   - LIMITACION: NO pude validar contra prod desde el sandbox (egress allowlist bloquea
+ *     qida-followup-api.vercel.app: "Host not in allowlist") ni leer schemas.py del backend.
+ *     Implementado contra la shape documentada; validacion real-prod pendiente en entorno con el host
+ *     permitido. Tests: mock paths + construccion de request/normalizacion con fetch stub (Node).
  *
  * Cambios v1.20.0 (SPIKE: "Sugerir mensaje" consume el endpoint real de recomendacion del
  *   chat agent v2 — qida-followup-api — con fallback al mock detras de un toggle):
@@ -1074,7 +1101,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.20.0';
+    var VERSION = '1.21.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1605,7 +1632,18 @@
         draftVariantsSaved: [],
         draftVariantsLoaded: false,
         agentBuilderConfirmDiscard: false,
+        // v1.21: estados async del form (GET/PUT draft-variants reales con flag on).
+        agentBuilderLoading: false,
+        agentBuilderError: null,
+        agentBuilderSaving: false,
         recommendationCache: {},
+
+        // v1.21: cache de la conversación WhatsApp por lead (solo con useRealAPI). Shape:
+        //   { [leadId]: { _loading, _error, messages:[...normalizadas]|null } }. Con flag off
+        //   el pane usa MOCK_WHATSAPP (sin tocar este cache).
+        conversationCache: {},
+        // v1.21: session_id del chat con el asistente, por lead (mientras el modal está abierto).
+        assistantSessions: {},
 
         // v1.8: toggle de orden de columnas del detalle (info vs IA en centro/derecha).
         //   false (default) -> WA | Info | IA   (orden actual de v1.7).
@@ -2666,6 +2704,16 @@
             '.qida-aichat-error-text{display:flex;align-items:center;gap:5px;margin:0 0 8px;font-size:12.5px;color:#9A3A28;line-height:1.4;}',
             '.qida-aichat-retry{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#fff;color:#9A3A28;border:0.5px solid #E0A99B;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
             '.qida-aichat-retry:hover{background:#FBEEEA;}',
+            /* v1.21: aviso de rate limit del chat con el asistente */
+            '.qida-aichat-ratelimit{display:flex;align-items:center;gap:5px;margin:8px 0 0;font-size:11.5px;color:#9a3412;}',
+            /* v1.21: estados del pane WhatsApp con conversación real (loading/error) */
+            '.qida-wa-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;height:100%;color:var(--s600);font-size:12.5px;text-align:center;padding:20px;}',
+            '.qida-wa-state.error{color:#9A3A28;}',
+            '.qida-msg-att{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--s500);margin:4px 0 0;}',
+            /* v1.21: estados loading/error del form "Armá tu asistente" (GET real) */
+            '.qida-ab-loading{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:13px;padding:24px 0;justify-content:center;}',
+            '.qida-ab-error-box{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:16px;border:0.5px solid #F0C9C0;border-radius:10px;background:#FCF4F2;}',
+            '.qida-ab-error-msg{display:flex;align-items:center;gap:6px;margin:0;font-size:13px;color:#9A3A28;}',
             '.qida-aichat-mat-card{margin-top:6px;padding:10px 12px;border:0.5px solid var(--s200);border-radius:10px;background:#fff;}',
             '.qida-aichat-mat-title{font-size:12.5px;font-weight:500;color:var(--s800);margin-bottom:3px;}',
             '.qida-aichat-mat-desc{font-size:12px;font-weight:400;color:var(--s600);margin-bottom:6px;line-height:1.45;}',
@@ -3680,6 +3728,13 @@
         var timestamp = 'Hoy ' + nowHHMM();
         if (!MOCK_WHATSAPP[leadId]) MOCK_WHATSAPP[leadId] = [];
         MOCK_WHATSAPP[leadId].push({ from: 'af', text: trimmed, time: timestamp });
+        // v1.21: con useRealAPI el pane lee de conversationCache, no de MOCK_WHATSAPP. El POST a
+        //   /conversation/messages NO es parte de este sprint (solo GET conversation), así que
+        //   hacemos echo local del mensaje enviado para no perder feedback visual.
+        //   TODO[send-not-wired]: cablear POST /api/leads/{id}/conversation/messages.
+        if (useRealApi() && state.conversationCache[leadId] && state.conversationCache[leadId].messages) {
+            state.conversationCache[leadId].messages.push({ from: 'af', text: trimmed, time: formatConvTime(new Date().toISOString()), hasAttachment: false, status: 'sent' });
+        }
 
         var lead = getLead(leadId);
         if (lead) {
@@ -3955,6 +4010,127 @@
         });
     }
 
+    // ============================================================
+    // v1.21: helper genérico de fetch JSON + copy de error (3 wires nuevos)
+    // ============================================================
+    // Copy de error por status, parametrizado por "noun" (recurso). Mensaje del backend si lo hay.
+    function apiErrorCopy(status, serverMsg, noun) {
+        noun = noun || 'el recurso';
+        if (status === 401 || status === 403) return 'No tenés permiso para acceder a ' + noun + '.';
+        if (status === 404) return 'No encontramos ' + noun + '.';
+        if (status === 422) return 'La petición no es válida (' + noun + ').';
+        if (status === 429) return 'Demasiadas peticiones. Esperá unos segundos y reintentá.';
+        if (status >= 500) return 'El servicio tuvo un error temporal. Reintentá en unos segundos.';
+        return serverMsg || ('Error ' + status + ' al pedir ' + noun + '.');
+    }
+    // Fetch JSON genérico contra qida-followup-api. Mismo manejo de error que fetchRecommendation:
+    //   200 -> data; 4xx/5xx/red -> rechaza con Error tipado (.userMessage). opts:
+    //   { afEmail:bool (default true), body:obj|null, noun:string }.
+    function apiFetchJson(method, path, opts) {
+        opts = opts || {};
+        var headers = {};
+        if (opts.afEmail !== false) {
+            headers = afEmailHeaders();
+            if (!headers['X-AF-Email']) {
+                return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la petición.', 'NO_AF_EMAIL', 0));
+            }
+        }
+        var bodyStr;
+        if (opts.body != null) { headers['Content-Type'] = 'application/json'; bodyStr = JSON.stringify(opts.body); }
+        var url = apiBaseUrl() + path;
+        var t0 = Date.now();
+        return fetch(url, { method: method, headers: headers, body: bodyStr }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) {
+                    log('api ok', { method: method, path: path, ms: Date.now() - t0 });
+                    return data;
+                }
+                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || (typeof (data && data.detail) === 'string' ? data.detail : null);
+                log('api error', { method: method, path: path, status: res.status, code: code });
+                throw makeApiError(apiErrorCopy(res.status, serverMsg, opts.noun), code, res.status);
+            });
+        });
+    }
+
+    // ---- ENDPOINT 1: draft-variants (admin, NO requiere X-AF-Email) ----
+    // GET -> { af_key, is_default, variants:[{name,length,tone_style}] } (shape documentada).
+    function fetchDraftVariants(afKey) {
+        return apiFetchJson('GET', '/api/admin/afs/' + encodeURIComponent(afKey) + '/draft-variants',
+            { afEmail: false, noun: 'tu configuración del asistente' }
+        ).then(function (data) {
+            var variants = (data && data.variants) || [];
+            var out = [];
+            for (var i = 0; i < variants.length; i++) {
+                out.push({ name: variants[i].name, length: variants[i].length, tone_style: variants[i].tone_style });
+            }
+            return { af_key: (data && data.af_key) || afKey, is_default: !!(data && data.is_default), variants: out };
+        });
+    }
+    // PUT { variants:[...] } -> resuelve {ok:true} | {ok:false,...}. NUNCA rechaza (la UI lee .ok).
+    function fetchSaveDraftVariants(afKey, variants) {
+        var body = { variants: [] };
+        for (var i = 0; i < variants.length; i++) {
+            body.variants.push({ name: variants[i].name.trim(), length: variants[i].length, tone_style: variants[i].tone_style });
+        }
+        return apiFetchJson('PUT', '/api/admin/afs/' + encodeURIComponent(afKey) + '/draft-variants',
+            { afEmail: false, body: body, noun: 'tu configuración del asistente' }
+        ).then(function () { return { ok: true }; })
+         .catch(function (err) { return { ok: false, status: err && err.status, userMessage: (err && err.userMessage) || 'No se pudo guardar.' }; });
+    }
+
+    // ---- ENDPOINT 2: conversación WhatsApp (GET) ----
+    // Shape: { chat_id, messages:[{uid,timestamp,from_me,sender_phone,text,has_attachment,
+    //          attachment_filename,attachment_url,status}] } (validar vs schemas.py::ConversationResponse).
+    function fetchConversation(leadId) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        return apiFetchJson('GET', '/api/leads/' + numericId + '/conversation', { noun: 'la conversación de este lead' });
+    }
+    // Normaliza la respuesta del backend a la shape interna del pane WhatsApp:
+    //   { from:'af'|'lead', text, time, hasAttachment, attachmentName, attachmentUrl, status }.
+    //   from_me=true -> AF (derecha/verde); from_me=false -> lead (izquierda/gris).
+    function normalizeConversation(resp) {
+        var msgs = (resp && resp.messages) || [];
+        var out = [];
+        for (var i = 0; i < msgs.length; i++) {
+            var m = msgs[i] || {};
+            out.push({
+                from: m.from_me ? 'af' : 'lead',
+                text: m.text || '',
+                time: formatConvTime(m.timestamp),
+                hasAttachment: !!m.has_attachment,
+                attachmentName: m.attachment_filename || null,
+                attachmentUrl: m.attachment_url || null,
+                status: m.status || null
+            });
+        }
+        return out;
+    }
+    // ISO 8601 -> "DD/MM HH:MM" (local). Robusto a valores inválidos.
+    function formatConvTime(iso) {
+        if (!iso) return '';
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return String(iso);
+        function p(n) { return (n < 10 ? '0' : '') + n; }
+        return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    // ---- ENDPOINT 3: chat conversacional con el asistente (POST) ----
+    // Body { message, session_id|null }. Resp { session_id, assistant_message, materials,
+    //   updated_drafts, turn_count, rate_limit_reached }.
+    function fetchAssistantChat(leadId, message, sessionId) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        return apiFetchJson('POST', '/api/leads/' + numericId + '/assistant/chat',
+            { body: { message: message, session_id: sessionId || null }, noun: 'el asistente de este lead' }
+        );
+    }
+
     var DraftService = {
         // GET /api/admin/afs/{af_key}/draft-variants (mock).
         getDraftVariantsSync: function (afKey) {
@@ -3966,6 +4142,8 @@
             return { af_key: afKey, is_default: !custom, variants: variants };
         },
         getDraftVariants: function (afKey) {
+            // v1.21: flag on -> GET real (admin endpoint). flag off -> mock (como antes).
+            if (useRealApi()) return fetchDraftVariants(afKey);
             var self = this;
             return simulateLatency(80, 180).then(function () { return self.getDraftVariantsSync(afKey); });
         },
@@ -3973,7 +4151,9 @@
         //   (no se puede invocar con config inválida). Persiste en MOCK_DRAFT_VARIANTS_BY_AF.
         saveDraftVariants: function (afKey, variants) {
             var v = validateVariants(variants);
-            if (!v.ok) return simulateLatency(60, 120).then(function () { return { ok: false, status: 422, error: v }; });
+            if (!v.ok) return simulateLatency(60, 120).then(function () { return { ok: false, status: 422, error: v, userMessage: 'Revisá los campos.' }; });
+            // v1.21: flag on -> PUT real. flag off -> mock (persiste en MOCK_DRAFT_VARIANTS_BY_AF).
+            if (useRealApi()) return fetchSaveDraftVariants(afKey, variants);
             var copy = [];
             for (var i = 0; i < variants.length; i++) copy.push({ name: variants[i].name.trim(), length: variants[i].length, tone_style: variants[i].tone_style });
             MOCK_DRAFT_VARIANTS_BY_AF[afKey] = copy;
@@ -4189,6 +4369,24 @@
             + '</div>';
         } else if (payload.kind === 'free' && payload.text) {
             html += '<p class="qida-aichat-bubble-text">' + esc(payload.text) + '</p>';
+            // v1.21: si la respuesta del asistente (chat) trae updated_drafts, los mostramos como
+            //   cards "Esta me gusta más" (mismo flujo que Sugerir mensaje).
+            if (payload.drafts && payload.drafts.length) {
+                html += '<p class="qida-aichat-bubble-intro">Borradores actualizados:</p>';
+                for (var di = 0; di < payload.drafts.length; di++) {
+                    var dv = payload.drafts[di];
+                    var dresolved = resolveAiPlaceholders(dv.text || '', lead);
+                    var dlabel = dv.label || humanizeVariantName(dv.name);
+                    html += '<div class="qida-aichat-variant">'
+                        + '<div class="qida-aichat-variant-label">' + esc(dlabel) + '</div>'
+                        + '<p class="qida-aichat-variant-text">' + esc(dresolved) + '</p>'
+                        + '<button class="qida-aichat-variant-action" data-action="ai-pick-variant" data-label="' + esc(dlabel) + '" data-text="' + esc(dresolved) + '" data-source="draft" data-variant-name="' + esc(dv.name || '') + '" data-length="' + esc(dv.length || '') + '" data-tone="' + esc(dv.tone_style || '') + '">' + icon('arrowRight', 11) + ' Esta me gusta mas</button>'
+                    + '</div>';
+                }
+            }
+            if (payload.rateLimited) {
+                html += '<p class="qida-aichat-ratelimit">' + icon('alert', 11) + ' Alcanzaste el límite de mensajes por ahora. Probá de nuevo en un rato.</p>';
+            }
         } else if (payload.kind === 'loading') {
             // v1.20: spinner mientras esperamos la recomendacion real (3-10s primera call).
             html += '<div class="qida-aichat-loading">'
@@ -4196,10 +4394,15 @@
                 + '<span class="qida-aichat-loading-text">' + esc(payload.text || 'Generando…') + '</span>'
             + '</div>';
         } else if (payload.kind === 'error') {
-            // v1.20: error claro + Reintentar. data-id = lead al que pertenece esta burbuja.
+            // v1.20/v1.21: error claro + Reintentar. retry:'chat' reusa el último mensaje del chat;
+            //   por defecto ('suggest') reintenta la recomendación. data-id = lead de la burbuja.
+            var leadIdForRetry = esc(lead ? lead.id : (state.currentLeadId || ''));
+            var retryBtn = (payload.retry === 'chat')
+                ? '<button class="qida-aichat-retry" data-action="ai-retry-chat" data-id="' + leadIdForRetry + '" data-msg="' + esc(payload.message || '') + '">' + icon('refresh-cw', 11) + ' Reintentar</button>'
+                : '<button class="qida-aichat-retry" data-action="ai-retry-suggest" data-id="' + leadIdForRetry + '">' + icon('refresh-cw', 11) + ' Reintentar</button>';
             html += '<div class="qida-aichat-error">'
                 + '<p class="qida-aichat-error-text">' + icon('alert-triangle', 13) + ' ' + esc(payload.text || 'Ocurrió un error.') + '</p>'
-                + '<button class="qida-aichat-retry" data-action="ai-retry-suggest" data-id="' + esc(lead ? lead.id : (state.currentLeadId || '')) + '">' + icon('refresh-cw', 11) + ' Reintentar</button>'
+                + retryBtn
             + '</div>';
         }
 
@@ -4235,23 +4438,55 @@
     // ============================================================
     // RENDER: detail (full) - v1.7: 3 paneles (WA / info / IA)
     // ============================================================
+    // v1.21: carga la conversación real (GET) cuando el flag está on. Idempotente por lead.
+    function loadConversation(leadId) {
+        if (!useRealApi()) return;
+        state.conversationCache[leadId] = { _loading: true, _error: null, messages: null };
+        rerenderContent();
+        fetchConversation(leadId).then(function (resp) {
+            state.conversationCache[leadId] = { _loading: false, _error: null, messages: normalizeConversation(resp) };
+            state.__waNeedsScroll = true;
+            rerenderContent();
+        }).catch(function (err) {
+            log('fetchConversation failed', err && (err.code || err.message));
+            state.conversationCache[leadId] = { _loading: false, _error: (err && err.userMessage) || 'No se pudo cargar la conversación.', messages: null };
+            rerenderContent();
+        });
+    }
+
     function renderWhatsAppPane(lead) {
-        var msgs = MOCK_WHATSAPP[lead.id] || [];
+        // v1.21: con useRealAPI -> conversación real (cache + loading/error/retry). Sin flag -> mock.
+        var realMode = useRealApi();
+        var conv = realMode ? state.conversationCache[lead.id] : null;
         var msgsHtml;
-        if (msgs.length === 0) {
-            msgsHtml = '<div class="qida-empty-msgs">Sin mensajes de WhatsApp para este lead.</div>';
+        if (realMode && conv && conv._loading) {
+            msgsHtml = '<div class="qida-wa-state">' + icon('refresh-cw', 14) + ' Cargando conversación…</div>';
+        } else if (realMode && conv && conv._error) {
+            msgsHtml = '<div class="qida-wa-state error">'
+                + '<p>' + icon('alert-triangle', 13) + ' ' + esc(conv._error) + '</p>'
+                + '<button class="qida-btn-ghost" data-action="wa-retry" data-id="' + esc(lead.id) + '">' + icon('refresh-cw', 12) + ' Reintentar</button>'
+            + '</div>';
         } else {
-            msgsHtml = '<div class="qida-msgs">';
-            for (var i = 0; i < msgs.length; i++) {
-                var m = msgs[i];
-                msgsHtml += '<div class="qida-msg from-' + m.from + '">'
-                    + '<div class="qida-msg-bubble">'
-                        + '<p class="qida-msg-text">' + esc(m.text) + '</p>'
-                        + '<p class="qida-msg-time">' + esc(m.time) + '</p>'
-                    + '</div>'
-                + '</div>';
+            var msgs = realMode ? ((conv && conv.messages) || []) : (MOCK_WHATSAPP[lead.id] || []);
+            if (msgs.length === 0) {
+                msgsHtml = '<div class="qida-empty-msgs">Sin mensajes de WhatsApp para este lead.</div>';
+            } else {
+                msgsHtml = '<div class="qida-msgs">';
+                for (var i = 0; i < msgs.length; i++) {
+                    var m = msgs[i];
+                    var att = m.hasAttachment
+                        ? '<p class="qida-msg-att">' + icon('paperclip', 11) + ' ' + esc(m.attachmentName || 'adjunto') + '</p>'
+                        : '';
+                    msgsHtml += '<div class="qida-msg from-' + m.from + '">'
+                        + '<div class="qida-msg-bubble">'
+                            + '<p class="qida-msg-text">' + esc(m.text) + '</p>'
+                            + att
+                            + '<p class="qida-msg-time">' + esc(m.time) + '</p>'
+                        + '</div>'
+                    + '</div>';
+                }
+                msgsHtml += '</div>';
             }
-            msgsHtml += '</div>';
         }
 
         var draft = state.draftMessage || '';
@@ -4717,16 +4952,33 @@
     }
 
     function renderAgentBuilder() {
+        // v1.21: estados async del GET de configuración.
+        if (state.agentBuilderLoading) {
+            return '<div class="qida-ab"><div class="qida-ab-inner">'
+                + '<div class="qida-ab-loading">' + icon('refresh-cw', 14) + ' Cargando tu configuración…</div>'
+            + '</div></div>';
+        }
+        if (state.agentBuilderError) {
+            return '<div class="qida-ab"><div class="qida-ab-inner">'
+                + '<div class="qida-ab-error-box">'
+                    + '<p class="qida-ab-error-msg">' + icon('alert-triangle', 13) + ' ' + esc(state.agentBuilderError) + '</p>'
+                    + '<button class="qida-btn-ghost" data-action="ab-reload">' + icon('refresh-cw', 12) + ' Reintentar</button>'
+                + '</div>'
+            + '</div></div>';
+        }
+
         var variants = state.draftVariants || [];
         var v = validateVariants(variants);
         var dirty = agentBuilderDirty();
-        var saveDisabled = (!v.ok || !dirty) ? ' disabled' : '';
+        var saving = !!state.agentBuilderSaving;
+        var saveDisabled = (!v.ok || !dirty || saving) ? ' disabled' : '';
 
         var rowsHtml = '';
         for (var i = 0; i < variants.length; i++) rowsHtml += renderVariantRow(variants[i], i, v.errors[i]);
 
         var addDisabled = (variants.length >= 3) ? ' disabled' : '';
         var generalErr = v.general ? '<p class="qida-ab-general-error">' + esc(v.general) + '</p>' : '';
+        var saveLabel = saving ? (icon('refresh-cw', 13) + ' Guardando…') : (icon('check', 13) + ' Guardar');
 
         return '<div class="qida-ab">'
             + '<div class="qida-ab-inner">'
@@ -4736,7 +4988,7 @@
                 + '<button class="qida-btn-ghost qida-ab-add" data-action="ab-add-variant"' + addDisabled + '>' + icon('plus', 13) + ' Agregar variante</button>'
                 + '<div class="qida-ab-foot">'
                     + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
-                    + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + icon('check', 13) + ' Guardar</button>'
+                    + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + saveLabel + '</button>'
                 + '</div>'
             + '</div>'
             + (state.agentBuilderConfirmDiscard ? renderDiscardConfirm() : '')
@@ -5138,21 +5390,37 @@
             }
             case 'ab-save': {
                 var val = validateVariants(state.draftVariants);
-                if (!val.ok) { rerenderContent(); return; }   // botón ya debería estar disabled
+                if (!val.ok || state.agentBuilderSaving) { rerenderContent(); return; }
                 var afKey = resolveAfKey();
                 var working = deepCopyVariants(state.draftVariants);
+                state.agentBuilderSaving = true;   // v1.21: loading del PUT (real con flag on)
+                rerenderContent();
                 DraftService.saveDraftVariants(afKey, working).then(function (res) {
+                    state.agentBuilderSaving = false;
                     if (res && res.ok) {
                         state.draftVariantsSaved = deepCopyVariants(working);
                         showToast('Asistente guardado.');
-                        rerenderContent();
                     } else {
-                        showToast('No se pudo guardar (revisá los campos).');
-                        rerenderContent();
+                        showToast((res && res.userMessage) || 'No se pudo guardar (revisá los campos).');
                     }
+                    rerenderContent();
+                }).catch(function (err) {
+                    state.agentBuilderSaving = false;
+                    showToast((err && err.userMessage) || 'No se pudo guardar tu configuración.');
+                    rerenderContent();
                 });
                 return;
             }
+            // v1.21: reintentar la carga del form tras un error de GET.
+            case 'ab-reload':
+                state.agentBuilderError = null;
+                state.draftVariantsLoaded = false;
+                openAgentBuilder();
+                return;
+            // v1.21: reintentar la carga de la conversación WhatsApp.
+            case 'wa-retry':
+                loadConversation(id || state.currentLeadId);
+                return;
 
             case 'leader-sort': {
                 var col = id;
@@ -5194,6 +5462,11 @@
                 var existing = LeadDetailService.getFromCache(leadIdNum);
                 if (!existing || existing._error) {
                     LeadDetailService.fetchAll(leadIdNum);
+                }
+                // v1.21: conversación real (GET) si el flag está on y no está cacheada/ok.
+                if (useRealApi()) {
+                    var cc = state.conversationCache[leadIdNum];
+                    if (!cc || cc._error) loadConversation(leadIdNum);
                 }
                 return;
             case 'back-to-dashboard':
@@ -5341,6 +5614,10 @@
             // v1.20: Reintentar la recomendacion tras un error (reusa la burbuja IA del lead).
             case 'ai-retry-suggest':
                 retrySuggest(id || state.currentLeadId);
+                return;
+            // v1.21: reintentar el chat con el asistente (reusa el mensaje original).
+            case 'ai-retry-chat':
+                retryChat(id || state.currentLeadId, target.getAttribute('data-msg') || '');
                 return;
             // v1.8: la AF elige una variante (sugerir mensaje o reactivar) -> push al chat
             //   como user message + respuesta IA tipo refine. Material marketing mantiene su
@@ -5712,16 +5989,60 @@
         if (lead) startSuggestFlow(lead);
     }
 
-    // v1.6: envio de query libre al chat IA. Si esta vacio, no hace nada.
+    // v1.6/v1.21: envio de query libre al chat IA. Con useRealAPI -> POST /assistant/chat
+    //   (loading -> respuesta+updated_drafts | error+retry). Sin flag -> mock (como antes).
     function handleAiChatSend(text) {
         var lead = getLead(state.currentLeadId);
         if (!lead) return;
         var trimmed = (text || '').trim();
         if (!trimmed) return;
+
+        if (useRealApi()) {
+            pushAiChat(lead.id, trimmed, { kind: 'loading', text: 'Pensando…' });
+            state.aiChatDraft = '';
+            var hist = state.aiChatHistory[lead.id];
+            driveChatBubble(hist[hist.length - 1], lead.id, trimmed);
+            return;
+        }
+
         var resp = mockAIResponse(trimmed, lead);
         pushAiChat(lead.id, trimmed, resp);
         state.aiChatDraft = '';
         rerenderContent();
+    }
+
+    // v1.21: maneja el ciclo loading -> free(+drafts) | error+retry de una burbuja del chat real.
+    //   Persiste session_id por lead (state.assistantSessions) mientras el modal está abierto.
+    function driveChatBubble(bubble, leadId, message) {
+        bubble.payload = { kind: 'loading', text: 'Pensando…' };
+        state.__aiNeedsScroll = true;
+        rerenderContent();
+        return fetchAssistantChat(leadId, message, state.assistantSessions[leadId]).then(function (resp) {
+            if (resp && resp.session_id) state.assistantSessions[leadId] = resp.session_id;
+            var drafts = (resp && resp.updated_drafts) || [];
+            bubble.payload = {
+                kind: 'free',
+                text: (resp && resp.assistant_message) || '(Sin respuesta del asistente.)',
+                drafts: drafts.length ? drafts.slice() : null,
+                rateLimited: !!(resp && resp.rate_limit_reached)
+            };
+            // TODO[ticket-materials]: resp.materials no se renderiza todavía (consistente con el spike).
+            // TODO[ticket]: resp.turn_count tampoco se muestra (espera UI futura).
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        }).catch(function (err) {
+            log('assistant chat failed', err && (err.code || err.message));
+            bubble.payload = { kind: 'error', text: (err && err.userMessage) || 'No se pudo conectar con el asistente. Reintentá.', retry: 'chat', message: message };
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        });
+    }
+    // v1.21: Reintentar el chat reusando la última burbuja IA del lead.
+    function retryChat(leadId, message) {
+        var hist = (state.aiChatHistory && state.aiChatHistory[leadId]) || [];
+        for (var i = hist.length - 1; i >= 0; i--) {
+            if (hist[i].from === 'ai') { driveChatBubble(hist[i], leadId, message); return; }
+        }
     }
 
     // ============================================================
@@ -5869,15 +6190,25 @@
 
     // v1.15: abre "Armá tu asistente". Carga la config (lazy) en la copia de trabajo + snapshot.
     function openAgentBuilder() {
-        if (!state.draftVariantsLoaded) {
-            var cfg = DraftService.getDraftVariantsSync(resolveAfKey());
+        state.agentBuilderConfirmDiscard = false;
+        state.agentBuilderError = null;
+        state.view = 'agentBuilder';
+        if (state.draftVariantsLoaded) { rerenderContent(); log('openAgentBuilder() [cache]'); return; }
+        // v1.21: cargar la config via GET (real con flag on; mock async con flag off) + loading/error.
+        state.agentBuilderLoading = true;
+        rerenderContent();
+        DraftService.getDraftVariants(resolveAfKey()).then(function (cfg) {
             state.draftVariantsSaved = deepCopyVariants(cfg.variants);
             state.draftVariants = deepCopyVariants(cfg.variants);
             state.draftVariantsLoaded = true;
-        }
-        state.agentBuilderConfirmDiscard = false;
-        state.view = 'agentBuilder';
-        rerenderContent();
+            state.agentBuilderLoading = false;
+            rerenderContent();
+        }).catch(function (err) {
+            state.agentBuilderLoading = false;
+            state.agentBuilderError = (err && err.userMessage) || 'No se pudo cargar tu configuración del asistente.';
+            log('getDraftVariants failed', err && (err.code || err.message));
+            rerenderContent();
+        });
         log('openAgentBuilder()');
     }
 
@@ -5963,6 +6294,12 @@
         // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
         //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
         state.agentBuilderConfirmDiscard = false;
+        // v1.21: estados async del form del agent builder.
+        state.agentBuilderLoading = false;
+        state.agentBuilderError = null;
+        state.agentBuilderSaving = false;
+        // v1.21: sesiones del chat con el asistente: nuevas al reabrir el modal.
+        state.assistantSessions = {};
         // v1.17: cierra el dropdown de temperatura. EDITS.temperatures (el override real) PERSISTE.
         state.tempEditorOpen = false;
         // v1.10: limpieza del dashboard de leads enfriandose.
