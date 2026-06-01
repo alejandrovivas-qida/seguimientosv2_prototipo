@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.21.0
+ * QIDA ASSISTANT v1.22.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -35,6 +35,39 @@
  *     qida-followup-api.vercel.app: "Host not in allowlist") ni leer schemas.py del backend.
  *     Implementado contra la shape documentada; validacion real-prod pendiente en entorno con el host
  *     permitido. Tests: mock paths + construccion de request/normalizacion con fetch stub (Node).
+ *
+ * Cambios v1.22.0 (wiring del DASHBOARD AF contra los 2 endpoints nuevos del backend
+ *   — GET /api/me/dashboard (metricas) + GET /api/me/leads (tabla) — mismo patron flag+mock):
+ *   - REUSA el helper generico apiFetchJson(method, path, {afEmail, body, noun}) del wire v1.21
+ *     (NO duplica fetch wrapper). Solo agrega 2 fetchers + 1 adapter:
+ *       fetchDashboardMetrics() -> apiFetchJson('GET','/api/me/dashboard') -> { calientes,
+ *         templados, frios, en_cartera, convertidos_este_mes, leads_con_mensaje_nuevo }.
+ *       fetchLeadsList(view) -> apiFetchJson('GET','/api/me/leads?<query>') -> array adaptado.
+ *   - VIEWS: suggestions -> status=overdue,due_today&limit=20&sort=priority_score; leads ->
+ *     limit=200; activities -> SIN endpoint todavia, cae al MOCK (TODO[activities-endpoint]).
+ *   - ADAPTER adaptLeadRow(api): mapea la fila del backend al shape que renderDashRow YA consume
+ *     (render intacto). display_id -> id + "Lead <id>" como familyName fallback; porque_snippet ->
+ *     reason; temperature -> chip; days_since_last_contact -> dias; has_new_inbound -> badge nuevo;
+ *     urgent -> urgency 'alta'. family_name/city/caregiver/serviceType NO vienen aun (TODO[odoo-enrichment]).
+ *   - DashboardService.fetchView ramifica: flag on + vista con endpoint -> fetchLeadsList; resto
+ *     (flag off, o 'activities') -> mock con simulateLatency. fetchMetrics() idem (flag off -> null).
+ *   - CAMBIO DE SEMANTICA de las metricas del top: con flag ON salen de /api/me/dashboard =
+ *     PORTFOLIO-WIDE (toda la cartera del AF), no de las filas visibles de la vista (como derivaba
+ *     el mock). Con flag OFF se mantiene el derivado client-side de siempre (cero regresion).
+ *   - NUEVO card "En cartera": primera card de "Cartera activa" (entre Convertidos y Calientes),
+ *     DISPLAY-ONLY (sin data-action, no filtra). Grid de temperatura pasa a 4 cols.
+ *   - LOADING/ERROR/RETRY del dashboard (misma convencion que el spike/wire): loadDashView con
+ *     .catch -> state.dashError + boton Reintentar (dash-retry). Primera carga flag on -> spinner
+ *     (ensureDashLoaded, deferido para no re-entrar a rerenderContent).
+ *   - State nuevo: dashError, dashMetrics. useRealAPI sigue en FALSE por default (TODO[leadid]:
+ *     confirmar que display_id == lead_id real del backend antes de activar en prod).
+ *
+ * DEFAULTS / TODOs QUE QUEDAN EN v1.22.0:
+ *   - TODO[activities-endpoint]: la vista "Actividades" no tiene endpoint -> sigue en mock.
+ *   - TODO[odoo-enrichment]: family_name/city/caregiver/serviceType no vienen de /api/me/leads
+ *     todavia; la tabla usa "Lead <display_id>" y deja columnas vacias hasta el enriquecido Odoo.
+ *   - TODO[leadid]: heredado del spike. Confirmar 1:1 display_id <-> lead_id antes de activar el
+ *     flag en prod (click test con un lead real de Ana).
  *
  * Cambios v1.20.0 (SPIKE: "Sugerir mensaje" consume el endpoint real de recomendacion del
  *   chat agent v2 — qida-followup-api — con fallback al mock detras de un toggle):
@@ -1101,7 +1134,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.21.0';
+    var VERSION = '1.22.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1597,6 +1630,8 @@
         dashView: 'suggestions',
         dashRows: null,
         dashLoading: false,
+        dashError: null,                // v1.22: mensaje de error del fetch del dashboard (flag on). null = sin error.
+        dashMetrics: null,              // v1.22: metricas portfolio-wide de GET /api/me/dashboard. null = derivar client-side (flag off).
         dashSegment: null,              // null | 'caliente' | 'templado' | 'frio' | 'pausa' | 'urgente' | 'historico'
         dashFiltersExpanded: false,
         dashOnlyNew: false,
@@ -1840,7 +1875,18 @@
         },
         fetchView: function (view) {
             var self = this;
+            // v1.22: flag on + vista con endpoint -> backend real (/api/me/leads). 'activities'
+            //   (sin endpoint) y flag off -> mock con simulateLatency (identico a v1.20).
+            if (useRealApi() && DASH_VIEW_QUERY[view]) {
+                return fetchLeadsList(view);
+            }
             return simulateLatency(180, 360).then(function () { return self.fetchViewSync(view); });
+        },
+        // v1.22: metricas del top. flag on -> GET /api/me/dashboard (portfolio-wide);
+        //   flag off -> null (renderDashCards deriva client-side de las filas, como antes).
+        fetchMetrics: function () {
+            if (useRealApi()) return fetchDashboardMetrics();
+            return Promise.resolve(null);
         }
     };
 
@@ -2803,6 +2849,14 @@
             '.qida-card-caliente.active{border-bottom-color:#EF4444;background:#fef2f2;}',
             '.qida-card-templado.active{border-bottom-color:#F59E0B;background:#fffbeb;}',
             '.qida-card-frio.active{border-bottom-color:#3B82F6;background:#eff6ff;}',
+            /* v1.22: "En cartera" — display-only (no clicable), neutro, grid de 4 columnas */
+            '.qida-dash-cardgroup-temps{grid-template-columns:repeat(4,1fr);}',
+            '.qida-dash-card-cartera{cursor:default;border-bottom-width:3px;border-bottom-color:var(--s200);}',
+            '.qida-dash-card-cartera .qida-dash-card-num{color:var(--s700);}',
+            /* v1.22: estados loading / error de la tabla del dashboard (flag on) */
+            '.qida-dash-loading-state{display:flex;align-items:center;justify-content:center;gap:8px;padding:32px 16px;color:var(--s600);font-size:13px;}',
+            '.qida-dash-error{display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 16px;text-align:center;}',
+            '.qida-dash-error-text{display:flex;align-items:center;gap:6px;margin:0;font-size:13px;color:#9A3A28;line-height:1.4;}',
 
             /* Toolbar */
             '.qida-dash-toolbar{display:flex;align-items:center;gap:12px;padding:2px 2px 10px;border-bottom:0.5px solid var(--s100);}',
@@ -3164,30 +3218,73 @@
             state.dashOnlyNew = false;
         }
         state.dashLoading = true;
+        state.dashError = null;
         rerenderContent();  // mantiene la tabla previa atenuada mientras vuelve el fetch
+        loadDashMetrics();  // v1.22: refresca metricas portfolio-wide en paralelo (no-op flag off)
         DashboardService.fetchView(view).then(function (rows) {
             if (state.dashView !== view) return;  // race guard: cambio de vista mientras cargaba
             state.dashRows = rows;
             state.dashLoading = false;
+            state.dashError = null;
+            rerenderContent();
+        }).catch(function (err) {
+            if (state.dashView !== view) return;  // race guard
+            log('loadDashView failed', err && (err.code || err.message));
+            state.dashLoading = false;
+            state.dashError = (err && err.userMessage) || 'No se pudieron cargar los leads. Reintentá.';
             rerenderContent();
         });
+    }
+
+    // v1.22: carga las metricas portfolio-wide (flag on). Independiente de la tabla: si falla,
+    //   NO bloquea (dashMetrics queda null -> renderDashCards deriva client-side como fallback).
+    function loadDashMetrics() {
+        if (!useRealApi()) { state.dashMetrics = null; return; }
+        DashboardService.fetchMetrics().then(function (m) {
+            state.dashMetrics = m;
+            rerenderContent();
+        }).catch(function (err) {
+            log('loadDashMetrics failed', err && (err.code || err.message));
+            state.dashMetrics = null;  // best-effort: cae al derivado client-side
+        });
+    }
+
+    // v1.22: con flag on no hay lectura sincrona del dashboard. Dispara UNA carga async la
+    //   primera vez (idempotente: el guard dashLoading/dashRows evita repetir por render).
+    //   Deferido (rAF) para no re-entrar a rerenderContent desde dentro de un render.
+    function ensureDashLoaded() {
+        if (state.dashRows !== null || state.dashLoading) return;
+        state.dashLoading = true;  // este render ya muestra el spinner
+        var run = function () { loadDashView(state.dashView, false); };
+        if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(run);
+        else setTimeout(run, 0);
     }
 
     // ============================================================
     // v1.13: render del dashboard AF
     // ============================================================
     function renderDashboard() {
-        // Primer paint sincrono: si la vista activa no tiene datos y no estamos cargando,
-        //   leemos el mock sync para no mostrar tabla vacia en el primer render.
-        if (state.dashRows === null && !state.dashLoading) {
-            state.dashRows = DashboardService.fetchViewSync(state.dashView);
+        // Primer paint: con flag off leemos el mock SINCRONO (igual que v1.20, sin flash).
+        //   Con flag on no hay lectura sincrona -> disparamos la carga async (spinner).
+        if (state.dashRows === null && !state.dashLoading && !state.dashError) {
+            if (useRealApi()) {
+                ensureDashLoaded();  // async; este render muestra el spinner
+            } else {
+                state.dashRows = DashboardService.fetchViewSync(state.dashView);
+            }
         }
 
         var base = liveDashRows();          // vista activa menos completados en sesion
         var ordered = buildDashFeed(base);  // filtros + nuevos al tope + sort + slice
 
         var listHtml;
-        if (ordered.length === 0) {
+        if (state.dashError) {
+            // v1.22: error del fetch real -> mensaje claro + Reintentar (misma convencion que drafts).
+            listHtml = renderDashError(state.dashError);
+        } else if (state.dashRows === null && state.dashLoading) {
+            // v1.22: primera carga (flag on) sin filas todavia -> spinner.
+            listHtml = renderDashLoadingState();
+        } else if (ordered.length === 0) {
             listHtml = renderEmptyState();
         } else {
             listHtml = '';
@@ -3224,12 +3321,18 @@
     }
 
     // Banda superior: 2 grupos con label (estética .qida-leader-kpi del Panel de Líderes).
-    //   "TU IMPACTO" = Convertidos (display-only, no filtra). "CARTERA ACTIVA" = 3 cards de
-    //   temperatura clicables (escriben state.dashSegment, igual que los chips de Filtros).
+    //   "TU IMPACTO" = Convertidos (display-only, no filtra). "CARTERA ACTIVA" = En cartera
+    //   (v1.22, display-only) + 3 cards de temperatura clicables (escriben state.dashSegment).
+    // v1.22: con flag on los numeros salen de state.dashMetrics (GET /api/me/dashboard,
+    //   PORTFOLIO-WIDE). Con flag off (o si el fetch de metricas fallo) se DERIVAN client-side
+    //   de las filas visibles, exactamente como en v1.20 (cero regresion).
     function renderDashCards(base) {
-        // "Convertidos": valor mock, display-only.
-        // TODO: conectar con endpoint cuando esté disponible (GET /api/me/leads/converted?period=current_month).
-        var convertidos = 7;
+        var m = state.dashMetrics;  // null = derivar client-side
+        var convertidos = m ? m.convertidos_este_mes : 7;
+        var calientes   = m ? m.calientes : countByTemp(base, 'caliente');
+        var templados   = m ? m.templados : countByTemp(base, 'templado');
+        var frios       = m ? m.frios     : countByTemp(base, 'frio');
+        var enCartera   = m ? m.en_cartera : base.length;  // fallback flag off: tamaño de la vista
         return '<div class="qida-dash-cards">'
             + '<div class="qida-dash-cardgroup">'
                 + '<div class="qida-dash-cardgroup-label">Tu impacto</div>'
@@ -3244,11 +3347,21 @@
             + '<div class="qida-dash-cardgroup qida-dash-cardgroup-grow">'
                 + '<div class="qida-dash-cardgroup-label">Cartera activa</div>'
                 + '<div class="qida-dash-cardgroup-cards qida-dash-cardgroup-temps">'
-                    + renderDashCard('caliente', 'Calientes', countByTemp(base, 'caliente'))
-                    + renderDashCard('templado', 'Templados', countByTemp(base, 'templado'))
-                    + renderDashCard('frio',     'Fríos',     countByTemp(base, 'frio'))
+                    + renderEnCarteraCard(enCartera)
+                    + renderDashCard('caliente', 'Calientes', calientes)
+                    + renderDashCard('templado', 'Templados', templados)
+                    + renderDashCard('frio',     'Fríos',     frios)
                 + '</div>'
             + '</div>'
+        + '</div>';
+    }
+
+    // v1.22: "En cartera" = total de la cartera (portfolio-wide). DISPLAY-ONLY: <div> sin
+    //   data-action -> no filtra (decisión de producto). Primera card de "Cartera activa".
+    function renderEnCarteraCard(count) {
+        return '<div class="qida-dash-card qida-dash-card-cartera">'
+            + '<div class="qida-dash-card-label">En cartera</div>'
+            + '<div class="qida-dash-card-num">' + count + '</div>'
         + '</div>';
     }
 
@@ -3441,6 +3554,22 @@
             ? 'No hay leads que coincidan con el filtro.'
             : 'Estás al día. No hay leads en esta vista.';
         return '<div class="qida-empty-state">' + msg + '</div>';
+    }
+
+    // v1.22: spinner de primera carga del dashboard (flag on, antes de la primera respuesta).
+    function renderDashLoadingState() {
+        return '<div class="qida-dash-loading-state">'
+            + '<span class="qida-spinner" aria-hidden="true"></span>'
+            + '<span>Cargando leads…</span>'
+        + '</div>';
+    }
+
+    // v1.22: estado de error del fetch del dashboard + Reintentar (reusa .qida-aichat-retry del spike).
+    function renderDashError(msg) {
+        return '<div class="qida-dash-error">'
+            + '<p class="qida-dash-error-text">' + icon('alert-triangle', 14) + ' ' + esc(msg) + '</p>'
+            + '<button class="qida-aichat-retry" data-action="dash-retry">' + icon('refresh-cw', 12) + ' Reintentar</button>'
+        + '</div>';
     }
 
     function renderUndoToast() {
@@ -4129,6 +4258,70 @@
         return apiFetchJson('POST', '/api/leads/' + numericId + '/assistant/chat',
             { body: { message: message, session_id: sessionId || null }, noun: 'el asistente de este lead' }
         );
+    }
+
+    // ============================================================
+    // v1.22: fetch wrappers del DASHBOARD (GET /api/me/dashboard, GET /api/me/leads)
+    // ============================================================
+    // REUSAN apiFetchJson del wire v1.21 (NO duplican fetch wrapper).
+    // Vista del dashboard -> querystring de GET /api/me/leads. 'activities' NO esta aca a
+    //   proposito: no tiene endpoint todavia y cae al mock. TODO[activities-endpoint].
+    var DASH_VIEW_QUERY = {
+        suggestions: 'status=overdue,due_today&limit=20&sort=priority_score',
+        leads:       'limit=200'
+    };
+
+    // GET /api/me/dashboard -> metricas PORTFOLIO-WIDE del AF:
+    //   { calientes, templados, frios, en_cartera, convertidos_este_mes, leads_con_mensaje_nuevo }.
+    function fetchDashboardMetrics() {
+        return apiFetchJson('GET', '/api/me/dashboard', { noun: 'tus métricas de cartera' });
+    }
+
+    // GET /api/me/leads?<query segun vista> -> array de leads, adaptados al shape del widget.
+    //   El backend puede devolver un array plano o { items:[...] }: normalizamos a array.
+    function fetchLeadsList(view) {
+        var qs = DASH_VIEW_QUERY[view];
+        if (qs == null) {
+            // TODO[activities-endpoint]: vista sin endpoint -> el caller cae al mock.
+            return Promise.reject(makeApiError('Vista sin endpoint todavía.', 'NO_ENDPOINT', 0));
+        }
+        return apiFetchJson('GET', '/api/me/leads?' + qs, { noun: 'tus leads' }).then(function (data) {
+            var rows = Array.isArray(data) ? data : (data && data.items) || [];
+            var out = [];
+            for (var i = 0; i < rows.length; i++) out.push(adaptLeadRow(rows[i]));
+            return out;
+        });
+    }
+
+    // Mapea una fila de GET /api/me/leads al shape que renderDashRow YA consume (render intacto).
+    //   Shape backend (confirmada): { lead_id, display_id, temperature, step_status, priority_score,
+    //   days_since_last_contact, last_contact_at(ISO), phone_normalized, has_new_inbound, urgent,
+    //   porque_snippet|null }. Campos aun NO provistos -> fallback visible. TODO[odoo-enrichment].
+    function adaptLeadRow(api) {
+        api = api || {};
+        var displayId = api.display_id || api.id || '';
+        // last_contact_at es ISO datetime; renderDiasCell/formatShortDate esperan YYYY-MM-DD.
+        var lastDate = api.last_contact_at ? String(api.last_contact_at).slice(0, 10) : '';
+        return {
+            id: displayId,
+            // TODO[odoo-enrichment]: family_name/city/caregiverInfo/serviceType NO vienen del backend
+            //   todavia. Fallback: "Lead <display_id>" + columnas vacias hasta el enriquecido Odoo.
+            familyName: api.family_name || ('Lead ' + displayId),
+            city: api.city || '',
+            caregiverInfo: api.caregiver_info || {},
+            serviceType: api.service_type || '',
+            reason: api.porque_snippet || 'Sin actividad reciente',  // porque_snippet puede venir null
+            temperature: api.temperature || '',
+            daysWithoutTouch: (api.days_since_last_contact != null ? api.days_since_last_contact : 0),
+            lastTouchDate: lastDate,
+            hasNewMessage: !!api.has_new_inbound,
+            unreadMessagesCount: api.unread_messages_count || 0,  // el backend no lo manda -> 0 (badge sin contador)
+            // urgent (bool) -> 'alta' para que renderEstadoCell muestre el badge "Urgente".
+            urgency: api.urgent ? 'alta' : 'baja',
+            // step_status/priority_score/phone_normalized se reciben pero la tabla aun no los usa.
+            historico: !!api.historico,  // el backend usa step_status (no historico) -> filtro Historico no matchea leads reales
+            _real: true
+        };
     }
 
     var DraftService = {
@@ -5517,6 +5710,11 @@
             //   TODO: evaluar polling cada 30-60s o push (SignalR/SSE) en iteracion siguiente.
             //   La logica de marcar como leido la maneja el backend al abrir el detalle del lead.
             case 'dash-refresh': {
+                loadDashView(state.dashView, false);
+                return;
+            }
+            // v1.22: Reintentar tras un error de carga del dashboard (mismo handler que refresh).
+            case 'dash-retry': {
                 loadDashView(state.dashView, false);
                 return;
             }
