@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.26.0
+ * QIDA ASSISTANT v1.27.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,24 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.27.0 (FIX: el lead detail no renderizaba data real con useRealAPI=true aunque las
+ *   APIs respondian 200 — mismatch de identidad del lead):
+ *   - CAUSA RAIZ: el pane de WhatsApp leia state.conversationCache[lead.id], pero lead.id en modo
+ *     Odoo es el id NUMERICO (mapLead: id=o.id=123954), mientras la cache se guarda bajo la CLAVE
+ *     CANONICA = state.currentLeadId = display_id "L123954" (loadConversation). -> cache miss ->
+ *     pane vacio ("Sin mensajes") pese al 200. En modo mock no se veia porque lead.id===currentLeadId.
+ *   - FIX: las lookups por-lead del detalle usan la clave canonica (leadId = state.currentLeadId),
+ *     no lead.id. renderDetail threadea leadId a renderWhatsAppPane(lead, leadId) y a
+ *     renderCenterPane(lead, cached, leadId) -> renderIaSummary/IaAnalysis/Care/InternalNotes/
+ *     Activities/AttachmentsCollapsable. Cambia SOLO las claves (conversationCache, MOCK_ maps,
+ *     EDITS, wa-retry data-id); los reads de campos (lead.location, lead.serviceType, cached.) intactos.
+ *     NO se toca la semantica de lead.id (mapLead.odooId conserva el id numerico de Odoo).
+ *   - El panel derecho ya leia cached.* (Odoo) cuando llega; el realineo de claves es defensivo
+ *     (para leads reales el fallback MOCK esta vacio igual). Si queda vacio, es data Odoo escasa.
+ *   - RACE: loadConversation no re-renderiza si la AF ya cambio de lead (guard currentLeadId!==leadId,
+ *     mismo patron que LeadDetailService.fetchAll); la cache igual se guarda en su slot.
+ *   - Flag useRealAPI sigue FALSE por default (regresion cero en modo mock). Backend NO tocado.
  *
  * Cambios v1.26.0 ("Compartir material" -> chip preview estilo Slack/Claude, en vez de ensuciar
  *   el textarea con el URL):
@@ -1210,7 +1228,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.26.0';
+    var VERSION = '1.27.0';
     var CONFIG = null;
 
     // ============================================================
@@ -3827,8 +3845,9 @@
         + '</div>';
     }
 
-    function renderIaSummary(lead) {
-        var s = getIaSummary(lead.id);
+    function renderIaSummary(lead, leadId) {
+        leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
+        var s = getIaSummary(leadId);
         var title = icon('sparkles', 12) + ' Resumen IA';
 
         if (state.editingIaSummary && s) {
@@ -3863,8 +3882,9 @@
     // v1.16: "Análisis IA". Mismo patrón visual que renderIaSummary (header ✨ + acción
     //   Generar/Regenerar + "Generado hace X" + body). Sin edición inline ni backend:
     //   Generar/Regenerar hacen console.log (preparación de UI; se conectará después).
-    function renderIaAnalysis(lead) {
-        var a = getIaAnalysis(lead.id);
+    function renderIaAnalysis(lead, leadId) {
+        leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
+        var a = getIaAnalysis(leadId);
         var title = icon('sparkles', 12) + ' Análisis IA';
 
         var actions = '';
@@ -3885,7 +3905,8 @@
         return infoCard(title, actions, body);
     }
 
-    function renderCare(lead, cached) {
+    function renderCare(lead, cached, leadId) {
+        leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
         var title = icon('users', 12) + ' Contexto del cuidado';
 
         // v1.11: skeleton si _loading.
@@ -3899,7 +3920,7 @@
 
         // v1.11: leer del cache si esta; fallback al mock crudo si cached === null (modo
         //   dev defensivo: si por alguna razon nunca corrio fetchAll, comportamiento v1.10.0).
-        var c = (cached && cached.caredPerson) || MOCK_CARE_CONTEXT[lead.id] || {};
+        var c = (cached && cached.caredPerson) || MOCK_CARE_CONTEXT[leadId] || {};
 
         function item(key, val, urgent) {
             var valCls = 'qida-context-val' + (urgent ? ' urgent' : '');
@@ -3929,7 +3950,8 @@
         return infoCard(title, '', grid);
     }
 
-    function renderInternalNotes(lead, cached) {
+    function renderInternalNotes(lead, cached, leadId) {
+        leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
         var title = icon('file', 12) + ' Notas internas';
 
         if (cached && cached._loading) {
@@ -3946,11 +3968,11 @@
             baseNotes = cached.notes.slice();
         } else {
             // Fallback dev defensivo: leer mocks directo (comportamiento v1.10.0).
-            baseNotes = (MOCK_NOTES[lead.id] || []).slice().map(function (n) {
+            baseNotes = (MOCK_NOTES[leadId] || []).slice().map(function (n) {
                 return { author: n.author, date: n.date, text: n.text, isHtml: false };
             });
         }
-        var added = EDITS.notes[lead.id] || [];
+        var added = EDITS.notes[leadId] || [];  // v1.27: EDITS.notes se guarda bajo currentLeadId
         // EDITS son siempre texto plano (isHtml:false). Las nuevas notas van arriba.
         var notes = added.concat(baseNotes);
 
@@ -3986,7 +4008,8 @@
         return infoCard(title, actions, notesHtml + add);
     }
 
-    function renderActivities(lead, cached) {
+    function renderActivities(lead, cached, leadId) {
+        leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
         var title = icon('clock', 12) + ' Proximas actividades';
 
         if (cached && cached._loading) {
@@ -4001,12 +4024,12 @@
         if (cached && cached.activities) {
             acts = cached.activities.slice();
         } else {
-            acts = (MOCK_PLANNED_ACTIVITIES[lead.id] || []).slice();
+            acts = (MOCK_PLANNED_ACTIVITIES[leadId] || []).slice();
         }
         // Sumar las que la AF haya programado en sesion via schedule modal (overrides locales).
         for (var i = 0; i < EDITS.scheduledActivities.length; i++) {
             var sa = EDITS.scheduledActivities[i];
-            if (sa.leadId === lead.id) {
+            if (sa.leadId === leadId) {
                 acts = acts.concat([{
                     id: 'local-' + i,
                     type: 'Por hacer',
@@ -4699,7 +4722,8 @@
 
 
     // Adjuntos colapsable (reemplaza el panel derecho v1.5). Vive dentro del .qida-center-body.
-    function renderAttachmentsCollapsable(lead, cached) {
+    function renderAttachmentsCollapsable(lead, cached, leadId) {
+        leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
         var title = icon('paperclip', 12) + ' Adjuntos';
 
         if (cached && cached._loading) {
@@ -4714,7 +4738,7 @@
         if (cached && cached.attachments) {
             atts = cached.attachments;
         } else {
-            atts = MOCK_ATTACHMENTS[lead.id] || [];
+            atts = MOCK_ATTACHMENTS[leadId] || [];
         }
         var count = atts.length;
         var expanded = !!state.attachmentsExpanded;
@@ -4975,29 +4999,38 @@
         rerenderContent();
         fetchConversation(leadId).then(function (resp) {
             state.conversationCache[leadId] = { _loading: false, _error: null, messages: normalizeConversation(resp) };
+            // v1.27 race-guard: si la AF ya cambió de lead, NO re-renderizar sobre el nuevo (la cache
+            //   queda guardada en su slot para cuando se reabra). Mismo patrón que fetchAll.
+            if (state.currentLeadId !== leadId) return;
             state.__waNeedsScroll = true;
             rerenderContent();
         }).catch(function (err) {
             log('fetchConversation failed', err && (err.code || err.message));
             state.conversationCache[leadId] = { _loading: false, _error: (err && err.userMessage) || 'No se pudo cargar la conversación.', messages: null };
+            if (state.currentLeadId !== leadId) return;
             rerenderContent();
         });
     }
 
-    function renderWhatsAppPane(lead) {
+    function renderWhatsAppPane(lead, leadId) {
         // v1.21: con useRealAPI -> conversación real (cache + loading/error/retry). Sin flag -> mock.
+        // v1.27: las caches por-lead (conversationCache / MOCK_WHATSAPP) se indexan por la CLAVE
+        //   CANONICA del lead (state.currentLeadId / leadId), NO por lead.id. En modo Odoo lead.id
+        //   es el id numerico (mapLead), distinto del display_id "L<n>" con que se guardo la cache
+        //   -> leer por lead.id daba cache miss y el pane salia vacio aunque la API respondiera 200.
+        leadId = (leadId != null ? leadId : (lead && lead.id));
         var realMode = useRealApi();
-        var conv = realMode ? state.conversationCache[lead.id] : null;
+        var conv = realMode ? state.conversationCache[leadId] : null;
         var msgsHtml;
         if (realMode && conv && conv._loading) {
             msgsHtml = '<div class="qida-wa-state">' + icon('refresh-cw', 14) + ' Cargando conversación…</div>';
         } else if (realMode && conv && conv._error) {
             msgsHtml = '<div class="qida-wa-state error">'
                 + '<p>' + icon('alert-triangle', 13) + ' ' + esc(conv._error) + '</p>'
-                + '<button class="qida-btn-ghost" data-action="wa-retry" data-id="' + esc(lead.id) + '">' + icon('refresh-cw', 12) + ' Reintentar</button>'
+                + '<button class="qida-btn-ghost" data-action="wa-retry" data-id="' + esc(leadId) + '">' + icon('refresh-cw', 12) + ' Reintentar</button>'
             + '</div>';
         } else {
-            var msgs = realMode ? ((conv && conv.messages) || []) : (MOCK_WHATSAPP[lead.id] || []);
+            var msgs = realMode ? ((conv && conv.messages) || []) : (MOCK_WHATSAPP[leadId] || []);
             if (msgs.length === 0) {
                 msgsHtml = '<div class="qida-empty-msgs">Sin mensajes de WhatsApp para este lead.</div>';
             } else {
@@ -5077,14 +5110,18 @@
 
     // v1.11: renderCenterPane recibe cached y lo propaga a los renderers de paneles
     //   del detalle. renderIaSummary y renderAiChat NO se tocan en Fase A (Fase E).
-    function renderCenterPane(lead, cached) {
+    function renderCenterPane(lead, cached, leadId) {
+        // v1.27: threadeamos la CLAVE CANONICA del lead (leadId = state.currentLeadId) a los
+        //   sub-renderers para que sus lookups MOCK_* por-lead usen la misma clave que las caches,
+        //   no lead.id (que en modo Odoo es el id numerico, distinto del display_id).
+        leadId = (leadId != null ? leadId : (lead && lead.id));
         return ''
-            + renderIaSummary(lead)
-            + renderIaAnalysis(lead)
-            + renderCare(lead, cached)
-            + renderInternalNotes(lead, cached)
-            + renderActivities(lead, cached)
-            + renderAttachmentsCollapsable(lead, cached);
+            + renderIaSummary(lead, leadId)
+            + renderIaAnalysis(lead, leadId)
+            + renderCare(lead, cached, leadId)
+            + renderInternalNotes(lead, cached, leadId)
+            + renderActivities(lead, cached, leadId)
+            + renderAttachmentsCollapsable(lead, cached, leadId);
     }
 
     function renderDetail() {
@@ -5104,13 +5141,13 @@
         //   true  -> WA | IA   | Info
         // v1.11: renderWhatsAppPane y renderAiChat reciben lead pero NO cached (no se
         //   tocan en Fase A - Fase B y Fase E respectivamente).
-        var centerHtml = '<div class="qida-pane-center">' + renderCenterPane(lead, cached) + '</div>';
+        var centerHtml = '<div class="qida-pane-center">' + renderCenterPane(lead, cached, leadId) + '</div>';
         var aiHtml = '<div class="qida-pane-ai">' + renderAiChat(lead) + '</div>';
         var middleAndRight = state.detailLayoutSwapped ? (aiHtml + centerHtml) : (centerHtml + aiHtml);
 
         return '<div class="qida-detail">'
             + '<div class="qida-detail-body">'
-                + '<div class="qida-pane-wa">' + renderWhatsAppPane(lead) + '</div>'
+                + '<div class="qida-pane-wa">' + renderWhatsAppPane(lead, leadId) + '</div>'
                 + middleAndRight
             + '</div>'
         + '</div>';
