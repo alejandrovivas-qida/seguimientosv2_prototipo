@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.24.0
+ * QIDA ASSISTANT v1.25.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,29 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.25.0 (5 fixes de UX del click test en browser; 1 PR combinado):
+ *   - ISSUE A (AF switcher no refrescaba datos): setViewingAs ahora, ademas de invalidar caches,
+ *     cierra el detalle si esta abierto, resetea dashRows/dashMetrics (loading) y llama
+ *     loadDashView(view) -> re-fetch de metricas + lista con el nuevo X-AF-Email. (Con flag OFF el
+ *     mock no varia por AF: re-fetch inocuo.)
+ *   - ISSUE B (TODO[leadid] CONFIRMADO): LeadDetailService.fetchAll mandaba el display_id "L<n>" a
+ *     Odoo (crm.lead/mail.message/mail.activity/ir.attachment) -> psycopg2 "invalid input syntax for
+ *     type integer". Fix: odooId = parseInt(toNumericLeadId(leadId),10) para TODOS los ids que van a
+ *     Odoo. El cache key / race-guard siguen en display_id.
+ *   - ISSUE C (material share auto-texto): "Compartir con el lead" ahora inserta SOLO el {url} en el
+ *     textarea (sin el prefijo "Te dejo este recurso..."). Si ya hay texto, agrega el link en linea
+ *     nueva. La AF redacta; NO auto-envia.
+ *   - ISSUE D (metricas en todas las vistas): renderActivitiesView ahora muestra renderDashCards
+ *     arriba (igual que Leads/Sugerencias). Fallback flag-off usa la cartera (MOCK_LEADS_RESPONSE)
+ *     para conteos por temperatura coherentes (las activities no tienen temperatura).
+ *   - ISSUE E (overflow en "Proximas actividades" del detalle): CAUSA RAIZ = colision de clase
+ *     introducida en v1.24 (.qida-act-row del dashboard de actividades = grid, pisaba la .qida-act-row
+ *     flex del detalle). Fix: renombradas las clases del dashboard de actividades a .qida-actv-* (NO
+ *     un parche de overflow). El detalle vuelve a su layout flex correcto.
+ *   - Flag useRealAPI sigue FALSE por default (regresion zero). KNOWN ISSUES fuera de scope:
+ *     Resumen/Analisis IA lazy (sin endpoint), conteo de cartera de Alejandro (revisar; con ISSUE A
+ *     resuelto, ver como Ana mostrara los 63).
  *
  * Cambios v1.24.0 (PRE-TRABAJO UI para enrichment de /me/leads + vista "Actividades", con MOCKS
  *   de la shape final; cuando el backend ship los endpoints solo se cambian 2 funciones mock->fetch):
@@ -1172,7 +1195,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.24.0';
+    var VERSION = '1.25.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2293,7 +2316,12 @@
                 rerenderContent();
             }
 
-            var p1 = odooCall('crm.lead', 'read', [[leadId]], { fields: LEAD_FIELDS });
+            // v1.25 (ISSUE B / TODO[leadid]): Odoo espera el lead_id INT; el widget maneja el
+            //   display_id "L<n>". Strippeamos la "L" (toNumericLeadId) + parseInt para NO mandar
+            //   'L122581' a crm.lead (psycopg2: invalid input syntax for type integer). El cache key
+            //   y el race-guard siguen usando `leadId` (display_id) para consistencia del resto del UI.
+            var odooId = parseInt(toNumericLeadId(leadId), 10);
+            var p1 = odooCall('crm.lead', 'read', [[odooId]], { fields: LEAD_FIELDS });
             return p1.then(function (leadArr) {
                 if (!leadArr || !leadArr.length) {
                     throw new Error('Lead not found');
@@ -2307,21 +2335,21 @@
                     : Promise.resolve([]));
                 // [1] notes (mail.message con subtype interno)
                 jobs.push(odooCall('mail.message', 'search_read', [], {
-                    domain: [['model','=','crm.lead'], ['res_id','=',leadId], ['subtype_id.internal','=',true]],
+                    domain: [['model','=','crm.lead'], ['res_id','=',odooId], ['subtype_id.internal','=',true]],
                     fields: NOTES_FIELDS,
                     order: 'date desc',
                     limit: 50
                 }));
                 // [2] activities (mail.activity)
                 jobs.push(odooCall('mail.activity', 'search_read', [], {
-                    domain: [['res_model','=','crm.lead'], ['res_id','=',leadId]],
+                    domain: [['res_model','=','crm.lead'], ['res_id','=',odooId]],
                     fields: ACTIVITY_FIELDS,
                     order: 'date_deadline asc',
                     limit: 50
                 }));
                 // [3] attachments
                 jobs.push(odooCall('ir.attachment', 'search_read', [], {
-                    domain: [['res_model','=','crm.lead'], ['res_id','=',leadId]],
+                    domain: [['res_model','=','crm.lead'], ['res_id','=',odooId]],
                     fields: ATTACHMENT_FIELDS,
                     order: 'create_date desc'
                 }));
@@ -2955,19 +2983,22 @@
             '.qida-dash-table-bar{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:0.5px solid var(--s200);}',
             '.qida-dash-table-title{font-size:13px;font-weight:600;color:var(--s800);}',
             '.qida-dash-table-count{font-size:11px;color:var(--s500);}',
-            /* v1.24: tabla de la vista "Actividades" (6 cols; grid IDENTICO header/fila). */
-            '.qida-act-header,.qida-act-row{display:grid;grid-template-columns:minmax(150px,1.8fr) minmax(90px,1fr) minmax(170px,2.4fr) 104px minmax(120px,1.3fr) 116px;gap:14px;align-items:center;}',
-            '.qida-act-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
-            '.qida-act-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);}',
-            '.qida-act-task{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
-            '.qida-act-note-dot{color:#0F6E56;font-weight:700;}',
-            '.qida-act-deadline{font-variant-numeric:tabular-nums;color:var(--s700);}',
-            '.qida-act-type{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}',
-            '.qida-act-badge-auto{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:999px;background:var(--s100);color:var(--s600);font-size:10px;font-weight:500;}',
-            '.qida-act-row-actions{display:flex;justify-content:flex-end;}',
-            '.qida-act-goto{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
-            '.qida-act-goto:hover{background:var(--s50);}',
-            '@media (max-width:1100px){.qida-act-header,.qida-act-row{grid-template-columns:minmax(130px,1.6fr) minmax(160px,2.4fr) 96px minmax(110px,1.2fr) 110px;}.qida-act-header > div:nth-child(2){display:none;}.qida-act-patient{display:none;}}',
+            /* v1.24/v1.25: tabla de la vista "Actividades" (6 cols; grid IDENTICO header/fila).
+               v1.25 (ISSUE E): renombradas .qida-act-* -> .qida-actv-* para NO colisionar con las
+               filas flex .qida-act-row de "Proximas actividades" del detalle (esa colision hacia
+               que la grid pisara el flex y la fecha se saliera del div). */
+            '.qida-actv-header,.qida-actv-row{display:grid;grid-template-columns:minmax(150px,1.8fr) minmax(90px,1fr) minmax(170px,2.4fr) 104px minmax(120px,1.3fr) 116px;gap:14px;align-items:center;}',
+            '.qida-actv-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
+            '.qida-actv-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);}',
+            '.qida-actv-task{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.qida-actv-note-dot{color:#0F6E56;font-weight:700;}',
+            '.qida-actv-deadline{font-variant-numeric:tabular-nums;color:var(--s700);}',
+            '.qida-actv-type{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}',
+            '.qida-actv-badge-auto{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:999px;background:var(--s100);color:var(--s600);font-size:10px;font-weight:500;}',
+            '.qida-actv-row-actions{display:flex;justify-content:flex-end;}',
+            '.qida-actv-goto{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
+            '.qida-actv-goto:hover{background:var(--s50);}',
+            '@media (max-width:1100px){.qida-actv-header,.qida-actv-row{grid-template-columns:minmax(130px,1.6fr) minmax(160px,2.4fr) 96px minmax(110px,1.2fr) 110px;}.qida-actv-header > div:nth-child(2){display:none;}.qida-actv-patient{display:none;}}',
             /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
                FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
                distinto los fr y se desalinearían. */
@@ -3423,7 +3454,12 @@
         }
         var countLabel = rows.length + (rows.length === 1 ? ' actividad' : ' actividades');
         var cardCls = 'qida-dash-table-card' + (state.dashLoading ? ' qida-dash-loading' : '');
+        // v1.25 (ISSUE D): las metricas del top tambien en Actividades (igual que Leads/Sugerencias).
+        //   Con flag ON salen de state.dashMetrics (portfolio-wide). Como las filas de esta vista son
+        //   activities (sin temperatura), el fallback flag-off de renderDashCards usa la cartera
+        //   (MOCK_LEADS_RESPONSE) en vez de las activities -> conteos por temperatura coherentes.
         return '<div class="qida-dash-dashboard">'
+            + renderDashCards(MOCK_LEADS_RESPONSE)
             + '<div class="qida-dash-toolbar">'
                 + '<div class="qida-dash-toolbar-left"></div>'
                 + '<div class="qida-dash-toolbar-right">' + renderViewChips() + '</div>'
@@ -3443,7 +3479,7 @@
     }
 
     function renderActivityHeader() {
-        return '<div class="qida-act-header">'
+        return '<div class="qida-actv-header">'
             + '<div>Familia</div>'
             + '<div>Paciente</div>'
             + '<div>Tarea</div>'
@@ -3463,21 +3499,21 @@
         var note = act.note || '';
         var typeLabel = act.activity_type_label || ('Tipo ' + (act.activity_type_id != null ? act.activity_type_id : '?'));
         var autoBadge = act.automated
-            ? '<span class="qida-act-badge-auto">' + icon('refresh-cw', 10) + ' Automatica</span>'
+            ? '<span class="qida-actv-badge-auto">' + icon('refresh-cw', 10) + ' Automatica</span>'
             : '';
-        return '<div class="qida-act-row">'
-            + '<div class="qida-dash-cell qida-act-fam">'
+        return '<div class="qida-actv-row">'
+            + '<div class="qida-dash-cell qida-actv-fam">'
                 + '<div class="qida-cell-line1"><span class="qida-cell-name">' + famLine + '</span></div>'
             + '</div>'
-            + '<div class="qida-dash-cell qida-act-patient">' + esc(patient) + '</div>'
+            + '<div class="qida-dash-cell qida-actv-patient">' + esc(patient) + '</div>'
             // Tarea: summary + tooltip con la note si existe.
-            + '<div class="qida-dash-cell qida-act-task"' + (note ? ' title="' + esc(note) + '"' : '') + '>'
-                + esc(summary) + (note ? ' <span class="qida-act-note-dot" aria-label="Tiene nota">•</span>' : '')
+            + '<div class="qida-dash-cell qida-actv-task"' + (note ? ' title="' + esc(note) + '"' : '') + '>'
+                + esc(summary) + (note ? ' <span class="qida-actv-note-dot" aria-label="Tiene nota">•</span>' : '')
             + '</div>'
-            + '<div class="qida-dash-cell qida-act-deadline">' + esc(formatShortDate(act.deadline_date)) + '</div>'
-            + '<div class="qida-dash-cell qida-act-type">' + esc(typeLabel) + autoBadge + '</div>'
-            + '<div class="qida-act-row-actions">'
-                + '<button class="qida-act-goto" data-action="select-lead" data-id="' + esc(act.lead_id != null ? act.lead_id : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
+            + '<div class="qida-dash-cell qida-actv-deadline">' + esc(formatShortDate(act.deadline_date)) + '</div>'
+            + '<div class="qida-dash-cell qida-actv-type">' + esc(typeLabel) + autoBadge + '</div>'
+            + '<div class="qida-actv-row-actions">'
+                + '<button class="qida-actv-goto" data-action="select-lead" data-id="' + esc(act.lead_id != null ? act.lead_id : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
             + '</div>'
         + '</div>';
     }
@@ -4224,8 +4260,19 @@
         // El AF efectivo cambió: invalidar caches que dependen de af_key.
         state.recommendationCache = {};
         state.draftVariantsLoaded = false;
-        rerenderContent();
+        // v1.25 (ISSUE A): cambiar de AF cambia X-AF-Email -> los datos del dashboard son de OTRO AF.
+        //   1) Si hay un lead abierto, cerrarlo (no tiene sentido bajo otro AF).
+        //   2) Forzar loading (dashRows=null + dashMetrics=null) y re-fetch del view activo:
+        //      loadDashView vuelve a llamar fetchDashboardMetrics + fetch(view) con el nuevo header.
+        if (state.view === 'detail') {
+            state.view = 'dashboard';
+            state.currentLeadId = null;
+        }
+        state.dashRows = null;
+        state.dashMetrics = null;
+        state.dashError = null;
         syncAfSwitcher();
+        loadDashView(state.dashView, false);  // rerenderiza (incl. syncAfSwitcher) + re-fetch
     }
 
     // 'corto_directo' -> 'Corto directo'. Robusto a snake_case / espacios / vacío.
@@ -6128,12 +6175,15 @@
                 }, 30);
                 showToast('Mensaje copiado al campo de WhatsApp. Editalo y envialo.');
                 return;
-            // v1.23: "Compartir con el lead" desde una card de material del chat agent. Inserta el
-            //   recurso en el textarea de WhatsApp (la AF revisa y envia; NO auto-envia).
+            // v1.23/v1.25: "Compartir con el lead" desde una card de material del chat agent.
+            //   v1.25 (ISSUE C): inserta SOLO el {url} en el textarea (sin prefijo armado). La AF
+            //   escribe alrededor lo que quiera. NO auto-envia.
             case 'ai-share-material':
-                var shTitle = target.getAttribute('data-title') || '';
                 var shUrl = target.getAttribute('data-url') || '';
-                state.draftMessage = 'Te dejo este recurso que te puede ayudar: ' + shTitle + (shUrl ? '\n' + shUrl : '');
+                if (!shUrl) { showToast('Este material no tiene link para compartir.'); return; }
+                // Si ya hay texto, agregamos el link en una linea nueva; si no, solo el link.
+                var prev = (state.draftMessage || '');
+                state.draftMessage = prev ? (prev.replace(/\s+$/, '') + '\n' + shUrl) : shUrl;
                 rerenderContent();
                 setTimeout(function () {
                     var ta = document.getElementById('qida-wa-textarea');
@@ -6143,7 +6193,7 @@
                         autoResizeTextarea(ta);
                     }
                 }, 30);
-                showToast('Material listo en el campo de WhatsApp. Revisalo y envialo.');
+                showToast('Link agregado al campo de WhatsApp. Escribí tu mensaje y enviá.');
                 return;
             case 'ai-material-action':
                 var matTitle = target.getAttribute('data-title') || 'material';
