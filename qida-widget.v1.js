@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.18.0
+ * QIDA ASSISTANT v1.19.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,32 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.19.0 (AF switcher: admins pueden "ver como" cualquier AF para QA/training/support):
+ *   - Adaptación de framework: NO hay Next.js (widget vanilla servido desde Blob), así que NO existe
+ *     NEXT_PUBLIC_ADMIN_EMAILS. La lista de admins se configura via CONFIG.adminEmails en
+ *     QidaAssistant.init(...) (string CSV o array), con fallback ADMIN_EMAILS_DEFAULT =
+ *     ['alejandro.vivas@qida.es']. NO requiere env var nueva en ningún Vercel del frontend.
+ *   - AFs impersonables: IMPERSONATABLE_AFS hardcode (v1: Ana Pinilla). TODO[afs]: fetch a
+ *     GET /api/admin/afs cuando se sumen más (F5).
+ *   - Identidad efectiva: getActiveAfEmail() = email impersonado (admin) || email real. Es el valor
+ *     de X-AF-Email. Helper afEmailHeaders() -> { 'X-AF-Email': ... } listo para los fetch reales a
+ *     qida-followup-api (endpoints AF-facing). Los /api/admin/* NO lo usan. // TODO[api]: adjuntarlo
+ *     cuando se cableen los endpoints (hoy el widget consume mocks, no llama a la API todavía).
+ *     resolveAfKey() ahora usa getActiveAfEmail() -> la impersonación cambia visiblemente los drafts.
+ *   - UI: barra global #qida-af-switch-bar entre el shell-header y el content (syncAfSwitcher, llamado
+ *     en cada rerender + tras init). No-admin -> no se renderiza (display:none). Admin -> dropdown
+ *     "Como yo (email) / Ver como <AF>". Impersonando -> banner AMARILLO "Viendo como <X> · email"
+ *     + botón "Volver a mi vista" + dropdown. Visible en TODAS las vistas (dashboard/detail/leaders/
+ *     agentBuilder) porque vive en el shell, no en el content.
+ *   - Persistencia: localStorage 'qida_viewing_as' (validado contra IMPERSONATABLE_AFS al hidratar en
+ *     init). Reset (botón banner o "Como yo") limpia el storage y restaura el email real.
+ *   - Al cambiar de AF: console.log('[AF SWITCHER] viewing as <email>') + se invalidan
+ *     recommendationCache y draftVariantsLoaded (dependen de af_key).
+ *   - Honor system: NO se valida server-side que el user sea admin (llega con auth real). NO cambia
+ *     el comportamiento para no-admins. NO toca endpoints admin ni el backend.
+ *   - State nuevo: viewingAsEmail. Handlers: af-switch (select), af-switch-reset (banner). Dev local
+ *     (!IS_ODOO_MODE) = admin para poder testear.
  *
  * Cambios v1.18.0 (eliminar bloque "Equipo siguiendo" del detalle del lead):
  *   - Eliminada la card "Equipo siguiendo" de la columna de info del detalle: se borra la función
@@ -1011,7 +1037,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.18.0';
+    var VERSION = '1.19.0';
     var CONFIG = null;
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
@@ -1359,8 +1385,21 @@
     var MOCK_ACTIVE_AFS = {
         'patricia.vega@qida.es':    'patricia_vega',
         'alejandro.vivas@qida.es':  'alejandro_vivas',
-        'eva.martin@qida.es':       'eva_martin'
+        'eva.martin@qida.es':       'eva_martin',
+        'ana.pinilla@qida.es':      'ana_pinilla'
     };
+
+    // ============================================================
+    // v1.19: AF SWITCHER (admins "ven como" cualquier AF) - config
+    // ============================================================
+    // Lista de admins. Sin Next.js (widget vanilla en Blob) no hay NEXT_PUBLIC_*: se configura
+    //   via CONFIG.adminEmails en QidaAssistant.init(...) (string CSV o array), con fallback.
+    var ADMIN_EMAILS_DEFAULT = ['alejandro.vivas@qida.es'];
+    // AFs impersonables (hardcode v1). TODO[afs]: reemplazar por fetch a GET /api/admin/afs.
+    var IMPERSONATABLE_AFS = [
+        { key: 'ana_pinilla', email: 'ana.pinilla@qida.es', display_name: 'Ana Pinilla' }
+    ];
+    var AF_SWITCH_STORAGE_KEY = 'qida_viewing_as';
 
     // Config de variantes por AF (mock de GET/PUT /draft-variants). saveDraftVariants muta este
     //   mapa. Si un af_key no está, getDraftVariantsSync devuelve los defaults (is_default:true).
@@ -1528,6 +1567,10 @@
 
         // v1.17: dropdown de temperatura del header del detalle abierto/cerrado (transitorio).
         tempEditorOpen: false,
+
+        // v1.19: AF switcher. Email del AF que un admin está "viendo como" (null = como yo).
+        //   Persiste en localStorage (AF_SWITCH_STORAGE_KEY); se hidrata en init.
+        viewingAsEmail: null,
 
         // Schedule modal (reutilizado desde Detail Y desde "Marcar hecho" de sugerencias/actividades)
         showScheduleModal: false,
@@ -2371,6 +2414,20 @@
             '.qida-shell-swap:hover{background:var(--s100);}',
             '.qida-shell-swap.active{background:#E1F5EE;color:#0F6E56;border-color:#c5e8dc;}',
             '.qida-content{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0;}',
+
+            /* v1.19: barra del AF switcher (admins). Banner amarillo en modo impersonación. */
+            '.qida-af-switch-bar{flex-shrink:0;display:flex;align-items:center;gap:10px;padding:7px 16px;border-bottom:0.5px solid var(--s200);background:#fff;font-size:12px;}',
+            '.qida-af-switch-bar.impersonating{background:#FEF3C7;border-bottom-color:#FCD34D;}',
+            '.qida-af-switch-label{display:inline-flex;align-items:center;gap:5px;color:var(--s500);font-weight:500;}',
+            '.qida-af-switch-label .qa-icon,.qida-af-switch-msg .qa-icon{flex-shrink:0;}',
+            '.qida-af-switch-hint{color:var(--s500);}',
+            '.qida-af-switch-msg{display:inline-flex;align-items:center;gap:6px;color:#92400E;font-weight:500;}',
+            '.qida-af-switch-msg strong{font-weight:700;}',
+            '.qida-af-switch-email{color:#b45309;font-weight:400;}',
+            '.qida-af-switch-right{display:flex;align-items:center;gap:8px;margin-left:auto;}',
+            '.qida-af-switch-select{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:12px;color:var(--s800);cursor:pointer;outline:none;}',
+            '.qida-af-switch-reset{background:#92400E;border:0;color:#fff;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;white-space:nowrap;}',
+            '.qida-af-switch-reset:hover{background:#78350f;}',
             '.qida-shell.qida-view-leaders .qida-content{overflow-y:auto;overflow-x:hidden;display:block;}',
 
             /* v1.10: coverage widget, dashboard search/chips/table, badges util ELIMINADOS.
@@ -3626,15 +3683,92 @@
     // af_key derivado del email del AF logueado (_currentUserEmail, set en init via sess.username)
     //   contra MOCK_ACTIVE_AFS (espejo de ACTIVE_AFS_JSON). Dev (email null) -> primer AF activo.
     function resolveAfKey() {
-        if (_currentUserEmail && MOCK_ACTIVE_AFS[_currentUserEmail]) return MOCK_ACTIVE_AFS[_currentUserEmail];
+        // v1.19: usa el AF efectivo (impersonado por admin o el real) para que el switcher cambie
+        //   visiblemente los drafts/recomendaciones.
+        var activeEmail = getActiveAfEmail();
+        if (activeEmail && MOCK_ACTIVE_AFS[activeEmail]) return MOCK_ACTIVE_AFS[activeEmail];
         // Fallback dev/no-mapeado: primer af_key del mock + aviso. TODO[odoo]: cablear identidad real.
         for (var email in MOCK_ACTIVE_AFS) {
             if (Object.prototype.hasOwnProperty.call(MOCK_ACTIVE_AFS, email)) {
-                if (!_currentUserEmail) log('resolveAfKey: sin email de sesion, usando fallback', MOCK_ACTIVE_AFS[email]);
+                if (!activeEmail) log('resolveAfKey: sin email de sesion, usando fallback', MOCK_ACTIVE_AFS[email]);
                 return MOCK_ACTIVE_AFS[email];
             }
         }
         return 'default';
+    }
+
+    // ============================================================
+    // v1.19: AF SWITCHER - helpers (identidad efectiva + impersonación)
+    // ============================================================
+    function getAdminEmails() {
+        var raw = CONFIG && CONFIG.adminEmails;
+        if (typeof raw === 'string') raw = raw.split(',');
+        if (!raw || !raw.length) raw = ADMIN_EMAILS_DEFAULT;
+        var out = [];
+        for (var i = 0; i < raw.length; i++) {
+            var e = String(raw[i] || '').trim().toLowerCase();
+            if (e) out.push(e);
+        }
+        return out;
+    }
+    // Email "real" del usuario logueado (en dev local es 'dev@local').
+    function getRealEmail() { return _currentUserEmail || null; }
+    // ¿El usuario logueado es admin? Dev local: true (para poder testear el switcher).
+    function isAdminUser() {
+        if (!IS_ODOO_MODE) return true;
+        var real = getRealEmail();
+        return !!(real && getAdminEmails().indexOf(real.toLowerCase()) > -1);
+    }
+    // Email del AF efectivo: el impersonado (si hay) o el real. Es el valor de X-AF-Email.
+    function getActiveAfEmail() {
+        if (state.viewingAsEmail && state.viewingAsEmail !== getRealEmail()) return state.viewingAsEmail;
+        return getRealEmail();
+    }
+    function isImpersonating() {
+        return !!(state.viewingAsEmail && state.viewingAsEmail !== getRealEmail());
+    }
+    function afDisplayName(email) {
+        for (var i = 0; i < IMPERSONATABLE_AFS.length; i++) {
+            if (IMPERSONATABLE_AFS[i].email === email) return IMPERSONATABLE_AFS[i].display_name;
+        }
+        return email || '';
+    }
+    // Header que el frontend debe mandar al chat agent v2 (qida-followup-api) en endpoints
+    //   AF-facing. Los endpoints /api/admin/* NO lo usan.
+    // TODO[api]: adjuntar afEmailHeaders() en el fetch() real cuando se cableen los endpoints.
+    function afEmailHeaders() {
+        var h = {};
+        var e = getActiveAfEmail();
+        if (e) h['X-AF-Email'] = e;
+        return h;
+    }
+    // Hidrata viewingAsEmail desde localStorage (validado contra la lista de AFs impersonables).
+    function initViewingAsFromStorage() {
+        try {
+            var stored = window.localStorage && window.localStorage.getItem(AF_SWITCH_STORAGE_KEY);
+            if (!stored) return;
+            for (var i = 0; i < IMPERSONATABLE_AFS.length; i++) {
+                if (IMPERSONATABLE_AFS[i].email === stored) { state.viewingAsEmail = stored; return; }
+            }
+        } catch (e) { /* localStorage no disponible: ignorar */ }
+    }
+    // Setea (o limpia) el AF impersonado, persiste y refresca caches dependientes del AF.
+    function setViewingAs(email) {
+        var real = getRealEmail();
+        if (email && email !== real) {
+            state.viewingAsEmail = email;
+            try { window.localStorage.setItem(AF_SWITCH_STORAGE_KEY, email); } catch (e) {}
+            console.log('[AF SWITCHER] viewing as ' + email);
+        } else {
+            state.viewingAsEmail = null;
+            try { window.localStorage.removeItem(AF_SWITCH_STORAGE_KEY); } catch (e) {}
+            console.log('[AF SWITCHER] viewing as self (' + (real || '') + ')');
+        }
+        // El AF efectivo cambió: invalidar caches que dependen de af_key.
+        state.recommendationCache = {};
+        state.draftVariantsLoaded = false;
+        rerenderContent();
+        syncAfSwitcher();
     }
 
     // 'corto_directo' -> 'Corto directo'. Robusto a snake_case / espacios / vacío.
@@ -4541,6 +4675,7 @@
         content.innerHTML = renderContent();
         syncShellSizing();
         syncShellHeader();
+        syncAfSwitcher();   // v1.19: barra del AF switcher (solo admins)
         syncScheduleModal();
         // v1.10: syncAssistantHeader eliminada (junto con todo el bloque del asistente).
         syncToast();
@@ -4599,6 +4734,42 @@
     // v1.6: shell header dinamico. En dashboard mantiene el bloque Sparkles + Seguimientos +
     // sub. En detail lo reemplaza por Volver + nombre + ID + badge dias + datos compactos.
     // El asistente del header (qida-asst-anchor) se preserva en el DOM aunque vacio en detail.
+    // v1.19: barra global del AF switcher (entre el header y el content del shell). Solo admins.
+    //   No-admin -> oculta. Admin sin impersonar -> "Modo admin · Ver como AF: [dropdown]".
+    //   Admin impersonando -> banner AMARILLO "Viendo como X · Volver a mi vista" + dropdown.
+    function syncAfSwitcher() {
+        var bar = document.getElementById('qida-af-switch-bar');
+        if (!bar) return;
+        if (!isAdminUser()) { bar.style.display = 'none'; bar.innerHTML = ''; bar.className = 'qida-af-switch-bar'; return; }
+        bar.style.display = '';
+
+        var real = getRealEmail();
+        var opts = '<option value=""' + (!state.viewingAsEmail ? ' selected' : '') + '>Como yo' + (real ? ' (' + esc(real) + ')' : '') + '</option>';
+        for (var i = 0; i < IMPERSONATABLE_AFS.length; i++) {
+            var af = IMPERSONATABLE_AFS[i];
+            if (af.email === real) continue;
+            opts += '<option value="' + esc(af.email) + '"' + (state.viewingAsEmail === af.email ? ' selected' : '') + '>Ver como ' + esc(af.display_name) + '</option>';
+        }
+        var dropdown = '<select class="qida-af-switch-select" data-input="af-switch" aria-label="Ver como AF">' + opts + '</select>';
+
+        if (isImpersonating()) {
+            var active = getActiveAfEmail();
+            bar.className = 'qida-af-switch-bar impersonating';
+            bar.innerHTML = '<span class="qida-af-switch-msg">' + icon('users', 13) + ' Viendo como <strong>' + esc(afDisplayName(active)) + '</strong> · <span class="qida-af-switch-email">' + esc(active) + '</span></span>'
+                + '<span class="qida-af-switch-right">'
+                    + '<button class="qida-af-switch-reset" data-action="af-switch-reset">Volver a mi vista</button>'
+                    + dropdown
+                + '</span>';
+        } else {
+            bar.className = 'qida-af-switch-bar';
+            bar.innerHTML = '<span class="qida-af-switch-label">' + icon('users', 12) + ' Modo admin</span>'
+                + '<span class="qida-af-switch-right">'
+                    + '<span class="qida-af-switch-hint">Ver como AF:</span>'
+                    + dropdown
+                + '</span>';
+        }
+    }
+
     // v1.17: selector compacto de temperatura (dropdown anclado al pill + backdrop click-fuera).
     function renderTempEditor(current) {
         var opts = ['caliente', 'templado', 'frio', 'pausa'];
@@ -4783,6 +4954,11 @@
             // v1.12: panel de lideres
             case 'open-leaders-dashboard':
                 openLeadersDashboard();
+                return;
+
+            // v1.19: AF switcher — volver a "como yo" desde el banner amarillo.
+            case 'af-switch-reset':
+                setViewingAs(null);
                 return;
 
             // v1.15: "Armá tu asistente"
@@ -5290,6 +5466,9 @@
             var iTone = parseInt(node.getAttribute('data-idx'), 10);
             if (state.draftVariants[iTone]) state.draftVariants[iTone].tone_style = node.value;
             rerenderContent();
+        } else if (input === 'af-switch') {
+            // v1.19: admin elige "Como yo" (value vacío) o "Ver como <AF>".
+            setViewingAs(node.value || null);
         }
     }
 
@@ -5386,6 +5565,7 @@
         overlay.innerHTML =
             '<div class="qida-shell" id="qida-shell">'
                 + '<div class="qida-shell-header"></div>'
+                + '<div class="qida-af-switch-bar" id="qida-af-switch-bar" style="display:none"></div>'
                 + '<div id="qida-content" class="qida-content"></div>'
             + '</div>';
         overlay.addEventListener('click', handleClick);
@@ -5649,6 +5829,9 @@
             CONFIG = options || {};
             log('init() called', CONFIG);
 
+            // v1.19: hidratar el "viewing as" persistido (si el admin dejó una impersonación activa).
+            initViewingAsFromStorage();
+
             // v1.11: feature flag automatico por host. Si estamos en erp.qida.es, activamos
             //   modo Odoo y disparamos session_info para hidratar _baseContext. Si la sesion
             //   falla (logout, network), degradamos a modo mock para no romper el widget.
@@ -5665,7 +5848,9 @@
                     _isLeader = !!(_currentUserEmail && LEADER_EMAILS[_currentUserEmail]);
                     log('Odoo session ready', { uid: sess && sess.uid, lang: _baseContext.lang, isLeader: _isLeader });
                     if (_isLeader) activateLeaderUi();
+                    syncAfSwitcher();  // v1.19: el estado admin depende del email recién hidratado
                     console.info('[QidaAssistant] Leader mode:', _isLeader, _currentUserEmail);
+                    console.info('[QidaAssistant] Admin mode:', isAdminUser(), _currentUserEmail);
                 }).catch(function (err) {
                     log('Odoo session failed, falling back to mock mode for AF detail', err && err.message);
                     IS_ODOO_MODE = false;  // graceful fallback para el detalle de leads.
@@ -5682,7 +5867,9 @@
                 _isLeader = true;
                 _currentUserEmail = 'dev@local';
                 activateLeaderUi();
+                syncAfSwitcher();  // v1.19: dev local = admin (para testear el switcher)
                 console.info('[QidaAssistant] Leader mode:', true, '(dev local)');
+                console.info('[QidaAssistant] Admin mode:', true, '(dev local)');
             }
 
             mountWhenReady();
