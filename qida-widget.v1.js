@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.36.0
+ * QIDA ASSISTANT v1.37.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,25 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.37.0 (clip 📎 funcional: file picker -> upload al backend -> chip -> envío con file_uid).
+ *   Rebaseado sobre main@v1.36.0 (care-context labels v1.35.0 + 422 detail v1.36.0). El header
+ *   conserva AMBAS entradas previas (v1.36.0 + v1.35.0); esta v1.37.0 agrega solo el clip.
+ *   - Clip 📎 del input de WhatsApp REVERTIDO a visible (en v1.33 estaba oculto porque la UI de
+ *     adjuntos nunca estuvo cableada y solo hacía un toast "mock"). Ahora es funcional.
+ *   - Real (useRealAPI): el clip dispara un <input type=file hidden> -> handleWaFileSelected sube el
+ *     archivo via POST /api/leads/{id}/attachments (multipart, campo "file", header X-AF-Email) ->
+ *     fetchUploadAttachment devuelve { file_uid } -> se pushea un chip { kind:'file_upload', title:
+ *     filename, file_uid } a state.pendingAttachments (arriba del textarea, mecánica de chip de v1.26).
+ *   - Mock (flag OFF): el clip mete un chip falso ('documento-demo.pdf') + toast, sin upload real.
+ *   - Envío: sendWhatsAppReal incluye el file_uid del primer chip 'file_upload' en el body de
+ *     POST /conversation/messages. Los chips 'material_link' (url) se siguen anexando como texto.
+ *   - Loading: state.waUploading -> spinner + disabled en el clip; bloquea doble-pick y el doble
+ *     evento input+change del file input. En error de subida: toast claro y NO se rompe el textarea
+ *     ni el envío (la AF puede mandar sin adjunto). Si el send falla, el chip se mantiene (reintento
+ *     sin re-subir). renderWaAttachArea distingue 'file_upload' (sin url) de 'material_link' (url).
+ *   Flag useRealAPI sin cambios.
  *
  * Cambios v1.36.0 ("Armá tu asistente": surfacing del 422 del backend + alineo constraint del name).
  *   Solo qida-widget.v1.js, sin red. Contrato del backend SIN cambios (DraftVariantSpec correcto).
@@ -1360,7 +1379,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.36.0';
+    var VERSION = '1.37.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1891,8 +1910,9 @@
         addingNote: false,
         draftMessage: '',               // texto vivo del textarea de WhatsApp del pane izquierdo
         waSending: false,               // v1.23: true mientras vuelve el POST de envio real (deshabilita Enviar + spinner)
+        waUploading: false,             // v1.36: true mientras sube un adjunto del clip (deshabilita clip + spinner; bloquea doble-pick).
         waSendError: null,              // v1.23: userMessage del error de envio (banner inline + Reintentar). null = sin error.
-        pendingAttachments: [],         // v1.26: chips de material a adjuntar [{kind:'material_link',title,url}]. Se suman al texto al enviar; se limpian tras envio.
+        pendingAttachments: [],         // v1.26: chips de material a adjuntar [{kind:'material_link',title,url} | {kind:'file_upload',title,file_uid}]. Se suman al texto/file_uid al enviar; se limpian tras envio.
         attachmentsExpanded: false,     // colapsable de adjuntos en el pane central
         aiChatHistory: {},              // { leadId: [{ from: 'user'|'ai', payload }] } - PERSISTENTE en sesion
         aiChatDraft: '',                // texto vivo del input del chat IA del pane central
@@ -4355,12 +4375,20 @@
         // v1.26: el body lleva texto + links de los chips; el textarea sigue mostrando SOLO lo
         //   tipeado por el AF (sin urls). Los chips permanecen hasta el success.
         var finalText = composeMessageWithAttachments(text, state.pendingAttachments || []);
+        // v1.36 (FIX 2): si hay un chip de archivo subido (clip), su file_uid va en el body. El backend
+        //   acepta UN file_uid -> tomamos el primer chip 'file_upload' con uid. Los 'material_link' ya
+        //   fueron anexados como texto por composeMessageWithAttachments (solo items con .url).
+        var fileUid = null;
+        var _atts = state.pendingAttachments || [];
+        for (var _ai = 0; _ai < _atts.length; _ai++) {
+            if (_atts[_ai].kind === 'file_upload' && _atts[_ai].file_uid) { fileUid = _atts[_ai].file_uid; break; }
+        }
         state.waSending = true;
         state.waSendError = null;
         state.draftMessage = text;   // mantener el texto visible (sin urls) mientras se envia
         rerenderContent();
         apiFetchJson('POST', '/api/leads/' + numericId + '/conversation/messages',
-            { body: { phone: phone, text: finalText, file_uid: null }, noun: 'el mensaje de WhatsApp' }
+            { body: { phone: phone, text: finalText, file_uid: fileUid }, noun: 'el mensaje de WhatsApp' }
         ).then(function (resp) {
             state.waSending = false;
             state.waSendError = null;
@@ -4385,6 +4413,66 @@
             state.draftMessage = text;   // dejar el texto tipeado; los chips quedan para reintentar
             rerenderContent();
             showToast(state.waSendError);
+        });
+    }
+
+    // v1.36 (FIX 2): sube un archivo a POST /api/leads/{id}/attachments (multipart) -> { file_uid }.
+    //   NO seteamos Content-Type: el browser pone el boundary multipart. Auth via X-AF-Email.
+    //   Mismo manejo de error que apiFetchJson (BFF {error:{code,message}} | FastAPI {detail}).
+    function fetchUploadAttachment(leadId, file) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        var headers = afEmailHeaders();
+        if (!headers['X-AF-Email']) return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la subida.', 'NO_AF_EMAIL', 0));
+        var fd = new FormData();
+        fd.append('file', file);
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/attachments';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers, body: fd }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) { log('attachment ok', { lead: numericId, ms: Date.now() - t0 }); return data; }
+                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || (typeof (data && data.detail) === 'string' ? data.detail : null);
+                log('attachment error', { lead: numericId, status: res.status, code: code });
+                throw makeApiError(apiErrorCopy(res.status, serverMsg, 'el archivo adjunto'), code, res.status);
+            });
+        });
+    }
+
+    // v1.36 (FIX 2): el AF eligió un archivo en el picker -> loading (spinner en el clip) -> POST ->
+    //   chip 'file_upload' arriba del textarea. En error: toast claro + NO rompe el textarea ni el
+    //   envío (puede escribir y mandar sin adjunto). Guard state.waUploading contra doble evento
+    //   (input + change del file input) y contra doble-pick mientras una subida está en curso.
+    function handleWaFileSelected(input) {
+        if (!input || !input.files || !input.files.length || state.waUploading) return;
+        var leadId = state.currentLeadId;
+        var file = input.files[0];
+        input.value = '';   // permitir re-seleccionar el mismo archivo luego (el File ya quedó capturado)
+        state.waUploading = true;
+        rerenderContent();
+        showToast('Subiendo "' + file.name + '"…');
+        fetchUploadAttachment(leadId, file).then(function (resp) {
+            state.waUploading = false;
+            if (state.currentLeadId !== leadId) return;   // la AF cambió de lead mientras subía
+            var fileUid = resp && resp.file_uid;
+            if (fileUid) {
+                if (!state.pendingAttachments) state.pendingAttachments = [];
+                state.pendingAttachments.push({ kind: 'file_upload', title: file.name, file_uid: fileUid });
+                rerenderContent();
+                showToast('Archivo adjuntado. Escribí tu mensaje y enviá.');
+            } else {
+                rerenderContent();
+                showToast('No se pudo adjuntar el archivo (respuesta inesperada). Intentá de nuevo.');
+            }
+        }).catch(function (err) {
+            log('attachment upload failed', err && (err.code || err.message));
+            state.waUploading = false;
+            if (state.currentLeadId === leadId) rerenderContent();
+            showToast((err && err.userMessage) || 'Error al subir el archivo, intentá de nuevo.');
         });
     }
 
@@ -5338,8 +5426,13 @@
                 + errBanner
                 + renderWaAttachArea()
                 + '<div class="qida-wa-input">'
-                    // v1.33: botón clip 📎 oculto (attachments-ui nunca cableada; hacía toast "mock").
-                    //   El share de material se hace por el chat (pendingAttachments -> chip arriba).
+                    // v1.36 (FIX 2): clip 📎 funcional (revierte el "oculto" de v1.33). Real -> dispara el file
+                    //   picker oculto -> POST /api/leads/{id}/attachments (multipart) -> chip file_upload con file_uid.
+                    //   Mock -> toast + chip falso. Durante el upload, spinner + disabled (state.waUploading).
+                    + '<input type="file" id="qida-wa-file-picker" data-input="wa-file" accept=".pdf,.doc,.docx,image/*,audio/*" hidden />'
+                    + '<button class="qida-wa-clip" data-action="wa-clip"' + (state.waUploading ? ' disabled' : '') + ' aria-label="Adjuntar archivo">'
+                        + (state.waUploading ? '<span class="qida-spinner" aria-hidden="true"></span>' : icon('paperclip', 16))
+                    + '</button>'
                     + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1" placeholder="Escribe un mensaje...">' + esc(draft) + '</textarea>'
                     + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + sendInner + '</button>'
                 + '</div>'
@@ -5360,10 +5453,14 @@
         var chips = '';
         for (var i = 0; i < atts.length; i++) {
             var a = atts[i] || {};
-            var short = shortenUrl(a.url);
-            chips += '<span class="qida-wa-attach-chip" title="' + esc((a.title || '') + ' — ' + (a.url || '')) + '">'
+            // v1.36: dos formas de chip. 'file_upload' (archivo subido al backend, sin url -> file_uid en el
+            //   body del envío) vs 'material_link' (url externa -> se anexa como texto al mensaje).
+            var isFile = (a.kind === 'file_upload');
+            var short = isFile ? '' : shortenUrl(a.url);
+            var tip = isFile ? ('Archivo adjunto: ' + (a.title || '')) : ((a.title || '') + ' — ' + (a.url || ''));
+            chips += '<span class="qida-wa-attach-chip" title="' + esc(tip) + '">'
                 + icon('paperclip', 11)
-                + '<span class="qida-wa-attach-label">' + esc(a.title || 'Material')
+                + '<span class="qida-wa-attach-label">' + esc(a.title || (isFile ? 'Archivo' : 'Material'))
                     + (short ? ' <span class="qida-wa-attach-url">(' + esc(short) + ')</span>' : '')
                 + '</span>'
                 + '<button class="qida-wa-attach-x" data-action="wa-attach-remove" data-id="' + i + '" aria-label="Quitar adjunto">' + icon('x', 11) + '</button>'
@@ -6351,7 +6448,7 @@
                 //   inicio y el race-guard de LeadDetailService.fetchAll compare con ===
                 //   estricto sin coercion.
                 var leadIdNum = (typeof id === 'string' && /^\d+$/.test(id)) ? parseInt(id, 10) : id;
-                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', waSending: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.11: SIEMPRE llamamos a fetchAll (incluso en modo mock - el service lo
                 //   detecta y hace mockHydrate sync, sin loading visible). Solo skipeamos si
                 //   ya hay cache valido (sin _error) para evitar fetchs redundantes en cache hits.
@@ -6368,7 +6465,7 @@
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
-                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 return;
 
             // --- v1.10: dashboard de leads enfriandose ---
@@ -6504,7 +6601,18 @@
                 sendWhatsAppMock(state.currentLeadId, state.draftMessage);
                 return;
             case 'wa-clip':
-                showToast('Adjuntar archivo (mock)');
+                // v1.36 (FIX 2): real -> abre el file picker nativo (el onchange sube + mete el chip).
+                //   mock -> toast + chip falso (sin upload real) para demostrar la mecánica.
+                if (state.waUploading) return;
+                if (useRealApi()) {
+                    var picker = document.getElementById('qida-wa-file-picker');
+                    if (picker) picker.click();
+                } else {
+                    if (!state.pendingAttachments) state.pendingAttachments = [];
+                    state.pendingAttachments.push({ kind: 'file_upload', title: 'documento-demo.pdf', file_uid: 'mock-file-uid' });
+                    rerenderContent();
+                    showToast('Archivo adjuntado (mock)');
+                }
                 return;
 
             // v1.6: Adjuntos colapsable en pane central
@@ -6798,6 +6906,10 @@
                 else sendBtnWa.setAttribute('disabled', '');
             }
             autoResizeTextarea(node);
+        } else if (input === 'wa-file') {
+            // v1.36 (FIX 2): el file picker disparó 'change' (o 'input' en algunos browsers -> guard en
+            //   handleWaFileSelected vía state.waUploading). Sube el archivo y mete el chip file_upload.
+            handleWaFileSelected(node);
         } else if (input === 'ai-chat-input') {
             // v1.6: input del chat IA. Tambien evitamos rerender completo.
             state.aiChatDraft = node.value;
