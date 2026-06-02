@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.32.0
+ * QIDA ASSISTANT v1.33.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,20 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.33.0 (4 fixes UX visibles para demo; solo widget). NOTA: la tarea pedía 1.31->1.32
+ *   pero main ya estaba en 1.32.0 (hide leader badge) -> este bump va a 1.33.0 para no colisionar.
+ *   - ISSUE 1: columna "Tipo" del dashboard OCULTA (service_type venía "No cerrado" -> inútil).
+ *     renderDashHeader/renderDashRow sin la celda; grid base 7->6 cols; media query @1100px ya no
+ *     esconde el 2º hijo. Aplica a Sugerencias/Leads (Actividades usa renderActivityRow, intacta).
+ *   - ISSUE 2: botón clip 📎 del input WhatsApp OCULTO (attachments-ui nunca cableada; hacía toast
+ *     "mock"). pendingAttachments y los chips NO se tocan (el share va por el chat del asistente).
+ *   - ISSUE 3: en las cards de material del chat, "Adjuntar al próximo mensaje" ahora reusa
+ *     ai-share-material -> pushea el chip arriba del textarea (mecánica v1.26) en vez del toast mock.
+ *     Se agregaron urls a MOCK_AI_RESPONSES['material-marketing'] para que el chip tenga link.
+ *   - ISSUE 4: botón secundario "Ver material" (ai-view-material) -> window.open(url,'_blank') para
+ *     previsualizar antes de adjuntar. Reemplaza el viejo handler ai-material-action.
+ *   Flag useRealAPI sin cambios.
  *
  * Cambios v1.32.0 (ocultar el badge del Panel de Líderes por ahora):
  *   - Nuevo flag SHOW_LEADER_BADGE=false: injectLeaderBadge() retorna temprano y el botón flotante
@@ -1297,7 +1311,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.32.0';
+    var VERSION = '1.33.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1636,9 +1650,9 @@
         'material-marketing': {
             intro: 'Material util para este caso:',
             items: [
-                { title: 'Guia: cuidados post-alta hospitalaria', desc: 'PDF · 8 paginas · util para familias con familiar recien operado.', action: 'Adjuntar al proximo mensaje' },
-                { title: 'Testimonio: familia Madrid', desc: 'Video · 3 min · caso similar de cuidados a largo plazo.', action: 'Compartir link' },
-                { title: 'Tarifas y opciones de servicio', desc: 'PDF · 2 paginas · para casos en evaluacion de presupuesto.', action: 'Adjuntar al proximo mensaje' }
+                { title: 'Guia: cuidados post-alta hospitalaria', desc: 'PDF · 8 paginas · util para familias con familiar recien operado.', action: 'Adjuntar al proximo mensaje', url: 'https://www.qida.es/cuidados-post-alta-hospitalaria' },
+                { title: 'Testimonio: familia Madrid', desc: 'Video · 3 min · caso similar de cuidados a largo plazo.', action: 'Compartir link', url: 'https://www.qida.es/testimonios' },
+                { title: 'Tarifas y opciones de servicio', desc: 'PDF · 2 paginas · para casos en evaluacion de presupuesto.', action: 'Adjuntar al proximo mensaje', url: 'https://www.qida.es/tarifas' }
             ]
         },
         'sugerir-mensaje': {
@@ -2980,7 +2994,7 @@
             '.qida-aichat-mat-reason{font-size:11.5px;font-weight:400;color:var(--s600);font-style:italic;margin-bottom:6px;line-height:1.4;}',
             '.qida-aichat-mat-url{display:block;font-size:11px;color:#0F6E56;text-decoration:none;word-break:break-all;margin-bottom:8px;}',
             '.qida-aichat-mat-url:hover{text-decoration:underline;}',
-            '.qida-aichat-mat-actions{display:flex;justify-content:flex-end;}',
+            '.qida-aichat-mat-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;}',
             '.qida-aichat-mat-share{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;transition:background .15s;}',
             '.qida-aichat-mat-share:hover{background:#143C32;}',
             /* v1.23: banner de error de envio de WhatsApp + Reintentar */
@@ -3130,9 +3144,9 @@
             /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
                FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
                distinto los fr y se desalinearían. */
-            '.qida-dash-header{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 84px 140px 132px;gap:14px;padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
+            '.qida-dash-header{display:grid;grid-template-columns:minmax(170px,2fr) minmax(150px,2.2fr) 128px 84px 140px 132px;gap:14px;padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
             '.qida-dash-list{display:block;}',
-            '.qida-dash-row{display:grid;grid-template-columns:minmax(170px,2fr) 88px minmax(150px,2.2fr) 128px 84px 140px 132px;gap:14px;padding:11px 14px;cursor:pointer;align-items:center;transition:background-color .12s;background:#fff;border-bottom:0.5px solid #f3f4f6;}',
+            '.qida-dash-row{display:grid;grid-template-columns:minmax(170px,2fr) minmax(150px,2.2fr) 128px 84px 140px 132px;gap:14px;padding:11px 14px;cursor:pointer;align-items:center;transition:background-color .12s;background:#fff;border-bottom:0.5px solid #f3f4f6;}',
             '.qida-dash-row:last-child{border-bottom:0;}',
             '.qida-dash-row:hover{background:#fafafa;}',
             '.qida-dash-row:hover .qida-dash-row-actions{opacity:1;}',
@@ -3206,7 +3220,7 @@
             '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}}',
             /* v1.14 dashboard AF responsive: a 1100px se oculta "Tipo" (6 cols); a 980px se oculta
                la fecha-sub de Días y las cards apilan; a 760px se compacta la grilla. */
-            '@media (max-width:1100px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(150px,2fr) minmax(140px,2fr) 116px 80px 132px 124px;}.qida-dash-header > div:nth-child(2){display:none;}.qida-cell-tipo{display:none;}}',
+            '@media (max-width:1100px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(150px,2fr) minmax(140px,2fr) 116px 80px 132px 124px;}}',
             '@media (max-width:980px){.qida-cell-dias .qida-cell-date{display:none;}.qida-dash-cards{flex-direction:column;gap:10px;}}',
             '@media (max-width:760px){.qida-dash-header,.qida-dash-row{grid-template-columns:minmax(110px,1.6fr) minmax(100px,1.5fr) 86px 64px 110px 112px;gap:10px;}}',
 
@@ -3764,9 +3778,9 @@
     }
 
     function renderDashHeader() {
+        // v1.33: columna "Tipo" oculta (service_type venía "No cerrado" -> inútil). 6 columnas.
         return '<div class="qida-dash-header">'
             + '<div>Contacto</div>'
-            + '<div>Tipo</div>'
             + '<div>Por que</div>'
             + '<div>Temp</div>'
             + '<div>Sin contacto</div>'
@@ -3863,7 +3877,7 @@
                 + line2html
             + '</div>'
 
-            + '<div class="qida-dash-cell qida-cell-tipo">' + esc((row.serviceType && row.serviceType !== 'No cerrado') ? row.serviceType : '—') + '</div>'
+            // v1.33: columna "Tipo" oculta (service_type "No cerrado" -> inútil).
 
             // "Por qué" con ellipsis + tooltip (title) para no romper el ancho del modal AF.
             + '<div class="qida-dash-cell qida-cell-porque" title="' + esc(reason) + '">' + esc(reason) + '</div>'
@@ -4979,10 +4993,15 @@
         } else if (payload.kind === 'material' && payload.items) {
             for (var j = 0; j < payload.items.length; j++) {
                 var it = payload.items[j];
+                // v1.33: "Adjuntar" ahora reusa ai-share-material (pushea el chip arriba del textarea,
+                //   mecánica v1.26) en vez del toast mock. "Ver material" abre el url en otra pestaña.
                 html += '<div class="qida-aichat-mat-card">'
                     + '<div class="qida-aichat-mat-title">' + esc(it.title) + '</div>'
                     + '<div class="qida-aichat-mat-desc">' + esc(it.desc) + '</div>'
-                    + '<button class="qida-aichat-mat-action" data-action="ai-material-action" data-title="' + esc(it.title) + '">' + icon('paperclip', 10) + ' ' + esc(it.action) + '</button>'
+                    + '<div class="qida-aichat-mat-actions">'
+                        + (it.url ? '<button class="qida-aichat-mat-action" data-action="ai-view-material" data-url="' + esc(it.url) + '">' + icon('file', 10) + ' Ver material</button>' : '')
+                        + '<button class="qida-aichat-mat-share" data-action="ai-share-material" data-title="' + esc(it.title) + '" data-url="' + esc(it.url || '') + '">' + icon('paperclip', 10) + ' ' + esc(it.action) + '</button>'
+                    + '</div>'
                 + '</div>';
             }
         } else if (payload.kind === 'approaches' && payload.approaches) {
@@ -5209,7 +5228,8 @@
                 + errBanner
                 + renderWaAttachArea()
                 + '<div class="qida-wa-input">'
-                    + '<button class="qida-wa-clip" data-action="wa-clip" aria-label="Adjuntar">' + icon('paperclip', 15) + '</button>'
+                    // v1.33: botón clip 📎 oculto (attachments-ui nunca cableada; hacía toast "mock").
+                    //   El share de material se hace por el chat (pendingAttachments -> chip arriba).
                     + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1" placeholder="Escribe un mensaje...">' + esc(draft) + '</textarea>'
                     + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + sendInner + '</button>'
                 + '</div>'
@@ -6469,9 +6489,12 @@
                 }
                 rerenderContent();
                 return;
-            case 'ai-material-action':
-                var matTitle = target.getAttribute('data-title') || 'material';
-                showToast('"' + matTitle + '" listo (mock)');
+            // v1.33: "Ver material" -> abre el recurso en otra pestaña (browser decide por content-type).
+            //   Reemplaza al viejo ai-material-action (toast "mock"); "Adjuntar" ahora va por ai-share-material.
+            case 'ai-view-material':
+                var vmUrl = target.getAttribute('data-url') || '';
+                if (vmUrl) window.open(vmUrl, '_blank', 'noopener');
+                else showToast('Este material no tiene enlace.');
                 return;
             // v1.17: temperatura editable en el header del detalle.
             case 'open-temp-editor':
