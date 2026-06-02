@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.27.0
+ * QIDA ASSISTANT v1.28.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,21 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.28.0 (columna del dashboard de leads: "FAMILIA" -> "CONTACTO", contacto + parentesco):
+ *   - family_name viene null en Odoo (mostraba "Lead L123455 ·"). Rediseno: mostrar el CONTACTO
+ *     comercial + el parentesco de la persona cuidada.
+ *   - Header de la columna: "Familia" -> "Contacto" (renderDashHeader).
+ *   - adaptLeadRow: familyName (linea 1) = family_name || commercial_contact_name || "Lead <id>".
+ *     commercial_contact_name lo expone el backend en una PR en curso. Nuevo campo `parentesco` =
+ *     patient_name (el backend devuelve el ROL, ej "madre", no un nombre). Se elimina el mapeo
+ *     caregiverInfo (que en v1.24 mal-etiquetaba patient_name como nombre propio).
+ *   - renderDashRow: linea 1 = nombre (sin city); linea 2 (muted, SOLO si hay parentesco) =
+ *     "cuida a su <parentesco>" (lowercase). Real -> row.parentesco; mock -> caregiverInfo.relation
+ *     (guard por _real). Sin parentesco -> solo linea 1. Sin nombre -> "Lead L<id>" sin linea 2.
+ *   - Ej real: "Carolina Martinez" / "cuida a su madre". Solo qida-widget.v1.js. Flag sigue false.
+ *   - NOTA DE DESPLIEGUE: publicar DESPUES de que el backend exponga commercial_contact_name + corra
+ *     el recompute; si no, family_name null + sin contact_name -> la celda cae a "Lead L<id>".
  *
  * Cambios v1.27.0 (FIX: el lead detail no renderizaba data real con useRealAPI=true aunque las
  *   APIs respondian 200 — mismatch de identidad del lead):
@@ -1228,7 +1243,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.27.0';
+    var VERSION = '1.28.0';
     var CONFIG = null;
 
     // ============================================================
@@ -3679,7 +3694,7 @@
 
     function renderDashHeader() {
         return '<div class="qida-dash-header">'
-            + '<div>Familia</div>'
+            + '<div>Contacto</div>'
             + '<div>Tipo</div>'
             + '<div>Por que</div>'
             + '<div>Temp</div>'
@@ -3760,15 +3775,21 @@
     // v1.14: paradigma "explicitar en columnas". La fila ya NO codifica con fondo/rail/tinte;
     //   temperatura, días y estado viven en columnas propias. Fondo blanco (estética admin).
     function renderDashRow(row) {
-        var cg = row.caregiverInfo || {};
-        var line2 = esc(((cg.relation || '') + ' ' + (cg.name || '')).trim()) + (cg.age != null ? ', ' + cg.age + ' anos' : '');
+        // v1.28: columna "Contacto". Linea 1 = familyName (cadena ya resuelta en adaptLeadRow;
+        //   nombre de familia en mock). Linea 2 (muted, SOLO si hay parentesco) = "cuida a su <X>".
+        //   Parentesco: real -> row.parentesco (patient_name del backend); mock -> caregiverInfo.relation.
+        var name = row.familyName || ('Lead ' + row.id);
+        var parentesco = row.parentesco || (!row._real && row.caregiverInfo && row.caregiverInfo.relation) || '';
+        var line2html = parentesco
+            ? '<div class="qida-cell-line2">cuida a su ' + esc(String(parentesco).toLowerCase()) + '</div>'
+            : '';
         var reason = row.reason || 'Sin actividad reciente';
 
         return '<div class="qida-dash-row" data-action="select-lead" data-id="' + esc(row.id) + '">'
 
             + '<div class="qida-dash-cell qida-cell-familia">'
-                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(row.familyName) + ' &middot; ' + esc(row.city) + '</span></div>'
-                + '<div class="qida-cell-line2">' + line2 + '</div>'
+                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(name) + '</span></div>'
+                + line2html
             + '</div>'
 
             + '<div class="qida-dash-cell qida-cell-tipo">' + esc(row.serviceType) + '</div>'
@@ -4640,15 +4661,15 @@
         var lastDate = api.last_contact_at ? String(api.last_contact_at).slice(0, 10) : '';
         return {
             id: displayId,
-            // v1.24: enrichment de /api/me/leads (family_name/patient_name/city/service_type).
-            //   TODO[odoo-enrichment]: UI lista; estos campos pueden venir null hasta que el backend
-            //   cablee el enriquecido Odoo -> fallback "Lead <display_id>" / "" / {} sin romper render.
-            familyName: api.family_name || ('Lead ' + displayId),
+            // v1.28: columna "Contacto". Linea 1 = family_name (suele null en Odoo) ||
+            //   commercial_contact_name || "Lead <display_id>". (city/service_type del enrichment v1.24).
+            //   TODO[odoo-enrichment]: commercial_contact_name lo expone el backend en una PR en curso;
+            //   hasta entonces (family_name null + sin contact_name) cae a "Lead <id>".
+            familyName: api.family_name || api.commercial_contact_name || ('Lead ' + displayId),
             city: api.city || '',
-            // patient_name -> caregiverInfo.{name} con relacion generica (sin edad: el backend no la manda).
-            caregiverInfo: api.patient_name
-                ? { name: api.patient_name, relation: 'Persona cuidada', age: null }
-                : {},
+            // v1.28: parentesco de la persona cuidada para la linea 2 ("cuida a su <parentesco>").
+            //   patient_name del backend ES el rol (ej "madre"), NO un nombre propio.
+            parentesco: api.patient_name || '',
             serviceType: api.service_type || '',
             reason: api.porque_snippet || 'Sin actividad reciente',  // porque_snippet puede venir null
             temperature: api.temperature || '',
