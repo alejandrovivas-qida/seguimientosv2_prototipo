@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.33.0
+ * QIDA ASSISTANT v1.34.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,12 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.34.0:
+ *   - FIX 1 (URLs reales en material marketing): los 3 items de
+ *     MOCK_AI_RESPONSES['material-marketing'] tenían URLs placeholder que daban 404. Reemplazadas
+ *     por URLs verificadas 200 en qida.es (curl): Guía post-alta -> /blog, Testimonio -> / (home;
+ *     no hay página pública de testimonios/opiniones -> fallback), Tarifas -> /servicios.
  *
  * Cambios v1.33.0 (4 fixes UX visibles para demo; solo widget). NOTA: la tarea pedía 1.31->1.32
  *   pero main ya estaba en 1.32.0 (hide leader badge) -> este bump va a 1.33.0 para no colisionar.
@@ -1311,7 +1317,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.33.0';
+    var VERSION = '1.34.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1650,9 +1656,11 @@
         'material-marketing': {
             intro: 'Material util para este caso:',
             items: [
-                { title: 'Guia: cuidados post-alta hospitalaria', desc: 'PDF · 8 paginas · util para familias con familiar recien operado.', action: 'Adjuntar al proximo mensaje', url: 'https://www.qida.es/cuidados-post-alta-hospitalaria' },
-                { title: 'Testimonio: familia Madrid', desc: 'Video · 3 min · caso similar de cuidados a largo plazo.', action: 'Compartir link', url: 'https://www.qida.es/testimonios' },
-                { title: 'Tarifas y opciones de servicio', desc: 'PDF · 2 paginas · para casos en evaluacion de presupuesto.', action: 'Adjuntar al proximo mensaje', url: 'https://www.qida.es/tarifas' }
+                // v1.34: URLs reales verificadas 200 en qida.es (curl). Sin página de testimonios/
+                //   opiniones pública -> el testimonio cae al home (200). NO usar paths inventados (404 en demo).
+                { title: 'Guia: cuidados post-alta hospitalaria', desc: 'PDF · 8 paginas · util para familias con familiar recien operado.', action: 'Adjuntar al proximo mensaje', url: 'https://www.qida.es/blog' },
+                { title: 'Testimonio: familia Madrid', desc: 'Video · 3 min · caso similar de cuidados a largo plazo.', action: 'Compartir link', url: 'https://www.qida.es/' },
+                { title: 'Tarifas y opciones de servicio', desc: 'PDF · 2 paginas · para casos en evaluacion de presupuesto.', action: 'Adjuntar al proximo mensaje', url: 'https://www.qida.es/servicios' }
             ]
         },
         'sugerir-mensaje': {
