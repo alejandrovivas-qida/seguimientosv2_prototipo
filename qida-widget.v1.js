@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.28.0
+ * QIDA ASSISTANT v1.29.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,24 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.29.0 (FIX: los chips del Asistente IA + handlers afines no hacian NADA en leads reales):
+ *   - CAUSA RAIZ: varios handlers del detalle hacian `var lead = getLead(state.currentLeadId); if
+ *     (!lead) return;`. getLead solo busca en MOCK_LEADS, y un lead real (display_id "L123954") NO
+ *     esta ahi -> null -> el handler abortaba (cero UI, cero request). Pre-existente; se destapo al
+ *     renderizar el detalle real en v1.27.
+ *   - FIX: helper currentLead(id) que resuelve como renderDetail (LeadDetailService.getFromCache.lead
+ *     || getLead). Aplicado en handleAiChip, handleAiChatSend, renderSchedule, syncShellHeader,
+ *     openScheduleFromDetail, handleScheduleConfirm. El .id devuelto es el canonico (numerico Odoo en
+ *     reales), consistente con como renderAiChat/renderDetail keyan aiChatHistory por lead.id.
+ *   - ai-pick-variant: keyaba la burbuja por state.currentLeadId ("L123954") != lead.id (123954) de
+ *     renderAiChat -> no se veia. Ahora usa currentLead().id.
+ *   - ai-copy-to-wa: telemetria draft_copied usa el lead_id canonico (numerico) en vez del display_id.
+ *   - handleScheduleConfirm: agenda con la clave canonica (leadId), no lead.id, para que
+ *     renderActivities matchee EDITS.scheduledActivities.
+ *   - Material marketing / Reactivar sin presionar siguen siendo MOCK por diseno (no disparan red;
+ *     ahora SI muestran su burbuja). Solo "Sugerir mensaje" pega a /recommendation; el input libre a
+ *     /assistant/chat. Flag useRealAPI sin cambios. Solo qida-widget.v1.js.
  *
  * Cambios v1.28.0 (columna del dashboard de leads: "FAMILIA" -> "CONTACTO", contacto + parentesco):
  *   - family_name viene null en Odoo (mostraba "Lead L123455 ·"). Rediseno: mostrar el CONTACTO
@@ -1243,7 +1261,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.28.0';
+    var VERSION = '1.29.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1868,6 +1886,19 @@
     function getLead(id) {
         for (var i = 0; i < MOCK_LEADS.length; i++) if (MOCK_LEADS[i].id === id) return MOCK_LEADS[i];
         return null;
+    }
+
+    // v1.29: resuelve el lead "actual" del detalle IGUAL que renderDetail: primero el cache de
+    //   Odoo (leads reales NO estan en MOCK_LEADS; viven en leadDetailCache via LeadDetailService),
+    //   fallback a MOCK_LEADS. Antes, varios handlers hacian getLead(state.currentLeadId) y para un
+    //   lead real (display_id "L123954" no esta en MOCK_LEADS) devolvia null -> `if (!lead) return;`
+    //   abortaba el handler (chips del Asistente IA "no hacian nada"). El .id devuelto es el canonico
+    //   (display_id en mock; id numerico de Odoo en cached.lead), consistente con como renderAiChat /
+    //   renderDetail keyan por lead.id.
+    function currentLead(id) {
+        id = (id != null ? id : state.currentLeadId);
+        var c = LeadDetailService.getFromCache(id);
+        return (c && c.lead) || getLead(id);
     }
 
     function getLeadTemperature(lead) {
@@ -5190,7 +5221,7 @@
     }
 
     function renderSchedule() {
-        var lead = getLead(state.currentLeadId);
+        var lead = currentLead();  // v1.29: cache Odoo + fallback mock (antes getLead -> null en leads reales)
         if (!lead) return '';
 
         var shortcuts = [
@@ -5817,7 +5848,7 @@
         var header = document.querySelector('.qida-shell-header');
         if (!header) return;
         if (state.view === 'detail') {
-            var lead = getLead(state.currentLeadId);
+            var lead = currentLead();  // v1.29: cache Odoo + fallback mock (antes getLead -> null en leads reales)
             var titleHtml = '';
             if (lead) {
                 var days = lead.daysWithoutTouch;
@@ -6271,7 +6302,10 @@
                 var pickMeta = (target.getAttribute('data-source') === 'draft')
                     ? { source: 'draft', name: target.getAttribute('data-variant-name') || '', length: target.getAttribute('data-length') || '', tone_style: target.getAttribute('data-tone') || '' }
                     : null;
-                pushAiPickVariant(state.currentLeadId, pickLabel, pickText, pickMeta);
+                // v1.29: keyar por el id canonico del lead (cached.lead.id en reales), igual que
+                //   renderAiChat; usar state.currentLeadId ("L123954") empujaria la burbuja a otra key.
+                var pvLead = currentLead();
+                pushAiPickVariant((pvLead && pvLead.id) || state.currentLeadId, pickLabel, pickText, pickMeta);
                 state.aiChatDraft = '';
                 rerenderContent();
                 return;
@@ -6283,8 +6317,9 @@
                 // v1.15 (Pieza C): draft_copied al momento del rellenado, SOLO si vino de un draft
                 //   configurado (data-source="draft"). PII-safe (solo metadata, nunca el texto).
                 if (target.getAttribute('data-source') === 'draft') {
+                    var copyLead = currentLead();  // v1.29: lead_id canonico (numerico Odoo en reales) para la telemetria
                     sendAssistantEvent('draft_copied', {
-                        lead_id: state.currentLeadId,
+                        lead_id: (copyLead && copyLead.id) || state.currentLeadId,
                         variant_name: target.getAttribute('data-variant-name') || '',
                         length: target.getAttribute('data-length') || '',
                         tone_style: target.getAttribute('data-tone') || ''
@@ -6382,7 +6417,7 @@
     }
 
     function openScheduleFromDetail() {
-        var lead = getLead(state.currentLeadId);
+        var lead = currentLead();  // v1.29: cache Odoo + fallback mock (antes getLead -> null en leads reales)
         var defaultIso = addDaysISO(7);
         setState({
             showScheduleModal: true,
@@ -6456,10 +6491,12 @@
             return;
         }
         var leadId = state.scheduleLeadIdOverride || state.currentLeadId;
-        var lead = getLead(leadId);
+        var lead = currentLead(leadId);  // v1.29: cache Odoo + fallback mock (antes getLead -> "Lead no encontrado" en reales)
         if (!lead) { showToast('Lead no encontrado.'); return; }
 
-        ActivityService.schedule(lead.id, state.scheduleDate, state.scheduleNote, state.scheduleMarkPause);
+        // v1.29: agendar con la CLAVE CANONICA (leadId), no lead.id: renderActivities keya
+        //   EDITS.scheduledActivities por leadId; con lead.id numerico (Odoo) no matchearia.
+        ActivityService.schedule(leadId, state.scheduleDate, state.scheduleNote, state.scheduleMarkPause);
 
         // v1.10: las ramas scheduleOrigin === 'suggestion' / 'activity' quedaron sin
         //   invocador despues de eliminar el dashboard de sugerencias y la tabla unificada.
@@ -6579,7 +6616,7 @@
 
     // v1.6: chip del chat IA -> respuesta mock + persistencia en aiChatHistory.
     function handleAiChip(promptId) {
-        var lead = getLead(state.currentLeadId);
+        var lead = currentLead();  // v1.29: cache Odoo + fallback mock (antes getLead -> null en leads reales)
         if (!lead) return;
 
         // v1.15 (Pieza A) / v1.20: SOLO 'sugerir-mensaje' cambia su origen -> /recommendation.
@@ -6659,7 +6696,7 @@
     // v1.6/v1.21: envio de query libre al chat IA. Con useRealAPI -> POST /assistant/chat
     //   (loading -> respuesta+updated_drafts | error+retry). Sin flag -> mock (como antes).
     function handleAiChatSend(text) {
-        var lead = getLead(state.currentLeadId);
+        var lead = currentLead();  // v1.29: cache Odoo + fallback mock (antes getLead -> null en leads reales)
         if (!lead) return;
         var trimmed = (text || '').trim();
         if (!trimmed) return;
