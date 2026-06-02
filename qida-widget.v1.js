@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.39.0
+ * QIDA ASSISTANT v1.40.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,14 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.40.0 (BUG CRÍTICO: Paloma faltaba en MOCK_ACTIVE_AFS -> veía data de otra AF).
+ *   - 'paloma.galvez@qida.es' -> 'paloma_galvez' agregado a MOCK_ACTIVE_AFS (mapping email->af_key
+ *     que usa resolveAfKey). v1.38 la agregó a IMPERSONATABLE_AFS (el dropdown) pero NO a este
+ *     mapping paralelo -> al "ver como Paloma", resolveAfKey caía al fallback (patricia_vega) y los
+ *     endpoints respondían data de otra AF / 404. DEUDA: 2 hardcodes sincronizados a mano
+ *     (IMPERSONATABLE_AFS + MOCK_ACTIVE_AFS) sin nada que lo enforce; unificar cuando exista
+ *     GET /api/admin/afs. Solo qida-widget.v1.js, flag useRealAPI sin cambios.
  *
  * Cambios v1.39.0 (columna "POR QUÉ" del dashboard: fallback a short_description del analyzer).
  *   - adaptLeadRow.reason ahora encadena porque_snippet || short_description || "Sin actividad
@@ -1399,7 +1407,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.39.0';
+    var VERSION = '1.40.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1780,7 +1788,8 @@
         'patricia.vega@qida.es':    'patricia_vega',
         'alejandro.vivas@qida.es':  'alejandro_vivas',
         'eva.martin@qida.es':       'eva_martin',
-        'ana.pinilla@qida.es':      'ana_pinilla'
+        'ana.pinilla@qida.es':      'ana_pinilla',
+        'paloma.galvez@qida.es':    'paloma_galvez'  // v1.40: faltaba el mapping (v1.38 la agregó a IMPERSONATABLE_AFS pero no acá) -> caía a fallback (patricia_vega) -> 404
     };
 
     // ============================================================
