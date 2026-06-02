@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.29.0
+ * QIDA ASSISTANT v1.30.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,16 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.30.0 (UX: auto-grow del input del Asistente IA, igual que el textarea de WhatsApp):
+ *   - El campo era <input type="text"> (mono-linea). Ahora es <textarea rows="1"> (el value pasa de
+ *     atributo a contenido) en renderAiChat.
+ *   - handleInput (branch ai-chat-input): autoResizeTextarea(node) en cada keystroke (1-5 lineas,
+ *     max 120px), reusando el mismo helper que wa-draft.
+ *   - CSS .qida-aichat-input-field: line-height/min-height/max-height/resize:none/overflow-y:auto.
+ *     .qida-aichat-input: align-items center -> flex-end (la flecha queda anclada abajo al crecer).
+ *   - keydown (branch ai-chat-input): Shift+Enter inserta newline; Enter envia (identico a WhatsApp).
+ *   - Solo qida-widget.v1.js. Sin cambios de logica/red ni del flag.
  *
  * Cambios v1.29.0 (FIX: los chips del Asistente IA + handlers afines no hacian NADA en leads reales):
  *   - CAUSA RAIZ: varios handlers del detalle hacian `var lead = getLead(state.currentLeadId); if
@@ -1261,7 +1271,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.29.0';
+    var VERSION = '1.30.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2945,10 +2955,10 @@
             '.qida-aichat-mat-share:hover{background:#143C32;}',
             /* v1.23: banner de error de envio de WhatsApp + Reintentar */
             '.qida-wa-send-error{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;padding:8px 10px;border:0.5px solid #F0C9C0;border-radius:8px;background:#FCF4F2;font-size:12px;color:#9A3A28;}',
-            '.qida-aichat-input{display:flex;align-items:center;gap:8px;background:var(--s50);border:0.5px solid var(--s300);border-radius:8px;padding:8px 12px;}',
+            '.qida-aichat-input{display:flex;align-items:flex-end;gap:8px;background:var(--s50);border:0.5px solid var(--s300);border-radius:8px;padding:8px 12px;}',
             '.qida-aichat-input:focus-within{border-color:#0F6E56;}',
             '.qida-aichat-input-icon{color:#0F6E56;flex-shrink:0;display:inline-flex;}',
-            '.qida-aichat-input-field{flex:1;min-width:0;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;color:var(--s900);padding:4px 0;}',
+            '.qida-aichat-input-field{flex:1;min-width:0;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;color:var(--s900);padding:4px 0;line-height:1.4;min-height:24px;max-height:120px;resize:none;overflow-y:auto;}',
             '.qida-aichat-input-field::placeholder{color:var(--s500);}',
             '.qida-aichat-send{flex-shrink:0;width:30px;height:30px;border-radius:50%;background:#0F6E56;color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;}',
             '.qida-aichat-send:hover:not(:disabled){background:var(--qgH);}',
@@ -4888,7 +4898,7 @@
             + '<div class="qida-pane-ai-foot">'
                 + '<div class="qida-aichat-input">'
                     + '<span class="qida-aichat-input-icon">' + icon('sparkles', 14) + '</span>'
-                    + '<input type="text" class="qida-aichat-input-field" id="qida-aichat-input" data-input="ai-chat-input" placeholder="' + esc(placeholder) + '" value="' + esc(draft) + '" />'
+                    + '<textarea class="qida-aichat-input-field" id="qida-aichat-input" data-input="ai-chat-input" rows="1" placeholder="' + esc(placeholder) + '">' + esc(draft) + '</textarea>'
                     + '<button class="qida-aichat-send" data-action="ai-chat-send"' + sendDisabled + ' aria-label="Enviar">' + icon('arrowRight', 14) + '</button>'
                 + '</div>'
                 + chipsHtml
@@ -6566,6 +6576,7 @@
                 if (node.value.trim()) sendBtnAi.removeAttribute('disabled');
                 else sendBtnAi.setAttribute('disabled', '');
             }
+            autoResizeTextarea(node);  // v1.30: auto-grow del textarea (igual que wa-draft)
         } else if (input === 'leader-search') {
             // v1.12: search del panel de lideres. NO rerender completo - solo se reescribe
             //   el tbody y el contador, asi las instancias ApexCharts no se destruyen y la
@@ -6808,6 +6819,7 @@
             state.draftMessage = text;
             sendWhatsAppMock(leadId, text);
         } else if (input === 'ai-chat-input') {
+            if (e.shiftKey) return;  // v1.30: Shift+Enter = newline (idem textarea de WhatsApp)
             e.preventDefault();
             e.stopPropagation();
             handleAiChatSend(node.value);
