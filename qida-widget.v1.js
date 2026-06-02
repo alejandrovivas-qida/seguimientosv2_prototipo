@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.38.0
+ * QIDA ASSISTANT v1.39.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,12 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.39.0 (columna "POR QUÉ" del dashboard: fallback a short_description del analyzer).
+ *   - adaptLeadRow.reason ahora encadena porque_snippet || short_description || "Sin actividad
+ *     reciente". Antes, los leads sin cache del modal (porque_snippet null) caían directo al
+ *     genérico aunque /api/me/leads ya trae short_description del analyzer (backend PR #23). 1 línea.
+ *   Flag useRealAPI sin cambios. Solo qida-widget.v1.js.
  *
  * Cambios v1.38.0 (Resumen IA wireado a crm.lead.ai_description — HTML real de Odoo, sanitizado).
  *   - Re-activa el panel "Resumen IA" en renderCenterPane (estaba OCULTO desde v1.35.0 por ser un
@@ -1393,7 +1399,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.38.0';
+    var VERSION = '1.39.0';
     var CONFIG = null;
 
     // ============================================================
@@ -4998,7 +5004,7 @@
             //   patient_name del backend ES el rol (ej "madre"), NO un nombre propio.
             parentesco: api.patient_name || '',
             serviceType: api.service_type || '',
-            reason: api.porque_snippet || 'Sin actividad reciente',  // porque_snippet puede venir null
+            reason: api.porque_snippet || api.short_description || 'Sin actividad reciente',  // v1.39: porque_snippet (cache del modal) || short_description del analyzer (/api/me/leads, leads sin cache) || genérico
             temperature: api.temperature || '',
             daysWithoutTouch: (api.days_since_last_contact != null ? api.days_since_last_contact : 0),
             lastTouchDate: lastDate,
