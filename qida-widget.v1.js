@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.34.0
+ * QIDA ASSISTANT v1.35.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,28 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.35.0 (Contexto del cuidado: labels + Persona cuidada por genero; oculta "Resumen IA").
+ *   Salta v1.34.0 (material URLs + clip del integrador, ya mergeado). Solo qida-widget.v1.js, sin red.
+ *   - FIX 1: panel "Resumen IA" OCULTO en renderCenterPane (ya no se llama a renderIaSummary). Leia
+ *     un mock huerfano (MOCK_IA_SUMMARIES / getIaSummary, sin backend; el boton "Generar resumen"
+ *     hacia un toast mock y el panel solo mostraba "Resumen no generado todavia"). El panel contiguo
+ *     "Analisis IA" (renderIaAnalysis) ya muestra el texto IA REAL del backend (/recommendation ->
+ *     lead_analysis_long, cableado en v1.31). renderIaSummary queda definida pero sin consumidores
+ *     (reactivable si en el futuro se expone lead_analysis_short).
+ *   - FIX 2: "Condicion principal" traducida via MAIN_CONDITION_LABELS (dependent_person ->
+ *     "Persona dependiente", etc.). Fallback al raw value si el enum no matchea (no rompe mock).
+ *   - FIX 3: "Urgencia" traducida via URGENCY_LABELS (standard/urgent/very_urgent -> ES). Fallback al
+ *     raw. El highlight "urgente" ahora reconoce el code very_urgent ademas del texto mock.
+ *   - FIX 4: "Persona cuidada" usa crm.lead.gender (GENDER_LABELS female->Mujer / male->Hombre) en
+ *     modo Odoo, en vez de cared_person.name (texto libre inconsistente: madre/senora/Carmen/x...).
+ *     'gender' agregado a LEAD_FIELDS y mapeado en mapLead. Modo mock conserva la linea rica
+ *     (relation + caredPersonName + edad). cared_person.name queda libre para "Relacion" futura.
+ *   - DEUDA (NO en este PR, planificar con calma post-demo): Ubicacion (city), Vive solo
+ *     (cohabitants_number), Prescriptor (prescriber_id) -> agregan campos a LEAD_FIELDS + testing en
+ *     Odoo real; "Relacion" (mapear cared_person.name); Tipo de servicio comercial GI/GD (vive en
+ *     Databricks/prod_reporting, requiere backend). Detalle en el reporte de investigacion.
+ *   Flag useRealAPI sin cambios.
  *
  * Cambios v1.34.0:
  *   - FIX 1 (URLs reales en material marketing): los 3 items de
@@ -1317,7 +1339,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.34.0';
+    var VERSION = '1.35.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2278,7 +2300,7 @@
 
     // ---- Listas explicitas de fields (NUNCA usar fields:[] que descarga todo) ----
     // NOTA sobre 'chronich_illness': typo del modelo Odoo (sic). NO corregir.
-    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id'];
+    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','gender','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id'];
     var CARED_FIELDS = ['id','name','main_need','reduced_mobility','cognitive_decline','behavioral_disorder','chronich_illness','requires_trained_caregivers','support_type','has_support_material','weight','complex_treatment_ids'];
     var NOTES_FIELDS = ['id','author_id','date','body','message_type','subject'];
     var ACTIVITY_FIELDS = ['id','activity_type_id','summary','note','date_deadline','state','user_id'];
@@ -2298,6 +2320,7 @@
             stage: tName(o.stage_id) || '',
             serviceType: tName(o.original_service_id) || '',
             urgency: o.urgency || '',
+            gender: o.gender || null,  // v1.35: genero estructurado (female/male) -> "Persona cuidada"
             urgent: !!o.urgent_service,
             responsableAf: tName(o.user_id) || '',
             plannedStartDate: o.planned_start_date || null,
@@ -4031,6 +4054,23 @@
         return infoCard(title, actions, body);
     }
 
+    // v1.35: traduccion de los enums crudos de Odoo -> copy en castellano para "Contexto del
+    //   cuidado". Si el valor no matchea (data mock que ya viene en ES, o un code nuevo), se cae al
+    //   raw value: el render nunca rompe ni queda en blanco.
+    var MAIN_CONDITION_LABELS = {
+        dependent_person: 'Persona dependiente',
+        rehabilitation: 'Rehabilitación',
+        end_of_life: 'Final de vida',
+        autonomous_person: 'Persona autónoma',
+        mental_health: 'Salud mental'
+    };
+    var URGENCY_LABELS = {
+        standard: 'Estándar',
+        urgent: 'Urgente',
+        very_urgent: 'Muy urgente'
+    };
+    var GENDER_LABELS = { female: 'Mujer', male: 'Hombre' };
+
     function renderCare(lead, cached, leadId) {
         leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
         var title = icon('users', 12) + ' Contexto del cuidado';
@@ -4052,24 +4092,30 @@
             var valCls = 'qida-context-val' + (urgent ? ' urgent' : '');
             return '<div class="qida-context-item"><span class="qida-context-key">' + esc(key) + '</span><span class="' + valCls + '">' + esc(val || '-') + '</span></div>';
         }
-        var urgencyUrgent = lead.urgency && /muy\s+urgente/i.test(lead.urgency);
-        // Persona cuidada line: usa lead fields si estan (modo mock); si vienen null
-        //   (modo Odoo - no existen en crm.lead), cae al name del caredPerson.
+        // v1.35: Urgencia traducida (enum Odoo standard/urgent/very_urgent -> copy ES); el raw value
+        //   queda como fallback (preserva mock, que ya trae texto en castellano). El highlight
+        //   "urgente" reconoce el code very_urgent ademas del texto mock "muy urgente".
+        var urgencyRaw = lead.urgency || '';
+        var urgencyLabel = URGENCY_LABELS[urgencyRaw] || urgencyRaw;
+        var urgencyUrgent = /muy\s+urgente/i.test(urgencyRaw) || urgencyRaw === 'very_urgent';
+        // Persona cuidada line: en modo mock MOCK_LEADS trae relation/caredPersonName/age (linea
+        //   rica). En modo Odoo (v1.35) usamos crm.lead.gender (limpio: female/male) y NO
+        //   cared_person.name (texto libre inconsistente: madre/senora/Carmen/x...). El name queda
+        //   libre para mapear a "Relacion" en una fase futura (deuda).
         var personaLine;
         if (lead.relation && lead.caredPersonName && lead.age != null) {
             personaLine = lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos';
-        } else if (c && c.name) {
-            personaLine = c.name;
         } else {
-            personaLine = '-';
+            personaLine = GENDER_LABELS[lead.gender] || 'Mujer/Hombre';
         }
         var grid = '<div class="qida-context-grid">'
             + item('Persona cuidada', personaLine)
             + item('Relacion', c.relationship)
-            + item('Condicion principal', c.mainCondition)
+            // v1.35: Condicion principal traducida (enum main_need -> copy ES); fallback al raw.
+            + item('Condicion principal', MAIN_CONDITION_LABELS[c.mainCondition] || c.mainCondition)
             + item('Ubicacion', lead.location)
             + item('Tipo de servicio', lead.serviceType)
-            + item('Urgencia', lead.urgency, urgencyUrgent)
+            + item('Urgencia', urgencyLabel, urgencyUrgent)
             + item('Vive solo', c.livesAlone == null ? '-' : (c.livesAlone ? 'Si' : 'No'))
             + item('Prescriptor', lead.prescriptor)
         + '</div>';
@@ -5278,7 +5324,11 @@
         //   no lead.id (que en modo Odoo es el id numerico, distinto del display_id).
         leadId = (leadId != null ? leadId : (lead && lead.id));
         return ''
-            + renderIaSummary(lead, leadId)
+            // v1.35: "Resumen IA" OCULTO (ya no se llama a renderIaSummary). Era un mock huerfano
+            //   (MOCK_IA_SUMMARIES, sin backend; solo mostraba "Resumen no generado todavia"). El
+            //   panel contiguo "Analisis IA" ya muestra el texto IA real (/recommendation ->
+            //   lead_analysis_long). renderIaSummary queda definida sin consumidores por si se
+            //   reactiva con lead_analysis_short en el futuro.
             + renderIaAnalysis(lead, leadId)
             + renderCare(lead, cached, leadId)
             + renderInternalNotes(lead, cached, leadId)
