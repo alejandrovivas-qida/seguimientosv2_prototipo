@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.37.0
+ * QIDA ASSISTANT v1.38.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,20 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.38.0 (Resumen IA wireado a crm.lead.ai_description — HTML real de Odoo, sanitizado).
+ *   - Re-activa el panel "Resumen IA" en renderCenterPane (estaba OCULTO desde v1.35.0 por ser un
+ *     mock huérfano sin backend). renderIaSummary, en modo real (useRealAPI), muestra el contenido
+ *     de crm.lead.ai_description (campo HTML de Odoo: <p>, <strong>, ...).
+ *   - 'ai_description' agregado a LEAD_FIELDS (read de crm.lead) y mapeado en mapLead -> lead.iaSummary
+ *     (raw). En el render se sanitiza con sanitizeOdooHtml (DOMPurify + fallback template defensivo;
+ *     NUNCA innerHTML crudo ni innerText). Si iaSummary es null/vacío (o queda vacío tras sanitizar)
+ *     -> panel OCULTO, sin placeholder "no generado". En real NO hay editar/regenerar (campo de Odoo).
+ *   - Modo mock (flag OFF): SIN cambios; sigue usando MOCK_IA_SUMMARIES (editar/regenerar/generar).
+ *   - Campos IA bonus de Odoo (case_details, description_<riesgo>) NO usados todavía.
+ *   - Paloma Gálvez agregada a IMPERSONATABLE_AFS (TODO[afs] persiste — widget sigue hardcoded,
+ *     no consulta backend GET /api/admin/afs). Antes solo estaba Ana -> Paloma no salía en "Ver como".
+ *   Flag useRealAPI sin cambios. Solo qida-widget.v1.js.
  *
  * Cambios v1.37.0 (clip 📎 funcional: file picker -> upload al backend -> chip -> envío con file_uid).
  *   Rebaseado sobre main@v1.36.0 (care-context labels v1.35.0 + 422 detail v1.36.0). El header
@@ -1379,7 +1393,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.37.0';
+    var VERSION = '1.38.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1771,7 +1785,8 @@
     var ADMIN_EMAILS_DEFAULT = ['alejandro.vivas@qida.es'];
     // AFs impersonables (hardcode v1). TODO[afs]: reemplazar por fetch a GET /api/admin/afs.
     var IMPERSONATABLE_AFS = [
-        { key: 'ana_pinilla', email: 'ana.pinilla@qida.es', display_name: 'Ana Pinilla' }
+        { key: 'ana_pinilla', email: 'ana.pinilla@qida.es', display_name: 'Ana Pinilla' },
+        { key: 'paloma_galvez', email: 'paloma.galvez@qida.es', display_name: 'Paloma Gálvez' }  // v1.38
     ];
     var AF_SWITCH_STORAGE_KEY = 'qida_viewing_as';
 
@@ -2341,7 +2356,7 @@
 
     // ---- Listas explicitas de fields (NUNCA usar fields:[] que descarga todo) ----
     // NOTA sobre 'chronich_illness': typo del modelo Odoo (sic). NO corregir.
-    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','gender','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id'];
+    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','gender','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id','ai_description'];
     var CARED_FIELDS = ['id','name','main_need','reduced_mobility','cognitive_decline','behavioral_disorder','chronich_illness','requires_trained_caregivers','support_type','has_support_material','weight','complex_treatment_ids'];
     var NOTES_FIELDS = ['id','author_id','date','body','message_type','subject'];
     var ACTIVITY_FIELDS = ['id','activity_type_id','summary','note','date_deadline','state','user_id'];
@@ -2362,6 +2377,7 @@
             serviceType: tName(o.original_service_id) || '',
             urgency: o.urgency || '',
             gender: o.gender || null,  // v1.35: genero estructurado (female/male) -> "Persona cuidada"
+            iaSummary: o.ai_description || null,  // v1.38: HTML de Odoo (crm.lead.ai_description); se sanitiza al render. null = sin resumen -> panel oculto.
             urgent: !!o.urgent_service,
             responsableAf: tName(o.user_id) || '',
             plannedStartDate: o.planned_start_date || null,
@@ -4025,8 +4041,21 @@
 
     function renderIaSummary(lead, leadId) {
         leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
-        var s = getIaSummary(leadId);
         var title = icon('sparkles', 12) + ' Resumen IA';
+
+        // v1.38: en modo real el "Resumen IA" sale de crm.lead.ai_description (HTML de Odoo).
+        //   Se sanitiza con sanitizeOdooHtml (DOMPurify + fallback defensivo) justo antes de inyectar.
+        //   Sin dato (o vacío tras sanitizar) -> panel OCULTO (sin placeholder). En real NO hay
+        //   editar/regenerar: es un campo de Odoo, no se escribe desde el widget.
+        if (useRealApi()) {
+            var cleanSummary = sanitizeOdooHtml(lead && lead.iaSummary);
+            if (!cleanSummary) return '';   // sin ai_description -> ocultar el panel completo
+            return infoCard(title, 'Generado por IA',
+                '<div class="qida-info-card-highlight"><div class="qida-ia-text qida-ia-html">' + cleanSummary + '</div></div>');
+        }
+
+        // --- flag OFF: comportamiento mock de siempre (MOCK_IA_SUMMARIES + editar/regenerar) ---
+        var s = getIaSummary(leadId);
 
         if (state.editingIaSummary && s) {
             return infoCard(title, 'Editando manualmente',
@@ -5477,11 +5506,12 @@
         //   no lead.id (que en modo Odoo es el id numerico, distinto del display_id).
         leadId = (leadId != null ? leadId : (lead && lead.id));
         return ''
-            // v1.35: "Resumen IA" OCULTO (ya no se llama a renderIaSummary). Era un mock huerfano
-            //   (MOCK_IA_SUMMARIES, sin backend; solo mostraba "Resumen no generado todavia"). El
-            //   panel contiguo "Analisis IA" ya muestra el texto IA real (/recommendation ->
-            //   lead_analysis_long). renderIaSummary queda definida sin consumidores por si se
-            //   reactiva con lead_analysis_short en el futuro.
+            // v1.38: "Resumen IA" RE-ACTIVADO. En modo real sale de crm.lead.ai_description (HTML
+            //   sanitizado con sanitizeOdooHtml); si el lead no tiene ai_description, renderIaSummary
+            //   devuelve '' (panel oculto, sin placeholder). En mock (flag OFF) sigue usando
+            //   MOCK_IA_SUMMARIES como siempre. El panel contiguo "Análisis IA" (lead_analysis_long
+            //   de /recommendation) queda igual.
+            + renderIaSummary(lead, leadId)
             + renderIaAnalysis(lead, leadId)
             + renderCare(lead, cached, leadId)
             + renderInternalNotes(lead, cached, leadId)
