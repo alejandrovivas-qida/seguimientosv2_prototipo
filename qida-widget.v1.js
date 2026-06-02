@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.34.0
+ * QIDA ASSISTANT v1.36.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,49 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.36.0 ("Armá tu asistente": surfacing del 422 del backend + alineo constraint del name).
+ *   Solo qida-widget.v1.js, sin red. Contrato del backend SIN cambios (DraftVariantSpec correcto).
+ *   - HALLAZGO: el bug reportado ("el widget manda labels 'Corto'/'Empático' en vez de los enum ->
+ *     422") YA estaba resuelto desde v1.15.0: el form usa <select> con value=enum (short/medium,
+ *     neutral/direct/empathic) y los labels en español viven solo en el option text. El change
+ *     handler (ab-length/ab-tone) guarda node.value (enum) y fetchSaveDraftVariants manda esos
+ *     enums. NO hay fuga de labels al PUT. Se agrega buildSaveVariants() (helper puro) para
+ *     documentar/blindar esto y darle un guard de regresión en el harness Node.
+ *   - FIX 1 (UX del 422, el verdadero bug abierto): apiErrorCopy(422) descartaba el detail del
+ *     backend y mostraba el genérico "La petición no es válida". Ahora apiFetchJson formatea el
+ *     detail de FastAPI ({detail:[{loc,msg}]}) con format422Detail() -> "Tono: Input should be
+ *     'neutral'...", traduciendo el campo (tone_style->Tono, length->Largo, name->Nombre), y
+ *     apiErrorCopy(422) prioriza ese mensaje. Aplica a TODOS los wires que usan apiFetchJson
+ *     (draft-variants GET/PUT, conversation, dashboard, leads, chat) -> mejora monótona.
+ *   - FIX 2 (alineo constraint del name con el backend min_length=1/max_length=40): validateVariants
+ *     rechazaba name de exactamente 40 chars (>=40); el backend lo acepta. Ahora >40. Input
+ *     maxlength 60->40 (era inconsistente con la regla). El error inline ya existía (no silencioso).
+ *   - El tono NO es campo de texto libre (es <select>): el escenario del screenshot ("Empatico,
+ *     medio" escrito a mano) no es posible en el form actual; no aplica validación extra.
+ *   Flag useRealAPI sin cambios. NO publicado al Blob (orquestador mergea + Alejandro publica).
+ *
+ * Cambios v1.35.0 (Contexto del cuidado: labels + Persona cuidada por genero; oculta "Resumen IA").
+ *   Salta v1.34.0 (material URLs + clip del integrador, ya mergeado). Solo qida-widget.v1.js, sin red.
+ *   - FIX 1: panel "Resumen IA" OCULTO en renderCenterPane (ya no se llama a renderIaSummary). Leia
+ *     un mock huerfano (MOCK_IA_SUMMARIES / getIaSummary, sin backend; el boton "Generar resumen"
+ *     hacia un toast mock y el panel solo mostraba "Resumen no generado todavia"). El panel contiguo
+ *     "Analisis IA" (renderIaAnalysis) ya muestra el texto IA REAL del backend (/recommendation ->
+ *     lead_analysis_long, cableado en v1.31). renderIaSummary queda definida pero sin consumidores
+ *     (reactivable si en el futuro se expone lead_analysis_short).
+ *   - FIX 2: "Condicion principal" traducida via MAIN_CONDITION_LABELS (dependent_person ->
+ *     "Persona dependiente", etc.). Fallback al raw value si el enum no matchea (no rompe mock).
+ *   - FIX 3: "Urgencia" traducida via URGENCY_LABELS (standard/urgent/very_urgent -> ES). Fallback al
+ *     raw. El highlight "urgente" ahora reconoce el code very_urgent ademas del texto mock.
+ *   - FIX 4: "Persona cuidada" usa crm.lead.gender (GENDER_LABELS female->Mujer / male->Hombre) en
+ *     modo Odoo, en vez de cared_person.name (texto libre inconsistente: madre/senora/Carmen/x...).
+ *     'gender' agregado a LEAD_FIELDS y mapeado en mapLead. Modo mock conserva la linea rica
+ *     (relation + caredPersonName + edad). cared_person.name queda libre para "Relacion" futura.
+ *   - DEUDA (NO en este PR, planificar con calma post-demo): Ubicacion (city), Vive solo
+ *     (cohabitants_number), Prescriptor (prescriber_id) -> agregan campos a LEAD_FIELDS + testing en
+ *     Odoo real; "Relacion" (mapear cared_person.name); Tipo de servicio comercial GI/GD (vive en
+ *     Databricks/prod_reporting, requiere backend). Detalle en el reporte de investigacion.
+ *   Flag useRealAPI sin cambios.
  *
  * Cambios v1.34.0:
  *   - FIX 1 (URLs reales en material marketing): los 3 items de
@@ -1317,7 +1360,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.34.0';
+    var VERSION = '1.36.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2278,7 +2321,7 @@
 
     // ---- Listas explicitas de fields (NUNCA usar fields:[] que descarga todo) ----
     // NOTA sobre 'chronich_illness': typo del modelo Odoo (sic). NO corregir.
-    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id'];
+    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','gender','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id'];
     var CARED_FIELDS = ['id','name','main_need','reduced_mobility','cognitive_decline','behavioral_disorder','chronich_illness','requires_trained_caregivers','support_type','has_support_material','weight','complex_treatment_ids'];
     var NOTES_FIELDS = ['id','author_id','date','body','message_type','subject'];
     var ACTIVITY_FIELDS = ['id','activity_type_id','summary','note','date_deadline','state','user_id'];
@@ -2298,6 +2341,7 @@
             stage: tName(o.stage_id) || '',
             serviceType: tName(o.original_service_id) || '',
             urgency: o.urgency || '',
+            gender: o.gender || null,  // v1.35: genero estructurado (female/male) -> "Persona cuidada"
             urgent: !!o.urgent_service,
             responsableAf: tName(o.user_id) || '',
             plannedStartDate: o.planned_start_date || null,
@@ -4031,6 +4075,23 @@
         return infoCard(title, actions, body);
     }
 
+    // v1.35: traduccion de los enums crudos de Odoo -> copy en castellano para "Contexto del
+    //   cuidado". Si el valor no matchea (data mock que ya viene en ES, o un code nuevo), se cae al
+    //   raw value: el render nunca rompe ni queda en blanco.
+    var MAIN_CONDITION_LABELS = {
+        dependent_person: 'Persona dependiente',
+        rehabilitation: 'Rehabilitación',
+        end_of_life: 'Final de vida',
+        autonomous_person: 'Persona autónoma',
+        mental_health: 'Salud mental'
+    };
+    var URGENCY_LABELS = {
+        standard: 'Estándar',
+        urgent: 'Urgente',
+        very_urgent: 'Muy urgente'
+    };
+    var GENDER_LABELS = { female: 'Mujer', male: 'Hombre' };
+
     function renderCare(lead, cached, leadId) {
         leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
         var title = icon('users', 12) + ' Contexto del cuidado';
@@ -4052,24 +4113,30 @@
             var valCls = 'qida-context-val' + (urgent ? ' urgent' : '');
             return '<div class="qida-context-item"><span class="qida-context-key">' + esc(key) + '</span><span class="' + valCls + '">' + esc(val || '-') + '</span></div>';
         }
-        var urgencyUrgent = lead.urgency && /muy\s+urgente/i.test(lead.urgency);
-        // Persona cuidada line: usa lead fields si estan (modo mock); si vienen null
-        //   (modo Odoo - no existen en crm.lead), cae al name del caredPerson.
+        // v1.35: Urgencia traducida (enum Odoo standard/urgent/very_urgent -> copy ES); el raw value
+        //   queda como fallback (preserva mock, que ya trae texto en castellano). El highlight
+        //   "urgente" reconoce el code very_urgent ademas del texto mock "muy urgente".
+        var urgencyRaw = lead.urgency || '';
+        var urgencyLabel = URGENCY_LABELS[urgencyRaw] || urgencyRaw;
+        var urgencyUrgent = /muy\s+urgente/i.test(urgencyRaw) || urgencyRaw === 'very_urgent';
+        // Persona cuidada line: en modo mock MOCK_LEADS trae relation/caredPersonName/age (linea
+        //   rica). En modo Odoo (v1.35) usamos crm.lead.gender (limpio: female/male) y NO
+        //   cared_person.name (texto libre inconsistente: madre/senora/Carmen/x...). El name queda
+        //   libre para mapear a "Relacion" en una fase futura (deuda).
         var personaLine;
         if (lead.relation && lead.caredPersonName && lead.age != null) {
             personaLine = lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos';
-        } else if (c && c.name) {
-            personaLine = c.name;
         } else {
-            personaLine = '-';
+            personaLine = GENDER_LABELS[lead.gender] || 'Mujer/Hombre';
         }
         var grid = '<div class="qida-context-grid">'
             + item('Persona cuidada', personaLine)
             + item('Relacion', c.relationship)
-            + item('Condicion principal', c.mainCondition)
+            // v1.35: Condicion principal traducida (enum main_need -> copy ES); fallback al raw.
+            + item('Condicion principal', MAIN_CONDITION_LABELS[c.mainCondition] || c.mainCondition)
             + item('Ubicacion', lead.location)
             + item('Tipo de servicio', lead.serviceType)
-            + item('Urgencia', lead.urgency, urgencyUrgent)
+            + item('Urgencia', urgencyLabel, urgencyUrgent)
             + item('Vive solo', c.livesAlone == null ? '-' : (c.livesAlone ? 'Si' : 'No'))
             + item('Prescriptor', lead.prescriptor)
         + '</div>';
@@ -4474,7 +4541,8 @@
         return s.charAt(0).toUpperCase() + s.slice(1);
     }
 
-    // Validación de la config (1-3 variantes; name <40, único, no vacío; enums cerrados).
+    // Validación de la config (1-3 variantes; name 1-40 chars (backend min_length=1/max_length=40),
+    //   único, no vacío; enums cerrados).
     //   Devuelve { ok, errors: { '<idx>': 'msg' } , general: 'msg'|null }.
     function validateVariants(variants) {
         var errors = {}, general = null;
@@ -4485,7 +4553,7 @@
             var v = variants[i];
             var nm = (v.name || '').trim();
             if (!nm) errors[i] = 'El nombre no puede estar vacío.';
-            else if (nm.length >= 40) errors[i] = 'El nombre debe tener menos de 40 caracteres.';
+            else if (nm.length > 40) errors[i] = 'El nombre puede tener como máximo 40 caracteres.';
             else if (seen[nm.toLowerCase()]) errors[i] = 'Nombre duplicado.';
             else if (DRAFT_LENGTHS.indexOf(v.length) === -1) errors[i] = 'Largo inválido.';
             else if (TONE_STYLES.indexOf(v.tone_style) === -1) errors[i] = 'Tono inválido.';
@@ -4596,12 +4664,37 @@
     // ============================================================
     // v1.21: helper genérico de fetch JSON + copy de error (3 wires nuevos)
     // ============================================================
+    // v1.36: FastAPI 422 -> { detail: [{loc, msg, type}] } (o detail string). Arma un mensaje
+    //   legible con el campo afectado traducido (tone_style->Tono, length->Largo, name->Nombre).
+    //   Devuelve null si no hay detail parseable -> el caller cae al copy genérico. Pura: testeable.
+    var API_FIELD_LABELS = { tone_style: 'Tono', length: 'Largo', name: 'Nombre', variants: 'Variantes' };
+    function format422Detail(data) {
+        var detail = data && data.detail;
+        if (typeof detail === 'string') return detail;
+        if (!detail || !detail.length) return null;
+        var parts = [];
+        for (var i = 0; i < detail.length; i++) {
+            var d = detail[i] || {};
+            var loc = d.loc || [];
+            var field = null;
+            for (var j = loc.length - 1; j >= 0; j--) {
+                if (typeof loc[j] === 'string' && loc[j] !== 'body') { field = loc[j]; break; }
+            }
+            var label = (field && API_FIELD_LABELS[field]) ? API_FIELD_LABELS[field] : field;
+            var msg = d.msg || 'valor inválido';
+            parts.push(label ? (label + ': ' + msg) : msg);
+        }
+        return parts.length ? parts.join('. ') : null;
+    }
     // Copy de error por status, parametrizado por "noun" (recurso). Mensaje del backend si lo hay.
+    //   v1.36: en 422 priorizamos serverMsg (detail del backend, ya formateado por format422Detail
+    //   en apiFetchJson) para mostrar el motivo real (ej. "Tono: Input should be ...") en vez del
+    //   genérico "La petición no es válida".
     function apiErrorCopy(status, serverMsg, noun) {
         noun = noun || 'el recurso';
         if (status === 401 || status === 403) return 'No tenés permiso para acceder a ' + noun + '.';
         if (status === 404) return 'No encontramos ' + noun + '.';
-        if (status === 422) return 'La petición no es válida (' + noun + ').';
+        if (status === 422) return serverMsg || ('La petición no es válida (' + noun + ').');
         if (status === 429) return 'Demasiadas peticiones. Esperá unos segundos y reintentá.';
         if (status >= 500) return 'El servicio tuvo un error temporal. Reintentá en unos segundos.';
         return serverMsg || ('Error ' + status + ' al pedir ' + noun + '.');
@@ -4632,6 +4725,7 @@
                 }
                 var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
                 var serverMsg = (data && data.error && data.error.message)
+                        || (res.status === 422 ? format422Detail(data) : null)
                         || (data && data.detail && data.detail[0] && data.detail[0].msg)
                         || (typeof (data && data.detail) === 'string' ? data.detail : null);
                 log('api error', { method: method, path: path, status: res.status, code: code });
@@ -4654,12 +4748,20 @@
             return { af_key: (data && data.af_key) || afKey, is_default: !!(data && data.is_default), variants: out };
         });
     }
+    // Normaliza variantes para el PUT: trim del name + length/tone_style TAL CUAL. Son los enums
+    //   del backend (short/medium, neutral/direct/empathic): el <select> ya guarda value=enum, los
+    //   labels en español ("Corto"/"Empático") viven solo en la UI (option text), NUNCA en el body.
+    //   Pura -> testeable en harness Node (guard contra regresión a labels -> 422).
+    function buildSaveVariants(variants) {
+        var out = [];
+        for (var i = 0; i < variants.length; i++) {
+            out.push({ name: (variants[i].name || '').trim(), length: variants[i].length, tone_style: variants[i].tone_style });
+        }
+        return out;
+    }
     // PUT { variants:[...] } -> resuelve {ok:true} | {ok:false,...}. NUNCA rechaza (la UI lee .ok).
     function fetchSaveDraftVariants(afKey, variants) {
-        var body = { variants: [] };
-        for (var i = 0; i < variants.length; i++) {
-            body.variants.push({ name: variants[i].name.trim(), length: variants[i].length, tone_style: variants[i].tone_style });
-        }
+        var body = { variants: buildSaveVariants(variants) };
         return apiFetchJson('PUT', '/api/admin/afs/' + encodeURIComponent(afKey) + '/draft-variants',
             { afEmail: false, body: body, noun: 'tu configuración del asistente' }
         ).then(function () { return { ok: true }; })
@@ -5278,7 +5380,11 @@
         //   no lead.id (que en modo Odoo es el id numerico, distinto del display_id).
         leadId = (leadId != null ? leadId : (lead && lead.id));
         return ''
-            + renderIaSummary(lead, leadId)
+            // v1.35: "Resumen IA" OCULTO (ya no se llama a renderIaSummary). Era un mock huerfano
+            //   (MOCK_IA_SUMMARIES, sin backend; solo mostraba "Resumen no generado todavia"). El
+            //   panel contiguo "Analisis IA" ya muestra el texto IA real (/recommendation ->
+            //   lead_analysis_long). renderIaSummary queda definida sin consumidores por si se
+            //   reactiva con lead_analysis_short en el futuro.
             + renderIaAnalysis(lead, leadId)
             + renderCare(lead, cached, leadId)
             + renderInternalNotes(lead, cached, leadId)
@@ -5776,7 +5882,7 @@
             + '<div class="qida-ab-fields">'
                 + '<div class="qida-ab-field qida-ab-field-name">'
                     + '<label class="qida-ab-label">Nombre</label>'
-                    + '<input type="text" class="qida-ab-input" data-input="ab-name" data-idx="' + idx + '" maxlength="60" value="' + esc(variant.name || '') + '" placeholder="ej. corto_directo" />'
+                    + '<input type="text" class="qida-ab-input" data-input="ab-name" data-idx="' + idx + '" maxlength="40" value="' + esc(variant.name || '') + '" placeholder="ej. corto_directo" />'
                 + '</div>'
                 + '<div class="qida-ab-field">'
                     + '<label class="qida-ab-label" title="' + esc(LENGTH_TOOLTIP) + '">Largo ' + icon('alert', 10) + '</label>'
