@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.30.0
+ * QIDA ASSISTANT v1.31.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,26 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.31.0 (fixes de UX del detalle del lead, click test pre-demo Ana — todo widget):
+ *   - A (Análisis IA decía "no generado"): el backend SÍ expone lead_analysis_long en
+ *     /recommendation, pero el widget leía MOCK_IA_ANALYSIS y nunca pedía el endpoint al abrir el
+ *     detalle. Fix: loadRecommendation(leadId) en select-lead (real) pobla recommendationCache;
+ *     renderIaAnalysis muestra rec.lead_analysis_long (loading "Analizando…" / fallback mock).
+ *   - B (TEMP Frío en dashboard, otro en detalle): cached.lead (Odoo) NO trae la temperatura
+ *     computada. syncShellHeader ahora resuelve el temp de la fila del dashboard (/api/me/leads):
+ *     EDITS(override) -> dashRow -> lead. Ya coincide con el listado.
+ *   - C (header "null null, null años"): el subtítulo concatenaba lead.relation/caredPersonName/age
+ *     (null en Odoo) sin guard. Ahora arma la línea solo con lo disponible (incl. cached.caredPerson
+ *     .name) y omite el item si no hay nada.
+ *   - D (TIPO "No cerrado"): es el sold_service_type del backend; la columna lo mapea a "—".
+ *   - E (orden WhatsApp): el backend devuelve DESC; normalizeConversation ahora invierte a ASC
+ *     (cronológico, viejo arriba) como WhatsApp real. Los enviados se appendean al final.
+ *   - H (burbujas verdes vacías): mensajes outbound con texto vacío. renderWhatsAppPane omite la
+ *     burbuja si no hay texto NI adjunto; si hay adjunto sin texto, placeholder "📎 archivo adjunto".
+ *   - DEUDA (no en este PR): F (Contexto del cuidado: ubicación/prescriptor/relación/edad no los
+ *     expone el detalle Odoo -> backend), G (notas internas click), material marketing #2/#3.
+ *   Flag useRealAPI sin cambios. Solo qida-widget.v1.js.
  *
  * Cambios v1.30.0 (UX: auto-grow del input del Asistente IA, igual que el textarea de WhatsApp):
  *   - El campo era <input type="text"> (mono-linea). Ahora es <textarea rows="1"> (el value pasa de
@@ -1271,7 +1291,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.30.0';
+    var VERSION = '1.31.0';
     var CONFIG = null;
 
     // ============================================================
@@ -3833,7 +3853,7 @@
                 + line2html
             + '</div>'
 
-            + '<div class="qida-dash-cell qida-cell-tipo">' + esc(row.serviceType) + '</div>'
+            + '<div class="qida-dash-cell qida-cell-tipo">' + esc((row.serviceType && row.serviceType !== 'No cerrado') ? row.serviceType : '—') + '</div>'
 
             // "Por qué" con ellipsis + tooltip (title) para no romper el ancho del modal AF.
             + '<div class="qida-dash-cell qida-cell-porque" title="' + esc(reason) + '">' + esc(reason) + '</div>'
@@ -3946,8 +3966,20 @@
     //   Generar/Regenerar hacen console.log (preparación de UI; se conectará después).
     function renderIaAnalysis(lead, leadId) {
         leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
-        var a = getIaAnalysis(leadId);
         var title = icon('sparkles', 12) + ' Análisis IA';
+
+        // v1.31 (FIX A): en modo real el análisis viene de /recommendation (lead_analysis_long),
+        //   poblado por loadRecommendation al abrir el detalle. Fallback a mock con flag off / sin dato.
+        var rec = (useRealApi() && state.recommendationCache) ? state.recommendationCache[leadId] : null;
+        if (rec && rec._loading) {
+            return infoCard(title, '', '<div class="qida-aichat-loading"><span class="qida-spinner" aria-hidden="true"></span><span class="qida-aichat-loading-text">Analizando el lead…</span></div>');
+        }
+        if (rec && rec.lead_analysis_long) {
+            return infoCard(title, 'Generado por IA',
+                '<div class="qida-info-card-highlight"><p class="qida-ia-text">' + esc(rec.lead_analysis_long) + '</p></div>');
+        }
+        // Fallback v1.16 (mock / flag off / análisis aún no disponible).
+        var a = getIaAnalysis(leadId);
 
         var actions = '';
         if (a) {
@@ -4628,7 +4660,10 @@
                 status: m.status || null
             });
         }
-        return out;
+        // v1.31 (FIX E): el backend devuelve los mensajes DESC (más reciente primero); el pane
+        //   debe mostrarlos en orden cronológico ASC (viejo arriba, nuevo abajo) como WhatsApp real.
+        //   Los mensajes enviados (sendWhatsAppReal) se appendean al final -> quedan abajo. OK.
+        return out.reverse();
     }
     // ISO 8601 -> "DD/MM HH:MM" (local). Robusto a valores inválidos.
     function formatConvTime(iso) {
@@ -5074,6 +5109,28 @@
         });
     }
 
+    // v1.31 (FIX A): carga la recomendación (que trae lead_analysis_long) al abrir el detalle, para
+    //   poblar el panel "Análisis IA". Reusa fetchRecommendation + recommendationCache. Idempotente:
+    //   si ya hay entrada (cargando/cargada) no re-pide. No bloquea el resto del detalle.
+    function loadRecommendation(leadId) {
+        if (!useRealApi()) return;
+        var cache = state.recommendationCache || (state.recommendationCache = {});
+        var cur = cache[leadId];
+        if (cur && !cur._error) return;  // ya cargada o en vuelo
+        cache[leadId] = { _loading: true };
+        rerenderContent();
+        fetchRecommendation(leadId).then(function (rec) {
+            state.recommendationCache[leadId] = rec;  // rec.lead_analysis_long lo lee renderIaAnalysis
+            if (state.currentLeadId !== leadId) return;  // race-guard
+            rerenderContent();
+        }).catch(function (err) {
+            log('loadRecommendation failed', err && (err.code || err.message));
+            state.recommendationCache[leadId] = { _error: (err && err.userMessage) || 'No se pudo cargar el análisis.' };
+            if (state.currentLeadId !== leadId) return;
+            rerenderContent();
+        });
+    }
+
     function renderWhatsAppPane(lead, leadId) {
         // v1.21: con useRealAPI -> conversación real (cache + loading/error/retry). Sin flag -> mock.
         // v1.27: las caches por-lead (conversationCache / MOCK_WHATSAPP) se indexan por la CLAVE
@@ -5099,12 +5156,17 @@
                 msgsHtml = '<div class="qida-msgs">';
                 for (var i = 0; i < msgs.length; i++) {
                     var m = msgs[i];
+                    var hasText = !!(m.text && String(m.text).trim());
+                    // v1.31 (FIX H): no renderear burbujas sin texto NI adjunto (mensajes vacíos/
+                    //   inválidos -> burbuja verde vacía reportada). Con adjunto sin texto -> placeholder.
+                    if (!hasText && !m.hasAttachment) continue;
                     var att = m.hasAttachment
-                        ? '<p class="qida-msg-att">' + icon('paperclip', 11) + ' ' + esc(m.attachmentName || 'adjunto') + '</p>'
+                        ? '<p class="qida-msg-att">' + icon('paperclip', 11) + ' ' + esc(m.attachmentName || 'archivo adjunto') + '</p>'
                         : '';
+                    var textHtml = hasText ? '<p class="qida-msg-text">' + esc(m.text) + '</p>' : '';
                     msgsHtml += '<div class="qida-msg from-' + m.from + '">'
                         + '<div class="qida-msg-bubble">'
-                            + '<p class="qida-msg-text">' + esc(m.text) + '</p>'
+                            + textHtml
                             + att
                             + '<p class="qida-msg-time">' + esc(m.time) + '</p>'
                         + '</div>'
@@ -5865,7 +5927,14 @@
                 var lvl = daysWithoutTouchLevel(days);
                 var daysLabel = (days === 0) ? 'Hoy' : ('Sin contacto: ' + days + (days === 1 ? ' día' : ' días'));
                 // v1.17: pill de temperatura editable (lee el override de sesión EDITS.temperatures).
-                var tempKey = normalizeTemp(getLeadTemperature(lead));
+                // v1.31 (FIX B): cached.lead (Odoo) NO trae la temperatura computada; la fila del
+                //   dashboard (/api/me/leads) sí. Orden: override sesión (EDITS) -> dashRow -> lead.
+                var dashTemp = '';
+                var _drows = state.dashRows || [];
+                for (var _dri = 0; _dri < _drows.length; _dri++) {
+                    if (_drows[_dri].id === state.currentLeadId) { dashTemp = _drows[_dri].temperature; break; }
+                }
+                var tempKey = normalizeTemp(getLeadTemperature(lead) || dashTemp);
                 var tMeta = TEMP_META[tempKey] || { label: '—', cls: '' };
                 var tempPill = '<span class="qida-dsh-temp-wrap">'
                     + '<button class="qida-dsh-temp" data-action="open-temp-editor" title="Cambiar temperatura" aria-haspopup="true">'
@@ -5873,6 +5942,20 @@
                     + '</button>'
                     + (state.tempEditorOpen ? renderTempEditor(tempKey) : '')
                 + '</span>';
+                // v1.31 (FIX C): no mostrar "null null, null años". Armar la línea persona SOLO con
+                //   lo disponible (lead Odoo no trae relation/age; el nombre del cuidado puede venir de
+                //   cached.caredPerson). Si no hay nada, se omite el item (sin separador colgante).
+                var _cared = (LeadDetailService.getFromCache(state.currentLeadId) || {}).caredPerson || {};
+                var _pName = lead.caredPersonName || _cared.name || '';
+                var _pParts = [];
+                if (lead.relation) _pParts.push(lead.relation);
+                if (_pName) _pParts.push(_pName);
+                var _persona = _pParts.join(' ');
+                if (lead.age != null) _persona += (_persona ? ', ' : '') + lead.age + ' años';
+                var personaItem = _persona
+                    ? '<span class="qida-dsh-meta-item">' + icon('users', 11) + ' ' + esc(_persona) + '</span>'
+                        + '<span class="qida-dsh-sep">&middot;</span>'
+                    : '';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
                     + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
@@ -5884,8 +5967,7 @@
                     + tempPill
                     + '<span class="qida-dsh-sep">&middot;</span>'
                     + '<span class="qida-dsh-meta">'
-                        + '<span class="qida-dsh-meta-item">' + icon('users', 11) + ' ' + esc(lead.relation + ' ' + lead.caredPersonName + ', ' + lead.age + ' anos') + '</span>'
-                        + '<span class="qida-dsh-sep">&middot;</span>'
+                        + personaItem
                         + '<span class="qida-dsh-meta-item">' + icon('mapPin', 11) + ' ' + esc(lead.location) + '</span>'
                         + '<span class="qida-dsh-sep">&middot;</span>'
                         + '<span class="qida-dsh-meta-item">' + icon('phone', 11) + ' ' + esc(lead.phone) + '</span>'
@@ -6137,6 +6219,7 @@
                 if (useRealApi()) {
                     var cc = state.conversationCache[leadIdNum];
                     if (!cc || cc._error) loadConversation(leadIdNum);
+                    loadRecommendation(leadIdNum);  // v1.31 (FIX A): pobla "Análisis IA" (lead_analysis_long)
                 }
                 return;
             case 'back-to-dashboard':
