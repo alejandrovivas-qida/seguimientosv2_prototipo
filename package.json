@@ -6,7 +6,8 @@
   "description": "Widget Qida Assistant + auto-publish a Vercel Blob",
   "scripts": {
     "publish:widget": "node publish.mjs",
-    "publish:watch": "node publish.mjs --watch"
+    "publish:watch": "node publish.mjs --watch",
+    "test": "node test/agent-builder-save.test.mjs"
   },
   "devDependencies": {
     "@vercel/blob": "^2.3.3",

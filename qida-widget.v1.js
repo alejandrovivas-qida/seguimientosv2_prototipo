@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.35.0
+ * QIDA ASSISTANT v1.36.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,27 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.36.0 ("Armá tu asistente": surfacing del 422 del backend + alineo constraint del name).
+ *   Solo qida-widget.v1.js, sin red. Contrato del backend SIN cambios (DraftVariantSpec correcto).
+ *   - HALLAZGO: el bug reportado ("el widget manda labels 'Corto'/'Empático' en vez de los enum ->
+ *     422") YA estaba resuelto desde v1.15.0: el form usa <select> con value=enum (short/medium,
+ *     neutral/direct/empathic) y los labels en español viven solo en el option text. El change
+ *     handler (ab-length/ab-tone) guarda node.value (enum) y fetchSaveDraftVariants manda esos
+ *     enums. NO hay fuga de labels al PUT. Se agrega buildSaveVariants() (helper puro) para
+ *     documentar/blindar esto y darle un guard de regresión en el harness Node.
+ *   - FIX 1 (UX del 422, el verdadero bug abierto): apiErrorCopy(422) descartaba el detail del
+ *     backend y mostraba el genérico "La petición no es válida". Ahora apiFetchJson formatea el
+ *     detail de FastAPI ({detail:[{loc,msg}]}) con format422Detail() -> "Tono: Input should be
+ *     'neutral'...", traduciendo el campo (tone_style->Tono, length->Largo, name->Nombre), y
+ *     apiErrorCopy(422) prioriza ese mensaje. Aplica a TODOS los wires que usan apiFetchJson
+ *     (draft-variants GET/PUT, conversation, dashboard, leads, chat) -> mejora monótona.
+ *   - FIX 2 (alineo constraint del name con el backend min_length=1/max_length=40): validateVariants
+ *     rechazaba name de exactamente 40 chars (>=40); el backend lo acepta. Ahora >40. Input
+ *     maxlength 60->40 (era inconsistente con la regla). El error inline ya existía (no silencioso).
+ *   - El tono NO es campo de texto libre (es <select>): el escenario del screenshot ("Empatico,
+ *     medio" escrito a mano) no es posible en el form actual; no aplica validación extra.
+ *   Flag useRealAPI sin cambios. NO publicado al Blob (orquestador mergea + Alejandro publica).
  *
  * Cambios v1.35.0 (Contexto del cuidado: labels + Persona cuidada por genero; oculta "Resumen IA").
  *   Salta v1.34.0 (material URLs + clip del integrador, ya mergeado). Solo qida-widget.v1.js, sin red.
@@ -1339,7 +1360,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.35.0';
+    var VERSION = '1.36.0';
     var CONFIG = null;
 
     // ============================================================
@@ -4520,7 +4541,8 @@
         return s.charAt(0).toUpperCase() + s.slice(1);
     }
 
-    // Validación de la config (1-3 variantes; name <40, único, no vacío; enums cerrados).
+    // Validación de la config (1-3 variantes; name 1-40 chars (backend min_length=1/max_length=40),
+    //   único, no vacío; enums cerrados).
     //   Devuelve { ok, errors: { '<idx>': 'msg' } , general: 'msg'|null }.
     function validateVariants(variants) {
         var errors = {}, general = null;
@@ -4531,7 +4553,7 @@
             var v = variants[i];
             var nm = (v.name || '').trim();
             if (!nm) errors[i] = 'El nombre no puede estar vacío.';
-            else if (nm.length >= 40) errors[i] = 'El nombre debe tener menos de 40 caracteres.';
+            else if (nm.length > 40) errors[i] = 'El nombre puede tener como máximo 40 caracteres.';
             else if (seen[nm.toLowerCase()]) errors[i] = 'Nombre duplicado.';
             else if (DRAFT_LENGTHS.indexOf(v.length) === -1) errors[i] = 'Largo inválido.';
             else if (TONE_STYLES.indexOf(v.tone_style) === -1) errors[i] = 'Tono inválido.';
@@ -4642,12 +4664,37 @@
     // ============================================================
     // v1.21: helper genérico de fetch JSON + copy de error (3 wires nuevos)
     // ============================================================
+    // v1.36: FastAPI 422 -> { detail: [{loc, msg, type}] } (o detail string). Arma un mensaje
+    //   legible con el campo afectado traducido (tone_style->Tono, length->Largo, name->Nombre).
+    //   Devuelve null si no hay detail parseable -> el caller cae al copy genérico. Pura: testeable.
+    var API_FIELD_LABELS = { tone_style: 'Tono', length: 'Largo', name: 'Nombre', variants: 'Variantes' };
+    function format422Detail(data) {
+        var detail = data && data.detail;
+        if (typeof detail === 'string') return detail;
+        if (!detail || !detail.length) return null;
+        var parts = [];
+        for (var i = 0; i < detail.length; i++) {
+            var d = detail[i] || {};
+            var loc = d.loc || [];
+            var field = null;
+            for (var j = loc.length - 1; j >= 0; j--) {
+                if (typeof loc[j] === 'string' && loc[j] !== 'body') { field = loc[j]; break; }
+            }
+            var label = (field && API_FIELD_LABELS[field]) ? API_FIELD_LABELS[field] : field;
+            var msg = d.msg || 'valor inválido';
+            parts.push(label ? (label + ': ' + msg) : msg);
+        }
+        return parts.length ? parts.join('. ') : null;
+    }
     // Copy de error por status, parametrizado por "noun" (recurso). Mensaje del backend si lo hay.
+    //   v1.36: en 422 priorizamos serverMsg (detail del backend, ya formateado por format422Detail
+    //   en apiFetchJson) para mostrar el motivo real (ej. "Tono: Input should be ...") en vez del
+    //   genérico "La petición no es válida".
     function apiErrorCopy(status, serverMsg, noun) {
         noun = noun || 'el recurso';
         if (status === 401 || status === 403) return 'No tenés permiso para acceder a ' + noun + '.';
         if (status === 404) return 'No encontramos ' + noun + '.';
-        if (status === 422) return 'La petición no es válida (' + noun + ').';
+        if (status === 422) return serverMsg || ('La petición no es válida (' + noun + ').');
         if (status === 429) return 'Demasiadas peticiones. Esperá unos segundos y reintentá.';
         if (status >= 500) return 'El servicio tuvo un error temporal. Reintentá en unos segundos.';
         return serverMsg || ('Error ' + status + ' al pedir ' + noun + '.');
@@ -4678,6 +4725,7 @@
                 }
                 var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
                 var serverMsg = (data && data.error && data.error.message)
+                        || (res.status === 422 ? format422Detail(data) : null)
                         || (data && data.detail && data.detail[0] && data.detail[0].msg)
                         || (typeof (data && data.detail) === 'string' ? data.detail : null);
                 log('api error', { method: method, path: path, status: res.status, code: code });
@@ -4700,12 +4748,20 @@
             return { af_key: (data && data.af_key) || afKey, is_default: !!(data && data.is_default), variants: out };
         });
     }
+    // Normaliza variantes para el PUT: trim del name + length/tone_style TAL CUAL. Son los enums
+    //   del backend (short/medium, neutral/direct/empathic): el <select> ya guarda value=enum, los
+    //   labels en español ("Corto"/"Empático") viven solo en la UI (option text), NUNCA en el body.
+    //   Pura -> testeable en harness Node (guard contra regresión a labels -> 422).
+    function buildSaveVariants(variants) {
+        var out = [];
+        for (var i = 0; i < variants.length; i++) {
+            out.push({ name: (variants[i].name || '').trim(), length: variants[i].length, tone_style: variants[i].tone_style });
+        }
+        return out;
+    }
     // PUT { variants:[...] } -> resuelve {ok:true} | {ok:false,...}. NUNCA rechaza (la UI lee .ok).
     function fetchSaveDraftVariants(afKey, variants) {
-        var body = { variants: [] };
-        for (var i = 0; i < variants.length; i++) {
-            body.variants.push({ name: variants[i].name.trim(), length: variants[i].length, tone_style: variants[i].tone_style });
-        }
+        var body = { variants: buildSaveVariants(variants) };
         return apiFetchJson('PUT', '/api/admin/afs/' + encodeURIComponent(afKey) + '/draft-variants',
             { afEmail: false, body: body, noun: 'tu configuración del asistente' }
         ).then(function () { return { ok: true }; })
@@ -5826,7 +5882,7 @@
             + '<div class="qida-ab-fields">'
                 + '<div class="qida-ab-field qida-ab-field-name">'
                     + '<label class="qida-ab-label">Nombre</label>'
-                    + '<input type="text" class="qida-ab-input" data-input="ab-name" data-idx="' + idx + '" maxlength="60" value="' + esc(variant.name || '') + '" placeholder="ej. corto_directo" />'
+                    + '<input type="text" class="qida-ab-input" data-input="ab-name" data-idx="' + idx + '" maxlength="40" value="' + esc(variant.name || '') + '" placeholder="ej. corto_directo" />'
                 + '</div>'
                 + '<div class="qida-ab-field">'
                     + '<label class="qida-ab-label" title="' + esc(LENGTH_TOOLTIP) + '">Largo ' + icon('alert', 10) + '</label>'
