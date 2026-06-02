@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.31.0
+ * QIDA ASSISTANT v1.32.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -8,6 +8,12 @@
  * Principio rector NO NEGOCIABLE:
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
+ *
+ * Cambios v1.32.0 (ocultar el badge del Panel de Líderes por ahora):
+ *   - Nuevo flag SHOW_LEADER_BADGE=false: injectLeaderBadge() retorna temprano y el botón flotante
+ *     (.qida-leader-badge) no se inyecta. Reversible en 1 línea (poner true) u override por sesión
+ *     con CONFIG.showLeaderBadge=true. El resto del Panel de Líderes (vista/lógica) queda intacto.
+ *   - Solo qida-widget.v1.js. Sin cambios de red ni del flag useRealAPI.
  *
  * Cambios v1.31.0 (fixes de UX del detalle del lead, click test pre-demo Ana — todo widget):
  *   - A (Análisis IA decía "no generado"): el backend SÍ expone lead_analysis_long en
@@ -1291,7 +1297,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.31.0';
+    var VERSION = '1.32.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1302,6 +1308,10 @@
     //   useRealAPI=true hace fetch real via fetchRecommendation(). Overridable en init via
     //   CONFIG.useRealAPI (boolean). Default false = seguro para prod hasta validar.
     var FEATURE_FLAG = { useRealAPI: false };
+    // v1.32: badge flotante del Panel de Líderes OCULTO por ahora (decisión de producto / pre-demo).
+    //   Para reactivar: poner en true. El resto del Panel de Líderes queda intacto (solo se oculta
+    //   el botón flotante de acceso). Overridable via CONFIG.showLeaderBadge.
+    var SHOW_LEADER_BADGE = false;
     // Base URL del backend. Override via CONFIG.apiBaseUrl. Sin barra final.
     var API_BASE_URL_DEFAULT = 'https://qida-followup-api.vercel.app';
     var API_BASE_URL = API_BASE_URL_DEFAULT;
@@ -6957,6 +6967,8 @@
 
     // v1.12: badge flotante apilado encima del badge AF. Solo se inyecta si _isLeader === true.
     function injectLeaderBadge() {
+        // v1.32: oculto por ahora. CONFIG.showLeaderBadge===true lo fuerza; si no, SHOW_LEADER_BADGE.
+        if (!(CONFIG && CONFIG.showLeaderBadge === true) && !SHOW_LEADER_BADGE) return;
         if (document.querySelector('.qida-leader-badge')) return;
         var badge = document.createElement('div');
         badge.className = 'qida-leader-badge';
