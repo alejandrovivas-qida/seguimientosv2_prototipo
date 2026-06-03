@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.40.0
+ * QIDA ASSISTANT v1.41.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,31 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.41.0 (3 fixes UX de confianza visual; solo widget, sin tocar backend/flag/switcher):
+ *   - FIX 1 (loading state, "el panel parecía roto cuando solo cargaba"): el mecanismo de carga
+ *     (flags _loading por-fetch + render condicional con spinner/skeleton) YA existía para los 4
+ *     puntos (dashboard v1.22, detalle v1.11, conversación v1.21, recomendación v1.31). Lo que
+ *     faltaba/fallaba:
+ *       * renderDetail() rebotaba a renderDashboard() mientras fetchAll estaba en vuelo, porque en
+ *         modo real getLead() devuelve null (el lead no está en MOCK_LEADS) y cached.lead recién se
+ *         puebla al terminar. Resultado: el click "no hacía nada" y el detalle aparecía de golpe.
+ *         NUEVO renderDetailLoading() -> skeleton de 3 paneles + spinner durante esa ventana.
+ *       * El loading de la conversación usaba un icono de refresh ESTÁTICO (parecía congelado) ->
+ *         ahora .qida-spinner ANIMADO, coherente con el resto.
+ *       * renderIaSummary ahora muestra skeleton mientras fetchAll carga (antes quedaba en blanco).
+ *   - FIX 2 (4 campos vacíos en "Contexto del cuidado" -> "-"): es la DEUDA documentada en v1.35.
+ *     'city', 'cohabitants_number', 'prescriber_id' agregados a LEAD_FIELDS. mapLead: city ->
+ *     location (Ubicación); prescriber_id (many2one) -> prescriptor (Prescriptor); cohabitants_number
+ *     -> livesAlone (Vive solo) vía COHABITANTS_LIVES_ALONE ('without_cohabitants'->Sí; '1'/'2-3'/'4+'
+ *     ->No; otro->"-"). mapCared: cared_person.name (texto libre) -> relationship (Relación). renderCare
+ *     muestra el valor o "-". Modo mock intacto (cae a MOCK_CARE_CONTEXT).
+ *   - FIX 3 (actividad pendiente invisible): antes la única señal era el punto verde diminuto de la
+ *     lista de actividades del DETALLE (que Paloma no asociaba al dashboard). NUEVO badge "Pendiente"
+ *     (ámbar #FEF3C7/#92400E + borde + ícono reloj) en la columna Estado del dashboard, mismo patrón
+ *     que "Mensaje nuevo"/"Urgente", visible cuando el lead tiene 1+ actividad pendiente
+ *     (leadHasPendingActivity: campo backend explícito -> fallback MOCK_PLANNED_ACTIVITIES). + leyenda.
+ *   Flag useRealAPI sin cambios. NO publicado al Blob (orquestador mergea + Alejandro publica).
  *
  * Cambios v1.40.0 (BUG CRÍTICO: Paloma faltaba en MOCK_ACTIVE_AFS -> veía data de otra AF).
  *   - 'paloma.galvez@qida.es' -> 'paloma_galvez' agregado a MOCK_ACTIVE_AFS (mapping email->af_key
@@ -1407,7 +1432,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.40.0';
+    var VERSION = '1.41.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2371,12 +2396,29 @@
 
     // ---- Listas explicitas de fields (NUNCA usar fields:[] que descarga todo) ----
     // NOTA sobre 'chronich_illness': typo del modelo Odoo (sic). NO corregir.
-    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','gender','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id','ai_description'];
+    // v1.41 (FIX 2): city / cohabitants_number / prescriber_id agregados (la "DEUDA" documentada en
+    //   v1.35). Pueblan Ubicacion, Vive solo (derivado) y Prescriptor en "Contexto del cuidado".
+    var LEAD_FIELDS = ['id','name','partner_id','user_id','team_id','company_id','email_from','phone','mobile','stage_id','active','probability','type','priority','tag_ids','create_date','write_date','date_deadline','description','message_follower_ids','cared_person_ids','family_unit_id','urgency','gender','urgency_helper','urgent_service','vip_service','original_service_id','service_duration','service_goal','principal_activity_ids','recurring_plan','planned_start_date','default_whatsapp_template_id','ai_description','city','cohabitants_number','prescriber_id'];
     var CARED_FIELDS = ['id','name','main_need','reduced_mobility','cognitive_decline','behavioral_disorder','chronich_illness','requires_trained_caregivers','support_type','has_support_material','weight','complex_treatment_ids'];
     var NOTES_FIELDS = ['id','author_id','date','body','message_type','subject'];
     var ACTIVITY_FIELDS = ['id','activity_type_id','summary','note','date_deadline','state','user_id'];
     var ATTACHMENT_FIELDS = ['id','name','mimetype','file_size','create_date','create_uid'];
     var FOLLOWER_FIELDS = ['id','partner_id','subtype_ids'];
+
+    // v1.41 (FIX 2): crm.lead.cohabitants_number (enum Odoo) -> "Vive solo" (bool).
+    //   'without_cohabitants' => vive solo (Si); '1' / '2-3' / '4+' => no vive solo (No).
+    //   Cualquier otro valor (o vacio) => null -> renderCare muestra "-". No rompe nunca.
+    var COHABITANTS_LIVES_ALONE = {
+        without_cohabitants: true,
+        '1': false,
+        '2-3': false,
+        '4+': false
+    };
+    function deriveLivesAlone(cohabitantsNumber) {
+        if (cohabitantsNumber == null || cohabitantsNumber === '') return null;
+        var v = COHABITANTS_LIVES_ALONE[cohabitantsNumber];
+        return (v === undefined) ? null : v;
+    }
 
     // ---- Mappers Odoo -> shape interno (preserva keys que ya consumen los renderers) ----
     function mapLead(o) {
@@ -2385,7 +2427,7 @@
             odooId: o.id,
             name: o.name || tName(o.partner_id) || '',
             contact: tName(o.partner_id) || o.name || '',
-            location: '',  // crm.lead no tiene campo directo "ciudad" - ver DEFAULTS v1.11 #3
+            location: o.city || '',  // v1.41 (FIX 2): crm.lead.city -> "Ubicacion" (antes hardcodeado '')
             phone: o.mobile || o.phone || '',
             email: o.email_from || '',
             stage: tName(o.stage_id) || '',
@@ -2399,6 +2441,8 @@
             createdAt: o.create_date || null,
             followersIds: o.message_follower_ids || [],
             caredPersonIds: o.cared_person_ids || [],
+            // v1.41 (FIX 2): "Vive solo" derivado de cohabitants_number (null si no hay dato).
+            livesAlone: deriveLivesAlone(o.cohabitants_number),
             // Campos que NO existen en Odoo (los completa mapCared o futuras fases):
             relation: null,
             age: null,
@@ -2408,7 +2452,8 @@
             lastInteraction: '',
             interactionCount: 0,
             historico: false,
-            prescriptor: ''
+            // v1.41 (FIX 2): crm.lead.prescriber_id (many2one) -> "Prescriptor" (antes hardcodeado '').
+            prescriptor: tName(o.prescriber_id) || ''
         };
     }
 
@@ -2416,7 +2461,9 @@
         if (!o) return null;
         return {
             name: o.name || '',
-            relationship: null,        // no existe en Odoo (Fase C)
+            // v1.41 (FIX 2): cared_person.name (texto libre: "madre"/"Carmen"/...) -> "Relacion".
+            //   Es la deuda documentada en v1.35 ("name queda libre para Relacion futura"). null si vacio.
+            relationship: o.name || null,
             age: null,                 // no existe en Odoo
             relation: null,            // idem
             mainCondition: o.main_need || '',
@@ -3286,6 +3333,8 @@
             '.qida-dash-badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0;}',
             '.qida-dash-badge-new{background:#ECFDF5;color:#047857;}',
             '.qida-dash-badge-urgent{background:#FEF2F2;color:#991B1B;}',
+            /* v1.41 (FIX 3): badge "Pendiente" (actividad pendiente). Ámbar, con borde para destacar. */
+            '.qida-dash-badge-pending{background:#FEF3C7;color:#92400E;border:0.5px solid #FDE68A;}',
 
             /* Leyenda explícita debajo de la tabla */
             '.qida-dash-legend{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:12px 12px 0;font-size:11.5px;color:var(--s600);}',
@@ -3298,6 +3347,7 @@
             '.qida-dash-legdot-pausa{background:var(--s400);}',
             '.qida-dash-legdot-new{background:#047857;}',
             '.qida-dash-legdot-urgent{background:#991B1B;}',
+            '.qida-dash-legdot-pending{background:#D97706;}',  /* v1.41 (FIX 3) */
 
             /* Boton "Marcar hecho" (hover) */
             '.qida-mark-done-btn{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:6px 10px;font-size:12px;color:#0F6E56;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;}',
@@ -3929,8 +3979,23 @@
         + '</div>';
     }
 
+    // v1.41 (FIX 3): ¿el lead tiene 1+ actividad pendiente (no completada)? Señal para el badge
+    //   "Pendiente" del dashboard. Orden de fuentes: campo explícito del backend (futuro:
+    //   hasPendingActivity bool o pendingActivitiesCount num) -> fallback al mock de actividades
+    //   planificadas (misma fuente que el panel "Próximas actividades" del detalle). No rompe nunca.
+    function leadHasPendingActivity(row) {
+        if (!row) return false;
+        if (typeof row.hasPendingActivity === 'boolean') return row.hasPendingActivity;
+        if (typeof row.pendingActivitiesCount === 'number') return row.pendingActivitiesCount > 0;
+        var acts = MOCK_PLANNED_ACTIVITIES[row.id] || [];
+        for (var i = 0; i < acts.length; i++) {
+            if (acts[i] && !acts[i].done) return true;
+        }
+        return false;
+    }
+
     // Columna Estado: badges admin (apilados). Verde "Mensaje nuevo" (+contador si >1) y/o rojo
-    //   "Urgente" (solo urgency alta). Vacía si no aplica ninguno.
+    //   "Urgente" (solo urgency alta) y/o ámbar "Pendiente" (1+ actividad pendiente). Vacía si no aplica ninguno.
     function renderEstadoCell(row) {
         var badges = '';
         if (row.hasNewMessage) {
@@ -3939,6 +4004,11 @@
         }
         if (normalizeUrgency(row.urgency) === 'alta') {
             badges += '<span class="qida-dash-badge qida-dash-badge-urgent"><span class="qida-dash-badge-dot"></span>Urgente</span>';
+        }
+        // v1.41 (FIX 3): badge "Pendiente" visible (antes solo un punto verde diminuto que Paloma
+        //   no veía). Ícono reloj + texto, mismo patrón que "Mensaje nuevo"/"Urgente".
+        if (leadHasPendingActivity(row)) {
+            badges += '<span class="qida-dash-badge qida-dash-badge-pending">' + icon('clock', 10) + 'Pendiente</span>';
         }
         return '<div class="qida-dash-cell qida-cell-estado">' + badges + '</div>';
     }
@@ -3952,7 +4022,7 @@
         return '<div class="qida-dash-legend">'
             + item('caliente', 'Caliente') + item('templado', 'Templado') + item('frio', 'Frío') + item('pausa', 'Pausa')
             + '<span class="qida-dash-legend-sep"></span>'
-            + item('new', 'Mensaje nuevo') + item('urgent', 'Urgente')
+            + item('new', 'Mensaje nuevo') + item('urgent', 'Urgente') + item('pending', 'Pendiente')  /* v1.41 (FIX 3) */
         + '</div>';
     }
 
@@ -4054,9 +4124,15 @@
         + '</div>';
     }
 
-    function renderIaSummary(lead, leadId) {
+    function renderIaSummary(lead, leadId, cached) {
         leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
         var title = icon('sparkles', 12) + ' Resumen IA';
+
+        // v1.41 (FIX 1): el Resumen IA sale de crm.lead.ai_description, que llega con fetchAll. Mientras
+        //   carga, mostramos skeleton en vez de quedar en blanco. (En mock _loading nunca es true.)
+        if (cached && cached._loading) {
+            return infoCard(title, '', renderSkeletonLines(3));
+        }
 
         // v1.38: en modo real el "Resumen IA" sale de crm.lead.ai_description (HTML de Odoo).
         //   Se sanitiza con sanitizeOdooHtml (DOMPurify + fallback defensivo) justo antes de inyectar.
@@ -4193,6 +4269,9 @@
         } else {
             personaLine = GENDER_LABELS[lead.gender] || 'Mujer/Hombre';
         }
+        // v1.41 (FIX 2): "Vive solo" sale del lead (crm.lead.cohabitants_number -> lead.livesAlone).
+        //   Mock (sin ese campo en el lead) cae a caredPerson.livesAlone. Ambos: bool | null -> "-".
+        var livesAlone = (lead.livesAlone != null) ? lead.livesAlone : c.livesAlone;
         var grid = '<div class="qida-context-grid">'
             + item('Persona cuidada', personaLine)
             + item('Relacion', c.relationship)
@@ -4201,7 +4280,7 @@
             + item('Ubicacion', lead.location)
             + item('Tipo de servicio', lead.serviceType)
             + item('Urgencia', urgencyLabel, urgencyUrgent)
-            + item('Vive solo', c.livesAlone == null ? '-' : (c.livesAlone ? 'Si' : 'No'))
+            + item('Vive solo', livesAlone == null ? '-' : (livesAlone ? 'Si' : 'No'))
             + item('Prescriptor', lead.prescriptor)
         + '</div>';
         return infoCard(title, '', grid);
@@ -5413,7 +5492,9 @@
         var conv = realMode ? state.conversationCache[leadId] : null;
         var msgsHtml;
         if (realMode && conv && conv._loading) {
-            msgsHtml = '<div class="qida-wa-state">' + icon('refresh-cw', 14) + ' Cargando conversación…</div>';
+            // v1.41 (FIX 1): spinner ANIMADO (antes un icono estático de refresh que parecía
+            //   congelado/roto). Reusa .qida-spinner global, coherente con el resto de loaders.
+            msgsHtml = '<div class="qida-wa-state"><span class="qida-spinner" aria-hidden="true"></span> Cargando conversación…</div>';
         } else if (realMode && conv && conv._error) {
             msgsHtml = '<div class="qida-wa-state error">'
                 + '<p>' + icon('alert-triangle', 13) + ' ' + esc(conv._error) + '</p>'
@@ -5526,12 +5607,36 @@
             //   devuelve '' (panel oculto, sin placeholder). En mock (flag OFF) sigue usando
             //   MOCK_IA_SUMMARIES como siempre. El panel contiguo "Análisis IA" (lead_analysis_long
             //   de /recommendation) queda igual.
-            + renderIaSummary(lead, leadId)
+            + renderIaSummary(lead, leadId, cached)
             + renderIaAnalysis(lead, leadId)
             + renderCare(lead, cached, leadId)
             + renderInternalNotes(lead, cached, leadId)
             + renderActivities(lead, cached, leadId)
             + renderAttachmentsCollapsable(lead, cached, leadId);
+    }
+
+    // v1.41 (FIX 1): skeleton del detalle mientras LeadDetailService.fetchAll está en vuelo y aún no
+    //   tenemos la identidad del lead. Reusa la estructura de 3 paneles (WA / centro / IA) con
+    //   spinner + skeletons -> "nunca vacío ni roto durante la carga". Solo aplica en esa ventana
+    //   (modo real, primer open); con cache válido renderDetail() pinta el detalle real.
+    function renderDetailLoading() {
+        var spin = '<span class="qida-spinner" aria-hidden="true"></span>';
+        var waPane = '<div class="qida-pane-wa">'
+            + '<div class="qida-pane-wa-head">' + icon('msg', 12) + ' Conversacion</div>'
+            + '<div class="qida-pane-wa-body"><div class="qida-wa-state">' + spin + ' Cargando conversación…</div></div>'
+        + '</div>';
+        var centerPane = '<div class="qida-pane-center">'
+            + infoCard(icon('users', 12) + ' Cargando lead…', '', renderSkeletonLines(5))
+            + infoCard(icon('file', 12) + ' Notas internas', '', renderSkeletonLines(3))
+            + infoCard(icon('clock', 12) + ' Proximas actividades', '', renderSkeletonLines(3))
+        + '</div>';
+        var aiPane = '<div class="qida-pane-ai">'
+            + '<div class="qida-aichat-loading" style="padding:16px;">' + spin + '<span class="qida-aichat-loading-text">Cargando asistente…</span></div>'
+        + '</div>';
+        var middleAndRight = state.detailLayoutSwapped ? (aiPane + centerPane) : (centerPane + aiPane);
+        return '<div class="qida-detail">'
+            + '<div class="qida-detail-body">' + waPane + middleAndRight + '</div>'
+        + '</div>';
     }
 
     function renderDetail() {
@@ -5541,6 +5646,14 @@
         var cached = LeadDetailService.getFromCache(leadId);
         var lead = (cached && cached.lead) || getLead(leadId);
         if (!lead) {
+            // v1.41 (FIX 1): si el fetch sigue EN VUELO y todavía no tenemos identidad del lead,
+            //   mostramos un skeleton del detalle en vez de rebotar al dashboard. En modo real el
+            //   lead no vive en MOCK_LEADS, así que getLead() devuelve null y cached.lead recién se
+            //   puebla al terminar fetchAll -> antes el click "no hacía nada" y el panel aparecía de
+            //   golpe (Paloma lo leía como roto). Solo caemos al dashboard si NO está cargando.
+            if (cached && cached._loading) {
+                return renderDetailLoading();
+            }
             // v1.11: error global - el primer fetch (crm.lead.read) fallo. Volvemos al
             //   dashboard. El toast con el mensaje ya lo disparo fetchAll en su .catch.
             return renderDashboard();
