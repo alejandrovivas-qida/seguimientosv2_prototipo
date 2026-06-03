@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.42.0
+ * QIDA ASSISTANT v1.43.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,13 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.43.0 ("Marcar hecho" persistente + badge "Nota"; respeta el principio rector — solo registra estado operativo, no genera mensajes):
+ *   - [6] "Marcar hecho" ahora PERSISTE en backend (antes era solo estado de sesión, se perdía al recargar). markFollowupDone: optimistic (saca la fila + toast Deshacer 4s, igual que antes) + POST /api/leads/{id}/followup-actions { action:'done_today' } (X-AF-Email, solo modo real). Si el POST falla -> revierte (re-muestra el lead, cierra el toast undo) + toast de error. El backend pone effective_until=mañana 00:00 UTC: el lead sale de "Sugerencias para hoy" hoy y reaparece cuando el recompute decida el próximo follow-up. Override de READ, NO toca priority_score.
+ *   - [7] "Deshacer": optimistic delete + DELETE /api/leads/{id}/followup-actions?action=done_today; re-aplica la marca si falla.
+ *   - [6b] Botón "Marcar hecho" también en el header del detalle del lead (mismo handler). Si ya está hecho hoy muestra "Hecho hoy" (clic = deshacer). Al volver al dashboard la fila ya no aparece (el fetch del backend confirma el filtro).
+ *   - [8b] El "•" ambiguo de la columna Tarea (Actividades) pasó a un badge ámbar "Nota" (.qida-dash-badge-note, mismo patrón que "Pendiente"). El tooltip con el texto de la nota se mantiene. La celda Tarea ahora es flex para que el badge no se recorte con títulos largos.
+ *   - showToast acepta kind:'error' (ícono de alerta en vez del check) para los toasts de fallo de red.
  *
  * Cambios v1.42.0 (BUG: el badge "Mensaje nuevo" no se limpiaba al leer; solo cambia la fuente del booleano):
  *   - FIX 1+2: al entrar al detalle (select-lead) -> markLeadRead: optimistic clear local (hasNewMessage=false, el badge desaparece al volver) + POST /api/leads/{id}/read (X-AF-Email, fire-and-forget, solo modo real; catch con console.warn).
@@ -1436,7 +1443,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.42.0';
+    var VERSION = '1.43.0';
     var CONFIG = null;
 
     // ============================================================
@@ -3286,8 +3293,10 @@
             '.qida-actv-header,.qida-actv-row{display:grid;grid-template-columns:minmax(150px,1.8fr) minmax(90px,1fr) minmax(170px,2.4fr) 104px minmax(120px,1.3fr) 116px;gap:14px;align-items:center;}',
             '.qida-actv-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
             '.qida-actv-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);}',
-            '.qida-actv-task{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
-            '.qida-actv-note-dot{color:#0F6E56;font-weight:700;}',
+            /* v1.43: la tarea es flex para que el badge "Nota" no se recorte con el ellipsis
+               del título (antes era un nowrap que clipaba el indicador en títulos largos). */
+            '.qida-actv-task{display:flex;align-items:center;gap:6px;min-width:0;}',
+            '.qida-actv-task-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}',
             '.qida-actv-deadline{font-variant-numeric:tabular-nums;color:var(--s700);}',
             '.qida-actv-type{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}',
             '.qida-actv-badge-auto{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:999px;background:var(--s100);color:var(--s600);font-size:10px;font-weight:500;}',
@@ -3339,6 +3348,15 @@
             '.qida-dash-badge-urgent{background:#FEF2F2;color:#991B1B;}',
             /* v1.41 (FIX 3): badge "Pendiente" (actividad pendiente). Ámbar, con borde para destacar. */
             '.qida-dash-badge-pending{background:#FEF3C7;color:#92400E;border:0.5px solid #FDE68A;}',
+            /* v1.43 (8b): badge "Nota" (la actividad tiene una nota interna). Reemplaza el "•"
+               ambiguo. Ámbar suave, mismo patrón que "Pendiente". El tooltip con el texto de la
+               nota sigue en el title de la celda .qida-actv-task. */
+            '.qida-dash-badge-note{background:#FEF3C7;color:#92400E;border:0.5px solid #FDE68A;}',
+            /* v1.43 (6b): botón "Marcar hecho" en el header del detalle del lead. Mismo verde que
+               el botón de la tabla; variante is-done cuando el lead ya está marcado hecho hoy. */
+            '.qida-dsh-markdone{margin-left:auto;background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:#0F6E56;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
+            '.qida-dsh-markdone:hover{border-color:#0F6E56;background:#F7FAF8;}',
+            '.qida-dsh-markdone.is-done{background:#ECFDF5;border-color:#A7F3D0;color:#047857;cursor:pointer;}',
 
             /* Leyenda explícita debajo de la tabla */
             '.qida-dash-legend{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:12px 12px 0;font-size:11.5px;color:var(--s600);}',
@@ -3805,9 +3823,12 @@
                 + '<div class="qida-cell-line1"><span class="qida-cell-name">' + famLine + '</span></div>'
             + '</div>'
             + '<div class="qida-dash-cell qida-actv-patient">' + esc(patient) + '</div>'
-            // Tarea: summary + tooltip con la note si existe.
+            // Tarea: título (ellipsis) + badge "Nota" si hay nota interna. El tooltip con el
+            //   texto de la nota sigue en el title de la celda. v1.43 (8b): el "•" ambiguo pasó
+            //   a un badge ámbar "Nota" (mismo patrón que "Pendiente").
             + '<div class="qida-dash-cell qida-actv-task"' + (note ? ' title="' + esc(note) + '"' : '') + '>'
-                + esc(summary) + (note ? ' <span class="qida-actv-note-dot" aria-label="Tiene nota">•</span>' : '')
+                + '<span class="qida-actv-task-text">' + esc(summary) + '</span>'
+                + (note ? '<span class="qida-dash-badge qida-dash-badge-note" aria-label="Tiene nota">' + icon('file', 10) + 'Nota</span>' : '')
             + '</div>'
             + '<div class="qida-dash-cell qida-actv-deadline">' + esc(formatShortDate(act.deadline_date)) + '</div>'
             + '<div class="qida-dash-cell qida-actv-type">' + esc(typeLabel) + autoBadge + '</div>'
@@ -4101,6 +4122,21 @@
             + icon('check', 16) + ' Marcado como hecho &middot; '
             + '<button data-action="undo-mark-done" class="qida-undo-btn">Deshacer</button>'
         + '</div>';
+    }
+
+    // v1.43 (6b): botón "Marcar hecho" del header del detalle. Comparte handler con la tabla
+    //   (mark-done / undo-mark-done). Si el lead ya está marcado hecho hoy muestra "Hecho hoy"
+    //   (undo-mark-done con data-id, para poder deshacer aunque el toast de 4s ya haya expirado).
+    function renderDetailMarkDoneBtn(leadId) {
+        if (leadId == null || leadId === '') return '';
+        var done = state.completedTodayIds && state.completedTodayIds.has(leadId);
+        if (done) {
+            return '<button class="qida-dsh-markdone is-done" data-action="undo-mark-done" data-id="'
+                + esc(leadId) + '" title="Marcado hecho hoy — clic para deshacer">'
+                + icon('check', 13) + ' Hecho hoy</button>';
+        }
+        return '<button class="qida-dsh-markdone" data-action="mark-done" data-id="'
+            + esc(leadId) + '">' + icon('check', 13) + ' Marcar hecho</button>';
     }
 
     // ============================================================
@@ -4976,6 +5012,86 @@
         apiFetchJson('POST', '/api/leads/' + numericId + '/read', { noun: 'la marca de leído' })
             .catch(function (err) {
                 console.warn('[QIDA] POST /api/leads/' + numericId + '/read falló (no crítico):', (err && err.userMessage) || (err && err.message) || err);
+            });
+    }
+
+    // v1.43: "Marcar hecho" persistente (botón de la tabla "Sugerencias para hoy" y del header
+    //   del detalle). Saca el lead de la vista hoy + lo persiste en backend. Override de READ:
+    //   NO genera mensajes al lead (respeta el principio rector); solo registra que la AF ya hizo
+    //   el follow-up hoy. Reusan markFollowupDone/undoFollowupDone desde el dispatcher.
+    //
+    //   Optimistic-first (igual que antes): markFollowupDone agrega a completedTodayIds (liveDashRows
+    //   filtra la fila) + muestra el toast "Deshacer" 4s, y dispara el POST async. Si el POST falla
+    //   (4xx/5xx/red), revierte: re-muestra la fila, cierra el toast undo y avisa con un toast de
+    //   error. Si OK (204), mantiene el optimistic + el toast undo. En modo mock no pega al backend
+    //   (solo estado local de sesión, como siempre).
+    function markFollowupDone(id) {
+        if (!id) return;
+        // (1) optimistic local + toast Deshacer 4s (sobreescribe un undo previo de otra fila).
+        state.completedTodayIds.add(id);
+        state.undoToast = { leadId: id, expiresAt: Date.now() + 4000 };
+        if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
+        state.undoTimeoutId = setTimeout(function () {
+            state.undoToast = null;
+            state.undoTimeoutId = null;
+            rerenderContent();
+        }, 4000);
+        // (2) persistir (solo real); revert en fallo.
+        persistFollowupDone(id);
+        rerenderContent();
+    }
+
+    // Deshacer "Marcar hecho". explicitId = el data-id del botón "Hecho hoy" del detalle (deshace
+    //   ese lead aunque el toast ya expiró); sin explicitId usa el lead del toast (botón Deshacer).
+    function undoFollowupDone(explicitId) {
+        var id = explicitId || (state.undoToast && state.undoToast.leadId);
+        if (!id) { rerenderContent(); return; }
+        // (1) optimistic: vuelve a mostrar la fila + cierra el toast si es de este lead.
+        state.completedTodayIds["delete"](id);
+        if (state.undoToast && String(state.undoToast.leadId) === String(id)) {
+            state.undoToast = null;
+            if (state.undoTimeoutId) { clearTimeout(state.undoTimeoutId); state.undoTimeoutId = null; }
+        }
+        // (2) borrar la marca en backend (solo real); re-aplica en fallo.
+        persistFollowupUndone(id);
+        rerenderContent();
+    }
+
+    // POST /api/leads/{id}/followup-actions { action:'done_today' }. Revert optimista en fallo.
+    function persistFollowupDone(id) {
+        if (!useRealApi()) return;
+        var numericId = toNumericLeadId(id);
+        if (!numericId) return;
+        apiFetchJson('POST', '/api/leads/' + numericId + '/followup-actions',
+            { body: { action: 'done_today' }, noun: 'la marca de seguimiento' })
+            .catch(function (err) {
+                // El backend no registró el "hecho" -> revertir: re-mostrar el lead, cerrar el
+                //   toast Deshacer (NO lo dejamos) y avisar con un toast de error.
+                state.completedTodayIds["delete"](id);
+                if (state.undoToast && String(state.undoToast.leadId) === String(id)) {
+                    state.undoToast = null;
+                    if (state.undoTimeoutId) { clearTimeout(state.undoTimeoutId); state.undoTimeoutId = null; }
+                }
+                console.warn('[QIDA] POST followup-actions falló:', (err && err.userMessage) || (err && err.message) || err);
+                rerenderContent();
+                showToast('No se pudo marcar como hecho. Reintentá.', 'error');
+            });
+    }
+
+    // DELETE /api/leads/{id}/followup-actions?action=done_today. Re-aplica la marca en fallo.
+    function persistFollowupUndone(id) {
+        if (!useRealApi()) return;
+        var numericId = toNumericLeadId(id);
+        if (!numericId) return;
+        apiFetchJson('DELETE', '/api/leads/' + numericId + '/followup-actions?action=done_today',
+            { noun: 'la marca de seguimiento' })
+            .catch(function (err) {
+                // No se pudo deshacer en backend -> re-aplicar el "hecho" local para no
+                //   desincronizar (el backend sigue filtrando ese lead de la vista hoy).
+                state.completedTodayIds.add(id);
+                console.warn('[QIDA] DELETE followup-actions falló:', (err && err.userMessage) || (err && err.message) || err);
+                rerenderContent();
+                showToast('No se pudo deshacer. El lead sigue marcado como hecho.', 'error');
             });
     }
 
@@ -6413,6 +6529,8 @@
                         + '<span class="qida-dsh-sep">&middot;</span>'
                         + '<span class="qida-dsh-meta-item">' + icon('briefcase', 11) + ' ' + esc(lead.serviceType || '-') + '</span>'
                     + '</span>'
+                    // v1.43 (6b): "Marcar hecho" en el header del detalle (mismo handler que la tabla).
+                    + renderDetailMarkDoneBtn(state.currentLeadId)
                 + '</div>';
             } else {
                 titleHtml = '<div class="qida-detail-shell-head">'
@@ -6493,15 +6611,18 @@
         var div = document.createElement('div');
         div.id = 'qida-toast-root';
         div.className = 'qida-toast';
-        div.innerHTML = icon('check', 14) + ' ' + esc(state.toast.msg);
+        // v1.43: toast de error (kind:'error') usa el ícono de alerta en vez del check
+        //   (un "✓" en un mensaje de error confunde). El resto sigue con check.
+        var toastIcon = (state.toast.kind === 'error') ? icon('alert', 14) : icon('check', 14);
+        div.innerHTML = toastIcon + ' ' + esc(state.toast.msg);
         shell.appendChild(div);
         // Force reflow then add .show
         void div.offsetWidth;
         div.className = 'qida-toast show';
     }
 
-    function showToast(msg) {
-        state.toast = { msg: msg, ts: Date.now() };
+    function showToast(msg, kind) {
+        state.toast = { msg: msg, ts: Date.now(), kind: kind || 'success' };
         syncToast();
         setTimeout(function () {
             if (state.toast && Date.now() - state.toast.ts >= 2900) {
@@ -6670,38 +6791,17 @@
                 setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 return;
 
-            // --- v1.10: dashboard de leads enfriandose ---
-            case 'mark-done': {
-                // Marca el lead como "hecho hoy" en sesion y programa un toast de undo
-                // por 4 segundos. Si la AF ya tenia un undo activo de OTRA fila, lo
-                // sobreescribimos (clearTimeout previo + asignacion nueva). El lead
-                // anterior queda permanentemente marcado en sesion.
-                if (!id) return;
-                state.completedTodayIds.add(id);
-                state.undoToast = { leadId: id, expiresAt: Date.now() + 4000 };
-                if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
-                state.undoTimeoutId = setTimeout(function () {
-                    // Si el toast cambio de fila desde que se programo, no hacemos nada
-                    // (el setTimeout nuevo ya escribio sobre el state).
-                    state.undoToast = null;
-                    state.undoTimeoutId = null;
-                    rerenderContent();
-                }, 4000);
-                rerenderContent();
+            // --- v1.10: dashboard de leads enfriandose. v1.43: persistencia en backend ---
+            case 'mark-done':
+                // Botón "✓ Marcar hecho" de la tabla y del header del detalle (mismo handler).
+                //   Optimistic + POST /api/leads/{id}/followup-actions, revert si falla.
+                markFollowupDone(id);
                 return;
-            }
-            case 'undo-mark-done': {
-                if (state.undoToast) {
-                    state.completedTodayIds["delete"](state.undoToast.leadId);
-                    state.undoToast = null;
-                    if (state.undoTimeoutId) {
-                        clearTimeout(state.undoTimeoutId);
-                        state.undoTimeoutId = null;
-                    }
-                }
-                rerenderContent();
+            case 'undo-mark-done':
+                // "Deshacer" del toast (sin data-id -> usa el lead del toast) o "Hecho hoy" del
+                //   header del detalle (con data-id -> deshace ese lead). DELETE + revert si falla.
+                undoFollowupDone(id);
                 return;
-            }
             // v1.13: cambio de vista (chip) -> fetch al endpoint correspondiente. resetea filtros.
             case 'dash-set-view': {
                 if (!id || id === state.dashView) return;
