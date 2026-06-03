@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.43.1
+ * QIDA ASSISTANT v1.43.2
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,11 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.43.2 (BUG: el badge "Mensaje nuevo" NO se limpiaba al entrar al detalle desde Actividades; persistía incluso tras F5. Solo widget, sin tocar backend):
+ *   - ROOT CAUSE (H2): markLeadRead buscaba la fila en dashRows por igualdad EXACTA de id, pero la tabla manda display_id ("L124260") y "Ir al lead" de Actividades manda lead_id numérico (124260). El lookup "L124260" === "124260" fallaba -> early return -> ni optimistic ni POST /read -> badge quedaba (y tras F5, porque el backend nunca recibía el POST). La tabla Sugerencias/Leads sí funcionaba (mismo id).
+ *   - FIX A: markLeadRead normaliza a id NUMÉRICO (toNumericLeadId) y SIEMPRE pega POST /read en modo real, para CUALQUIER path (select-lead es el único entry point). FIX B: al "Volver" se re-fetchea la vista activa (loadDashView, solo real).
+ *   - FIX C (race POST /read vs re-fetch): Set state.leadsLeidosEnSesion; liveDashRows apaga el badge de esos leads POR ENCIMA del has_unread del backend. FIX D: si POST /read falla, revierte la marca + toast de error (estado honesto).
  *
  * Cambios v1.43.1 (viewers: Marina y Alba pueden ver el switcher "Ver como"; solo gating de UI, sin tocar backend/AFs):
  *   - ADMIN_EMAILS_DEFAULT suma 'marina.costa@qida.es' y 'alba.alvarez@qida.es'. Ese array es el gate
@@ -1453,7 +1458,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.43.1';
+    var VERSION = '1.43.2';
     var CONFIG = null;
 
     // ============================================================
@@ -1962,6 +1967,9 @@
         //   undoToast / undoTimeoutId: estado del toast inferior "Marcado como hecho · Deshacer".
         //   Solo el ultimo "Marcar hecho" tiene undo activo (los anteriores quedan permanentes en sesion).
         completedTodayIds: new Set(),
+        // v1.43.2: leads cuyo detalle abrió la AF en esta sesión (Set<id numérico>). liveDashRows
+        //   apaga su badge por encima del has_unread del backend (FIX C). Se vacía solo en page reload.
+        leadsLeidosEnSesion: new Set(),
         undoToast: null,                // { leadId, expiresAt } | null
         undoTimeoutId: null,            // ID del setTimeout activo (o null)
 
@@ -3600,10 +3608,23 @@
         var rows = state.dashRows || [];
         var out = [];
         for (var i = 0; i < rows.length; i++) {
-            if (state.completedTodayIds && state.completedTodayIds.has(rows[i].id)) continue;
-            out.push(rows[i]);
+            var r = rows[i];
+            if (state.completedTodayIds && state.completedTodayIds.has(r.id)) continue;
+            // v1.43.2 (FIX C): si la AF ya abrió este lead en la sesión, apagamos el badge "Mensaje
+            //   nuevo" por encima del has_unread del backend (copia defensiva, no mutamos el cache).
+            if (r.hasNewMessage && leadLeidoEnSesion(r.id)) {
+                var copy = {}; for (var k in r) { if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k]; }
+                copy.hasNewMessage = false; copy.unreadMessagesCount = 0;
+                r = copy;
+            }
+            out.push(r);
         }
         return out;
+    }
+    // v1.43.2: true si el lead (cualquier formato de id) ya fue abierto en esta sesión.
+    function leadLeidoEnSesion(idLike) {
+        var n = toNumericLeadId(idLike);
+        return !!(n && state.leadsLeidosEnSesion && state.leadsLeidosEnSesion.has(n));
     }
 
     function matchesSegment(row, seg) {
@@ -5000,33 +5021,29 @@
         });
     }
 
-    // v1.42 (FIX 1+2): marca un lead como leído al abrir su detalle. Limpia el badge "Mensaje nuevo".
-    //   rowId = el data-id del DOM (= row.id = display_id). Dos efectos:
-    //   (1) OPTIMISTIC LOCAL: muta la fila en state.dashRows (hasNewMessage=false, count=0). El dashboard
-    //       NO se re-renderiza ahora (la AF ya se fue al detalle), pero al volver (back-to-dashboard) el
-    //       badge ya está apagado en el state -> desaparece de inmediato. Funciona en mock y real.
-    //   (2) FIRE-AND-FORGET (solo modo real): POST /api/leads/{lead_id}/read (X-AF-Email) -> 204. Persiste
-    //       last_read_at para que el badge tampoco vuelva tras un F5. No bloquea el render del detalle;
-    //       el error se loguea con console.warn (no rompe la UX si el POST falla).
+    // v1.43.2: marca un lead como leído al abrir su detalle. Se llama desde select-lead, que es el
+    //   ÚNICO punto de entrada al detalle (tabla Sugerencias/Leads e "Ir al lead" de Actividades).
+    //   rowId puede venir como display_id ("L124260", desde la tabla) o lead_id numérico (124260,
+    //   desde Actividades). Normalizamos a id numérico -> el flujo funciona sin importar el formato
+    //   (el bug previo: el lookup por igualdad exacta de string fallaba para el id numérico). Efectos:
+    //   (1) marca de sesión (state.leadsLeidosEnSesion): liveDashRows apaga el badge por ENCIMA del
+    //       has_unread del backend, así sobrevive al re-fetch del "Volver" (race POST /read vs GET).
+    //   (2) POST /api/leads/{id}/read (X-AF-Email, solo modo real) -> persiste last_read_at para que el
+    //       badge tampoco vuelva tras F5. Si falla (4xx/5xx/red): revierte la marca + toast de error.
     function markLeadRead(rowId) {
-        var rows = state.dashRows;
-        var row = null;
-        if (rows && rows.length) {
-            for (var i = 0; i < rows.length; i++) {
-                if (rows[i] && String(rows[i].id) === String(rowId)) { row = rows[i]; break; }
-            }
-        }
-        if (!row || !row.hasNewMessage) return;  // nada que limpiar -> no toques el state ni pegues al backend
-        // (1) optimistic local update
-        row.hasNewMessage = false;
-        row.unreadMessagesCount = 0;
-        // (2) persistir en backend (solo real; en mock no hay a quién pegarle)
-        if (!useRealApi()) return;
         var numericId = toNumericLeadId(rowId);
         if (!numericId) return;
+        // (1) marca de sesión (gana sobre el has_unread del backend en liveDashRows)
+        state.leadsLeidosEnSesion.add(numericId);
+        // (2) persistir en backend (solo real; en mock no hay a quién pegarle)
+        if (!useRealApi()) return;
         apiFetchJson('POST', '/api/leads/' + numericId + '/read', { noun: 'la marca de leído' })
             .catch(function (err) {
-                console.warn('[QIDA] POST /api/leads/' + numericId + '/read falló (no crítico):', (err && err.userMessage) || (err && err.message) || err);
+                // (FIX D) revertir la marca + avisar: el badge vuelve a verse (estado honesto).
+                state.leadsLeidosEnSesion.delete(numericId);
+                showToast('No pudimos marcar el mensaje como leído. El aviso seguirá visible.', 'error');
+                if (state.view === 'dashboard') rerenderContent();
+                console.warn('[QIDA] POST /api/leads/' + numericId + '/read falló (revertido):', (err && err.userMessage) || (err && err.message) || err);
             });
     }
 
@@ -6804,6 +6821,11 @@
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
                 setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                // v1.43.2 (FIX B): re-fetch de la vista activa para traer data fresca del backend al
+                //   volver. El badge de los leads leídos en sesión queda apagado por leadsLeidosEnSesion
+                //   (liveDashRows), así que la race POST /read vs re-fetch no reabre el badge. Solo real
+                //   (en mock no hay /me/leads; el Set + liveDashRows ya apaga el badge sin re-fetch).
+                if (useRealApi()) loadDashView(state.dashView, false);
                 return;
 
             // --- v1.10: dashboard de leads enfriandose. v1.43: persistencia en backend ---
