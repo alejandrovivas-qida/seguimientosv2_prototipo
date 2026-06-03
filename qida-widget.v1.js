@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.43.0
+ * QIDA ASSISTANT v1.43.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,16 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.43.1 (viewers: Marina y Alba pueden ver el switcher "Ver como"; solo gating de UI, sin tocar backend/AFs):
+ *   - ADMIN_EMAILS_DEFAULT suma 'marina.costa@qida.es' y 'alba.alvarez@qida.es'. Ese array es el gate
+ *     que usa isAdminUser() para mostrar la barra del switcher (los loaders no pasan CONFIG.adminEmails,
+ *     así que el fallback ADMIN_EMAILS_DEFAULT es la lista efectiva en prod). Ahora ellas ven el dropdown
+ *     y pueden "Ver como" Paloma/Ana (ya en IMPERSONATABLE_AFS).
+ *   - NO son AFs activas: su email no está en ACTIVE_AFS_JSON, así que sin impersonar el backend
+ *     responde 403 (mismo comportamiento que Alejandro). El enforcement de datos sigue 100% server-side
+ *     vía X-AF-Email. NO se tocó backend, ACTIVE_AFS_JSON, AF_WHITELIST ni IMPERSONATABLE_AFS.
+ *   Flag useRealAPI sin cambios. Solo qida-widget.v1.js.
  *
  * Cambios v1.43.0 ("Marcar hecho" persistente + badge "Nota"; respeta el principio rector — solo registra estado operativo, no genera mensajes):
  *   - [6] "Marcar hecho" ahora PERSISTE en backend (antes era solo estado de sesión, se perdía al recargar). markFollowupDone: optimistic (saca la fila + toast Deshacer 4s, igual que antes) + POST /api/leads/{id}/followup-actions { action:'done_today' } (X-AF-Email, solo modo real). Si el POST falla -> revierte (re-muestra el lead, cierra el toast undo) + toast de error. El backend pone effective_until=mañana 00:00 UTC: el lead sale de "Sugerencias para hoy" hoy y reaparece cuando el recompute decida el próximo follow-up. Override de READ, NO toca priority_score.
@@ -1443,7 +1453,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.43.0';
+    var VERSION = '1.43.1';
     var CONFIG = null;
 
     // ============================================================
@@ -1833,7 +1843,12 @@
     // ============================================================
     // Lista de admins. Sin Next.js (widget vanilla en Blob) no hay NEXT_PUBLIC_*: se configura
     //   via CONFIG.adminEmails en QidaAssistant.init(...) (string CSV o array), con fallback.
-    var ADMIN_EMAILS_DEFAULT = ['alejandro.vivas@qida.es'];
+    // v1.43.1: Marina y Alba sumadas como VIEWERS (ven el switcher e impersonan a Paloma/Ana para
+    //   QA/training/support). NO son AFs activas: su email NO está en ACTIVE_AFS_JSON, así que sin
+    //   impersonar el backend les responde 403 (igual que a Alejandro). Este gate es solo de UI
+    //   (isAdminUser -> visibilidad del switcher); el enforcement real de datos sigue server-side
+    //   vía X-AF-Email. No se tocó ACTIVE_AFS_JSON ni IMPERSONATABLE_AFS.
+    var ADMIN_EMAILS_DEFAULT = ['alejandro.vivas@qida.es', 'marina.costa@qida.es', 'alba.alvarez@qida.es'];
     // AFs impersonables (hardcode v1). TODO[afs]: reemplazar por fetch a GET /api/admin/afs.
     var IMPERSONATABLE_AFS = [
         { key: 'ana_pinilla', email: 'ana.pinilla@qida.es', display_name: 'Ana Pinilla' },
