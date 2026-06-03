@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.41.0
+ * QIDA ASSISTANT v1.42.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,10 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.42.0 (BUG: el badge "Mensaje nuevo" no se limpiaba al leer; solo cambia la fuente del booleano):
+ *   - FIX 1+2: al entrar al detalle (select-lead) -> markLeadRead: optimistic clear local (hasNewMessage=false, el badge desaparece al volver) + POST /api/leads/{id}/read (X-AF-Email, fire-and-forget, solo modo real; catch con console.warn).
+ *   - FIX 3: el badge ahora lee has_unread (se limpia con last_read_at) en vez de has_new_inbound (nunca se limpiaba). has_new_inbound se preserva en adaptLeadRow por compat (backend lo sigue enviando).
  *
  * Cambios v1.41.0 (3 fixes UX de confianza visual; solo widget, sin tocar backend/flag/switcher):
  *   - FIX 1 (loading state, "el panel parecía roto cuando solo cargaba"): el mecanismo de carga
@@ -1432,7 +1436,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.41.0';
+    var VERSION = '1.42.0';
     var CONFIG = null;
 
     // ============================================================
@@ -4945,6 +4949,36 @@
         });
     }
 
+    // v1.42 (FIX 1+2): marca un lead como leído al abrir su detalle. Limpia el badge "Mensaje nuevo".
+    //   rowId = el data-id del DOM (= row.id = display_id). Dos efectos:
+    //   (1) OPTIMISTIC LOCAL: muta la fila en state.dashRows (hasNewMessage=false, count=0). El dashboard
+    //       NO se re-renderiza ahora (la AF ya se fue al detalle), pero al volver (back-to-dashboard) el
+    //       badge ya está apagado en el state -> desaparece de inmediato. Funciona en mock y real.
+    //   (2) FIRE-AND-FORGET (solo modo real): POST /api/leads/{lead_id}/read (X-AF-Email) -> 204. Persiste
+    //       last_read_at para que el badge tampoco vuelva tras un F5. No bloquea el render del detalle;
+    //       el error se loguea con console.warn (no rompe la UX si el POST falla).
+    function markLeadRead(rowId) {
+        var rows = state.dashRows;
+        var row = null;
+        if (rows && rows.length) {
+            for (var i = 0; i < rows.length; i++) {
+                if (rows[i] && String(rows[i].id) === String(rowId)) { row = rows[i]; break; }
+            }
+        }
+        if (!row || !row.hasNewMessage) return;  // nada que limpiar -> no toques el state ni pegues al backend
+        // (1) optimistic local update
+        row.hasNewMessage = false;
+        row.unreadMessagesCount = 0;
+        // (2) persistir en backend (solo real; en mock no hay a quién pegarle)
+        if (!useRealApi()) return;
+        var numericId = toNumericLeadId(rowId);
+        if (!numericId) return;
+        apiFetchJson('POST', '/api/leads/' + numericId + '/read', { noun: 'la marca de leído' })
+            .catch(function (err) {
+                console.warn('[QIDA] POST /api/leads/' + numericId + '/read falló (no crítico):', (err && err.userMessage) || (err && err.message) || err);
+            });
+    }
+
     // ---- ENDPOINT 1: draft-variants (admin, NO requiere X-AF-Email) ----
     // GET -> { af_key, is_default, variants:[{name,length,tone_style}] } (shape documentada).
     function fetchDraftVariants(afKey) {
@@ -5096,7 +5130,13 @@
             temperature: api.temperature || '',
             daysWithoutTouch: (api.days_since_last_contact != null ? api.days_since_last_contact : 0),
             lastTouchDate: lastDate,
-            hasNewMessage: !!api.has_new_inbound,
+            // v1.42 (FIX 3): la fuente del badge "Mensaje nuevo" pasa de has_new_inbound a has_unread.
+            //   has_unread = (hay inbound) AND (sin leer o inbound posterior a last_read_at) -> SE LIMPIA al
+            //   abrir el detalle (el backend setea last_read_at via POST /read). has_new_inbound nunca se
+            //   limpiaba -> el badge quedaba verde tras leer (bug reportado). has_new_inbound se PRESERVA
+            //   abajo por compat (el backend lo sigue enviando), aunque el render ya no lo lee.
+            hasNewMessage: !!api.has_unread,
+            hasNewInbound: !!api.has_new_inbound,  // v1.42: preservado por compat; NO lo lee el render (ver hasNewMessage)
             unreadMessagesCount: api.unread_messages_count || 0,  // el backend no lo manda -> 0 (badge sin contador)
             // urgent (bool) -> 'alta' para que renderEstadoCell muestre el badge "Urgente".
             urgency: api.urgent ? 'alta' : 'baja',
@@ -6597,6 +6637,10 @@
                 return;
 
             case 'select-lead':
+                // v1.42 (FIX 1+2): marcar leído ANTES del setState. Optimistic clear del badge
+                //   "Mensaje nuevo" en state.dashRows + POST /read fire-and-forget (solo real).
+                //   Usamos `id` (data-id del DOM = row.id = display_id), no leadIdNum.
+                markLeadRead(id);
                 // v1.6: inicializamos draftMessage='' y attachmentsExpanded=false. NO tocar aiChatHistory.
                 state.__waNeedsScroll = true;
                 state.__aiNeedsScroll = true;  // v1.9.1: scroll inicial al fondo del chat IA si hay historial.
