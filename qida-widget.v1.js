@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.43.2
+ * QIDA ASSISTANT v1.43.3
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,10 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.43.3 (REGRESIÓN de v1.43.2: al leer un lead desde el dashboard, el lead DESAPARECÍA de la tabla en vez de solo quitarse el badge. Solo widget):
+ *   - CAUSA: liveDashRows ponía hasNewMessage=false para los leídos en sesión, pero buildDashFeed usa hasNewMessage para el orden "nuevos al tope", el filtro "solo nuevos" y el slice MAX_VISIBLE=10 -> el lead caía a "resto" y se cortaba de la lista. Además el re-fetch al volver (FIX B v1.43.2) traía has_unread=false y reproducía lo mismo.
+ *   - FIX: leadsLeidosEnSesion ahora marca SOLO `_leidoEnSesion` (apaga el badge en renderEstadoCell + lo excluye del contador del pill); NO toca hasNewMessage, así el lead se queda en su sitio. Se revierte el re-fetch al volver (back-to-dashboard) para no reordenar/cortar el lead recién leído. completedTodayIds ("Marcar hecho") SIGUE excluyendo del dashboard (correcto). markLeadRead (Set + POST /read) y markFollowupDone (completedTodayIds + POST /followup-actions) siguen siendo cosas distintas.
  *
  * Cambios v1.43.2 (BUG: el badge "Mensaje nuevo" NO se limpiaba al entrar al detalle desde Actividades; persistía incluso tras F5. Solo widget, sin tocar backend):
  *   - ROOT CAUSE (H2): markLeadRead buscaba la fila en dashRows por igualdad EXACTA de id, pero la tabla manda display_id ("L124260") y "Ir al lead" de Actividades manda lead_id numérico (124260). El lookup "L124260" === "124260" fallaba -> early return -> ni optimistic ni POST /read -> badge quedaba (y tras F5, porque el backend nunca recibía el POST). La tabla Sugerencias/Leads sí funcionaba (mismo id).
@@ -1458,7 +1462,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.43.2';
+    var VERSION = '1.43.3';
     var CONFIG = null;
 
     // ============================================================
@@ -3610,11 +3614,14 @@
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i];
             if (state.completedTodayIds && state.completedTodayIds.has(r.id)) continue;
-            // v1.43.2 (FIX C): si la AF ya abrió este lead en la sesión, apagamos el badge "Mensaje
-            //   nuevo" por encima del has_unread del backend (copia defensiva, no mutamos el cache).
+            // v1.43.3 (FIX): si la AF ya abrió este lead en la sesión, marcamos SOLO _leidoEnSesion
+            //   para apagar el badge "Mensaje nuevo" en el render. NO tocamos hasNewMessage: lo usan
+            //   los filtros/orden "nuevos primero"/slice de buildDashFeed; mutarlo a false sacaba el
+            //   lead del grupo "nuevos" y lo hacía DESAPARECER de la lista (bug v1.43.2). El lead se
+            //   queda donde estaba; solo se le quita el badge.
             if (r.hasNewMessage && leadLeidoEnSesion(r.id)) {
                 var copy = {}; for (var k in r) { if (Object.prototype.hasOwnProperty.call(r, k)) copy[k] = r[k]; }
-                copy.hasNewMessage = false; copy.unreadMessagesCount = 0;
+                copy._leidoEnSesion = true;
                 r = copy;
             }
             out.push(r);
@@ -3969,7 +3976,8 @@
     //   Solo visible si N>0. Filtra la tabla a esos leads (AND con el segmento activo).
     function renderWhatsappPill(base) {
         var n = 0;
-        for (var i = 0; i < base.length; i++) if (base[i].hasNewMessage) n++;
+        // v1.43.3: no contamos los leídos en sesión (su badge está apagado) -> el pill no miente.
+        for (var i = 0; i < base.length; i++) if (base[i].hasNewMessage && !base[i]._leidoEnSesion) n++;
         if (n === 0) return '';
         var label = n + (n === 1 ? ' lead con mensaje nuevo' : ' leads con mensaje nuevo');
         return '<button class="qida-wa-pill' + (state.dashOnlyNew ? ' active' : '') + '" data-action="dash-toggle-new">'
@@ -4059,7 +4067,8 @@
     //   "Urgente" (solo urgency alta) y/o ámbar "Pendiente" (1+ actividad pendiente). Vacía si no aplica ninguno.
     function renderEstadoCell(row) {
         var badges = '';
-        if (row.hasNewMessage) {
+        // v1.43.3: _leidoEnSesion (leído en esta sesión) apaga SOLO el badge; el lead sigue en la lista.
+        if (row.hasNewMessage && !row._leidoEnSesion) {
             var cnt = (row.unreadMessagesCount > 1) ? ' ' + row.unreadMessagesCount : '';
             badges += '<span class="qida-dash-badge qida-dash-badge-new"><span class="qida-dash-badge-dot"></span>Mensaje nuevo' + cnt + '</span>';
         }
@@ -6821,11 +6830,11 @@
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
                 setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
-                // v1.43.2 (FIX B): re-fetch de la vista activa para traer data fresca del backend al
-                //   volver. El badge de los leads leídos en sesión queda apagado por leadsLeidosEnSesion
-                //   (liveDashRows), así que la race POST /read vs re-fetch no reabre el badge. Solo real
-                //   (en mock no hay /me/leads; el Set + liveDashRows ya apaga el badge sin re-fetch).
-                if (useRealApi()) loadDashView(state.dashView, false);
+                // v1.43.3: NO re-fetch al volver (revierte FIX B de v1.43.2). El re-fetch traía
+                //   has_unread fresco y, por el orden "nuevos al tope" + slice MAX_VISIBLE de
+                //   buildDashFeed, el lead recién leído caía fuera de la lista (DESAPARECÍA). El badge
+                //   ya se apaga vía leadsLeidosEnSesion sin re-fetch; tras F5 la persistencia la da el
+                //   POST /read (has_unread=false al recargar). El refresh manual sigue disponible.
                 return;
 
             // --- v1.10: dashboard de leads enfriandose. v1.43: persistencia en backend ---
