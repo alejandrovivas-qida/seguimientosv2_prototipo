@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.43.3
+ * QIDA ASSISTANT v1.44.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,11 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.44.0 (2026-06-04 — Audios WhatsApp end-to-end: reproductor de audios recibidos + grabación de notas de voz; respeta el principio rector — la AF elige enviar, el widget no genera contenido):
+ *   - Reproductor inline para audios recibidos (audio/ogg) servidos desde el Blob vía attachment_blob_url.
+ *   - Botón 🎙️ para grabar y enviar notas de voz con MediaRecorder (.qida-wa-voice).
+ *   - Mic deshabilitado con tooltip en browsers sin soporte OGG/Opus (fallback graceful).
  *
  * Cambios v1.43.3 (REGRESIÓN de v1.43.2: al leer un lead desde el dashboard, el lead DESAPARECÍA de la tabla en vez de solo quitarse el badge. Solo widget):
  *   - CAUSA: liveDashRows ponía hasNewMessage=false para los leídos en sesión, pero buildDashFeed usa hasNewMessage para el orden "nuevos al tope", el filtro "solo nuevos" y el slice MAX_VISIBLE=10 -> el lead caía a "resto" y se cortaba de la lista. Además el re-fetch al volver (FIX B v1.43.2) traía has_unread=false y reproducía lo mismo.
@@ -1462,7 +1467,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.43.3';
+    var VERSION = '1.44.0';
     var CONFIG = null;
 
     // ============================================================
