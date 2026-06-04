@@ -4919,7 +4919,14 @@
         return '';
     }
 
-    var WA_RECORD_MIME_TYPES = ['audio/ogg;codecs=opus', 'audio/ogg', 'audio/mpeg'];
+    var WA_RECORD_MIME_TYPES = [
+        'audio/ogg;codecs=opus',
+        'audio/ogg',
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/mpeg'
+    ];
 
     function audioBaseMime(mimeType) {
         return String(mimeType || '').split(';')[0].toLowerCase();
@@ -4947,13 +4954,17 @@
         }
         var mimeType = chooseWaRecordMimeType(MediaRecorderCtor);
         if (!mimeType) {
-            return { ok: false, mimeType: null, reason: 'Tu navegador no soporta ogg/oga/mp3 para notas de voz.' };
+            return { ok: false, mimeType: null, reason: 'Tu navegador no soporta ogg/webm/mp4/mp3 para notas de voz.' };
         }
         return { ok: true, mimeType: mimeType, reason: '' };
     }
 
     function voiceFilenameForMime(mimeType) {
-        return audioBaseMime(mimeType) === 'audio/mpeg' ? 'nota-voz.mp3' : 'nota-voz.ogg';
+        var base = audioBaseMime(mimeType);
+        if (base === 'audio/webm' || base === 'video/webm') return 'nota-voz.webm';
+        if (base === 'audio/mp4' || base === 'audio/aac' || base === 'audio/x-m4a') return 'nota-voz.m4a';
+        if (base === 'audio/mpeg' || base === 'audio/mp3') return 'nota-voz.mp3';
+        return 'nota-voz.ogg';
     }
 
     function stopWaStream(stream) {
@@ -7186,6 +7197,32 @@
         }
     }
 
+    function safeSetContentHtml(content, html) {
+        if (!content) return;
+        var doc = content.ownerDocument || document;
+        var active = doc && doc.activeElement;
+        if (active && content.contains && content.contains(active) && typeof active.blur === 'function') {
+            try { active.blur(); } catch (e0) {}
+        }
+        try {
+            content.innerHTML = html;
+            return;
+        } catch (err) {
+            var msg = String((err && err.message) || '');
+            var isNotFound = err && (err.name === 'NotFoundError' || msg.indexOf('node to be removed') > -1 || msg.indexOf('no longer a child') > -1);
+            if (!isNotFound) throw err;
+            var tpl = doc.createElement('template');
+            tpl.innerHTML = html;
+            var frag = tpl.content.cloneNode(true);
+            if (typeof content.replaceChildren === 'function') {
+                content.replaceChildren(frag);
+            } else {
+                while (content.firstChild) content.removeChild(content.firstChild);
+                content.appendChild(frag);
+            }
+        }
+    }
+
     function rerenderContent() {
         var content = document.getElementById('qida-content');
         if (!content) return;
@@ -7194,7 +7231,7 @@
         if (state.leaderDash && state.leaderDash.__charts) {
             destroyLeaderCharts();
         }
-        content.innerHTML = renderContent();
+        safeSetContentHtml(content, renderContent());
         syncShellSizing();
         syncShellHeader();
         syncAfSwitcher();   // v1.19: barra del AF switcher (solo admins)
@@ -8117,10 +8154,17 @@
             var caret = null;
             try { caret = node.selectionStart; } catch (e0) {}
             rerenderContent();
-            var ni = document.getElementById('qida-dash-search');
-            if (ni) {
-                ni.focus();
-                if (caret != null) { try { ni.setSelectionRange(caret, caret); } catch (e1) {} }
+            var restoreDashSearchFocus = function () {
+                var ni = document.getElementById('qida-dash-search');
+                if (ni) {
+                    ni.focus();
+                    if (caret != null) { try { ni.setSelectionRange(caret, caret); } catch (e1) {} }
+                }
+            };
+            if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+                window.requestAnimationFrame(restoreDashSearchFocus);
+            } else {
+                setTimeout(restoreDashSearchFocus, 0);
             }
         } else if (input === 'leader-filter-loc') {
             // v1.12: filtro localidad. Rerender completo - KPIs/donut/tabla se rebuilden con
