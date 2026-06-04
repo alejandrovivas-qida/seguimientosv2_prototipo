@@ -5602,7 +5602,7 @@
     //   endpoint (GET /api/me/activities via fetchActivitiesList, v1.24), no /api/me/leads.
     var DASH_VIEW_QUERY = {
         suggestions: 'status=overdue,due_today&limit=20&sort=priority_score',
-        leads:       'limit=200'
+        leads:       'limit=500&sort=priority_score'  // v1.45: tab "Leads" = cartera activa COMPLETA (sin filtro de status, limit alto). 'suggestions' SIGUE filtrando overdue/due_today (lógica del feature).
     };
 
     // GET /api/me/dashboard -> metricas PORTFOLIO-WIDE del AF:
