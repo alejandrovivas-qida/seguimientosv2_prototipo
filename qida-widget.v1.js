@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.45.0
+ * QIDA ASSISTANT v1.47.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,30 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.47.0 (2026-06-04 — Tab Actividades desde Odoo directo + rediseño tabla + cruce /api/me/leads):
+ *   - Tab Actividades: lectura DIRECTA de Odoo (mail.activity/web_search_read, same-origin via
+ *     odooCall) en vez de GET /api/me/activities (snapshot Postgres con lag). Real-time. El endpoint
+ *     viejo se conserva como fallback/consumer de dashboards de líderes (fetchActivitiesList intacto).
+ *   - uid: _odooUid se hidrata de odooSession (AF viendo lo suyo); en modo admin "Ver como", se
+ *     resuelve por email contra IMPERSONATABLE_AFS (+odoo_user_id: ana_pinilla 557, paloma_galvez 66).
+ *   - Cruce con /api/me/leads -> state.leadById (key = lead_id numérico, toNumericLeadId puentea
+ *     display_id 'L#####' <-> res_id). Alimenta columnas TEMP y SIN CONTACTO (mismos componentes que
+ *     Sugerencias: renderTempCell/renderDiasCell). Sin leadData -> "—". Fallo de /api/me/leads degrada
+ *     a "—" (no fatal); fallo de Odoo -> error + Reintentar.
+ *   - Rediseño tabla (7 cols): eliminada TIPO; CONTACTO unificado (res_name parseado: nombre + ref
+ *     L##### chico, línea 2 "cuida a su {parentesco}"); TAREA = summary || stripHtml(note) ||
+ *     "Sin descripción"; ESTADO semáforo (Atrasada rojo / Hoy ámbar / Próxima neutro); FECHA LÍMITE
+ *     (roja si atrasada); zebra + hover.
+ *   - Orden: atrasadas SIEMPRE arriba (asc por deadline), luego hoy y próximas (asc). Chips temporales
+ *     (Todas/Hoy/Esta semana/Este mes) filtran SOLO las no-atrasadas (pedido de Eva).
+ *   - Buscador (lupa) en Actividades y Leads (familia / L##### / teléfono), client-side, case-insensitive,
+ *     query compartida entre tabs. Sugerencias sin buscador.
+ *   - Actividades es el TAB DEFAULT del modal (al abrir y al reabrir tras cerrar).
+ *   - Defaults que tomé: (a) ESTADO = solo semáforo de deadline (sin badges de lead) [decisión UX];
+ *     (b) buscador en Leads + Actividades, no en Sugerencias [decisión UX]; (c) stripHtml usa <template>
+ *     inerte (no el div del spec) por seguridad, mismo output; (d) uid en modo admin se resuelve por
+ *     state.viewingAsEmail (no activeAfKey, que no existe) -> trivial, no fue blocker.
  *
  * Cambios v1.45.0 (2026-06-04 — llamadas Aircall intercaladas en el timeline de conversación del lead; convive con audios v1.44.0 y el resto de features):
  *   - Backend (PR feat/calls-in-conversation) mergea llamadas Aircall con WhatsApp en
@@ -1483,7 +1507,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.45.0';
+    var VERSION = '1.47.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1507,6 +1531,10 @@
     //   degradar a false si odooSession() falla (fallback graceful a modo mock).
     var IS_ODOO_MODE = false;
     var _baseContext = {};
+    // v1.47: uid (res.users.id) de la sesion Odoo logueada. Se hidrata en init desde
+    //   odooSession().result.uid. Es el user_id que usa fetchOdooActivities para traer las
+    //   actividades de la AF logueada (cuando NO esta impersonando). null hasta hidratar / si falla.
+    var _odooUid = null;
     // v1.12: whitelist de emails con acceso al panel de lideres. _isLeader se setea en
     //   init() comparando sess.username (modo Odoo) contra LEADER_EMAILS. En modo dev
     //   local (!IS_ODOO_MODE desde el inicio) se setea true automatico para iterar la UI.
@@ -1779,6 +1807,19 @@
         { activity_id: 8805, lead_id: 123051, summary: 'Recordatorio: confirmar fecha de arranque',    note: null,                                       activity_type_id: 7, activity_type_label: 'Seguimiento general', deadline_date: '2026-06-04', automated: true,  create_date: '2026-06-01', family_name: 'Familia Recio del Campo',  patient_name: 'Mercedes' }
     ];
 
+    // v1.47: fixture en shape RAW de Odoo (mail.activity/web_search_read) para smoke local sin
+    //   sesion erp.qida.es. Pasa por mapOdooActivity (mismo path que real) -> el render es identico.
+    //   res_id matchea ids de MOCK_LEADS_RESPONSE para ejercitar el cruce (TEMP / SIN CONTACTO).
+    //   Casos cubiertos: overdue/today/planned, summary=false (Odoo manda false en char vacio),
+    //   note HTML vs false, res_name con/sin "(...)".
+    var MOCK_ODOO_ACTIVITIES = [
+        { id: 9101, res_id: 122581, res_name: 'L122581 Martinez Ruiz (jueves 13,30)', activity_type_id: [3, 'Llamada'],             summary: 'Llamar para resolver dudas sobre el cuidador', note: '<p>Prefiere por la tarde, despues de las 17h</p>', date_deadline: '2026-06-02', state: 'overdue', user_id: [557, 'Ana Pinilla'], create_date: '2026-05-28 09:12:00' },
+        { id: 9102, res_id: 122131, res_name: 'L122131 Roge Barcelo',                  activity_type_id: [4, 'To Do'],               summary: false,                                          note: false,                                              date_deadline: '2026-06-03', state: 'overdue', user_id: [557, 'Ana Pinilla'], create_date: '2026-05-30 10:00:00' },
+        { id: 9103, res_id: 121399, res_name: 'L121399 Ortiz Pica (alta hospitalaria)', activity_type_id: [1, 'Email'],              summary: 'Enviar presupuesto revisado',                  note: false,                                              date_deadline: '2026-06-04', state: 'today',   user_id: [557, 'Ana Pinilla'], create_date: '2026-05-29 14:20:00' },
+        { id: 9104, res_id: 121708, res_name: 'L121708 Campos Rivera',                  activity_type_id: [7, 'Seguimiento general'], summary: false,                                          note: '<p>La hija organiza la agenda familiar</p>',       date_deadline: '2026-06-06', state: 'planned', user_id: [557, 'Ana Pinilla'], create_date: '2026-06-01 08:00:00' },
+        { id: 9105, res_id: 120912, res_name: 'L120912 Heredia Solis',                  activity_type_id: [7, 'Seguimiento general'], summary: 'Recordatorio: confirmar fecha de arranque',    note: false,                                              date_deadline: '2026-06-10', state: 'planned', user_id: [557, 'Ana Pinilla'], create_date: '2026-06-01 08:00:00' }
+    ];
+
     // Todos los leads del AF (cartera completa, 16). Vocabulario urgency del detalle. Incluye
     //   pausa e historico. WhatsApp nuevo repartido por temperaturas (caliente, pausa, frio).
     var MOCK_LEADS_RESPONSE = [
@@ -1884,9 +1925,12 @@
     //   vía X-AF-Email. No se tocó ACTIVE_AFS_JSON ni IMPERSONATABLE_AFS.
     var ADMIN_EMAILS_DEFAULT = ['alejandro.vivas@qida.es', 'marina.costa@qida.es', 'alba.alvarez@qida.es'];
     // AFs impersonables (hardcode v1). TODO[afs]: reemplazar por fetch a GET /api/admin/afs.
+    // v1.47: odoo_user_id (res.users.id) sumado por AF para fetchOdooActivities en modo admin
+    //   (cuando un admin "Ve como" una AF, se consulta mail.activity con ESE user_id). Hardcode v1;
+    //   migrar a GET /api/admin/afs cuando exista. Marina/Alba (viewers) NO estan aca -> sin uid.
     var IMPERSONATABLE_AFS = [
-        { key: 'ana_pinilla', email: 'ana.pinilla@qida.es', display_name: 'Ana Pinilla' },
-        { key: 'paloma_galvez', email: 'paloma.galvez@qida.es', display_name: 'Paloma Gálvez' }  // v1.38
+        { key: 'ana_pinilla', email: 'ana.pinilla@qida.es', display_name: 'Ana Pinilla', odoo_user_id: 557 },
+        { key: 'paloma_galvez', email: 'paloma.galvez@qida.es', display_name: 'Paloma Gálvez', odoo_user_id: 66 }  // v1.38
     ];
     var AF_SWITCH_STORAGE_KEY = 'qida_viewing_as';
 
@@ -2010,7 +2054,7 @@
         //   dashFiltersExpanded: bool del panel de chips de segmento.
         //   dashOnlyNew: filtro del pill WhatsApp (hasNewMessage), se combina (AND) con dashSegment.
         //   Se resetean en closeModal.
-        dashView: 'suggestions',
+        dashView: 'activities',         // v1.47: tab default del modal = Actividades (antes 'suggestions').
         dashRows: null,
         dashLoading: false,
         dashError: null,                // v1.22: mensaje de error del fetch del dashboard (flag on). null = sin error.
@@ -2018,6 +2062,11 @@
         dashSegment: null,              // null | 'caliente' | 'templado' | 'frio' | 'pausa' | 'urgente' | 'historico'
         dashFiltersExpanded: false,
         dashOnlyNew: false,
+        // v1.47: buscador compartido (tabs Leads + Actividades) + chips temporales (solo Actividades)
+        //   + cache del cruce con /api/me/leads (lead_id numérico -> leadRow). Se resetean en closeModal.
+        dashSearchQuery: '',
+        dashDateRange: 'all',           // 'all' | 'today' | 'week' | 'month' (chips de Actividades)
+        leadById: null,                 // { [lead_id numérico]: leadRow } o null (sin cruce todavía)
 
         // Detail state
         // v1.6: state.activePanel y state.editingTemp eliminados (no hay tabs ni temp editable
@@ -2280,14 +2329,22 @@
     };
     var DashboardService = {
         fetchViewSync: function (view) {
+            // v1.47: 'activities' primer-paint sincrono (mock) -> shape Odoo mapeado + leadById
+            //   construido sync desde la cartera mock (asi TEMP/SIN CONTACTO salen ya enriquecidas).
+            if (view === 'activities') {
+                state.leadById = indexLeadsById(MOCK_LEADS_RESPONSE);
+                return MOCK_ODOO_ACTIVITIES.map(mapOdooActivity);
+            }
             return (DASH_MOCKS[view] || MOCK_SUGGESTIONS_RESPONSE).slice();
         },
         fetchView: function (view) {
             var self = this;
-            // v1.22/v1.24: flag on -> backend real. 'activities' -> GET /api/me/activities;
-            //   'suggestions'/'leads' -> GET /api/me/leads. flag off -> mock con simulateLatency.
+            // v1.47: 'activities' ahora lee DIRECTO de Odoo (mail.activity) + cruza /api/me/leads.
+            //   fetchActivitiesView maneja real (IS_ODOO_MODE) y mock internamente -> NO depende de
+            //   useRealApi (ese flag gobierna solo /api/me/leads). YA NO usa GET /api/me/activities.
+            if (view === 'activities') return fetchActivitiesView();
+            // v1.22: 'suggestions'/'leads' -> GET /api/me/leads (flag on). flag off -> mock + latencia.
             if (useRealApi()) {
-                if (view === 'activities') return fetchActivitiesList();
                 if (DASH_VIEW_QUERY[view]) return fetchLeadsList(view);
             }
             return simulateLatency(180, 360).then(function () { return self.fetchViewSync(view); });
@@ -2466,6 +2523,22 @@
         }
     }
 
+    // ---- Plano: strip de TODO el HTML -> texto (para la columna TAREA de Actividades) ----
+    // v1.47: el campo note de mail.activity es HTML; en la celda TAREA queremos texto plano
+    //   (no markup). Usa un <template> INERTE (su content vive en un documento sin browsing
+    //   context -> NO dispara cargas de img/onerror ni ejecuta scripts). Fallback regex si
+    //   el parse falla. NO confundir con sanitizeOdooHtml (esa preserva tags permitidos).
+    function stripHtml(html) {
+        if (!html) return '';
+        try {
+            var t = document.createElement('template');
+            t.innerHTML = String(html);
+            return (t.content.textContent || '').replace(/\s+/g, ' ').trim();
+        } catch (e) {
+            return String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+    }
+
     // ---- Listas explicitas de fields (NUNCA usar fields:[] que descarga todo) ----
     // NOTA sobre 'chronich_illness': typo del modelo Odoo (sic). NO corregir.
     // v1.41 (FIX 2): city / cohabitants_number / prescriber_id agregados (la "DEUDA" documentada en
@@ -2575,6 +2648,30 @@
             responsable: tName(o.user_id) || '',
             assignee: tName(o.user_id) || '',
             done: false
+        };
+    }
+
+    // v1.47: mapper de mail.activity (web_search_read) -> shape interno del tab Actividades.
+    //   DISTINTO de mapActivity (ese alimenta "Próximas actividades" del detalle del lead, sin
+    //   res_id/res_name). Aca SI necesitamos res_id (numerico, para "Ir al lead" + cruce con
+    //   /api/me/leads) y res_name ("L##### Familia (...)" para la columna CONTACTO). Odoo manda
+    //   `false` en char vacios -> normalizamos a ''. note queda HTML CRUDO: se limpia con stripHtml
+    //   al render (la celda TAREA es texto plano, no markup). state ya viene de Odoo
+    //   (overdue|today|planned); fallback derivado por si faltara.
+    function mapOdooActivity(r) {
+        r = r || {};
+        return {
+            id: r.id,
+            leadId: r.res_id,
+            leadName: r.res_name || '',
+            typeLabel: tName(r.activity_type_id) || '',
+            summary: r.summary || '',
+            note: r.note || '',
+            deadlineDate: r.date_deadline || null,
+            state: r.state || activityStateFromDeadline(r.date_deadline),
+            assigneeId: tId(r.user_id),
+            assigneeName: tName(r.user_id) || '',
+            createDate: r.create_date || null
         };
     }
 
@@ -3381,9 +3478,15 @@
                v1.25 (ISSUE E): renombradas .qida-act-* -> .qida-actv-* para NO colisionar con las
                filas flex .qida-act-row de "Proximas actividades" del detalle (esa colision hacia
                que la grid pisara el flex y la fecha se saliera del div). */
-            '.qida-actv-header,.qida-actv-row{display:grid;grid-template-columns:minmax(150px,1.8fr) minmax(90px,1fr) minmax(170px,2.4fr) 104px minmax(120px,1.3fr) 116px;gap:14px;align-items:center;}',
+            /* v1.47: 7 columnas (Contacto · Tarea · Temp · Sin contacto · Estado · Fecha · Acción).
+               Eliminada TIPO; sumadas TEMP + SIN CONTACTO (cruce /api/me/leads) + ESTADO semáforo. */
+            '.qida-actv-header,.qida-actv-row{display:grid;grid-template-columns:minmax(150px,1.9fr) minmax(150px,2.1fr) 104px 84px 96px 84px 116px;gap:14px;align-items:center;}',
             '.qida-actv-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
             '.qida-actv-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);}',
+            /* v1.47: zebra sutil + hover (hover DEBE ir después de la zebra para ganar a igual especificidad). */
+            '.qida-actv-row:nth-child(even){background:#FAFAFA;}',
+            '.qida-actv-row:hover{background:#F3F4F6;}',
+            '.qida-actv-row:last-child{border-bottom:0;}',
             /* v1.43: la tarea es flex para que el badge "Nota" no se recorte con el ellipsis
                del título (antes era un nowrap que clipaba el indicador en títulos largos). */
             '.qida-actv-task{display:flex;align-items:center;gap:6px;min-width:0;}',
@@ -3394,7 +3497,25 @@
             '.qida-actv-row-actions{display:flex;justify-content:flex-end;}',
             '.qida-actv-goto{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
             '.qida-actv-goto:hover{background:var(--s50);}',
-            '@media (max-width:1100px){.qida-actv-header,.qida-actv-row{grid-template-columns:minmax(130px,1.6fr) minmax(160px,2.4fr) 96px minmax(110px,1.2fr) 110px;}.qida-actv-header > div:nth-child(2){display:none;}.qida-actv-patient{display:none;}}',
+            /* v1.47: en angosto ocultamos TEMP (col 3) y SIN CONTACTO (col 4) -> 5 cols. Scoped a
+               .qida-actv-* para NO afectar la tabla de Leads (.qida-dash-row usa .qida-cell-temp/dias). */
+            '@media (max-width:1100px){.qida-actv-header,.qida-actv-row{grid-template-columns:minmax(130px,1.7fr) minmax(150px,2.2fr) 96px 84px 110px;}.qida-actv-header > div:nth-child(3),.qida-actv-header > div:nth-child(4){display:none;}.qida-actv-row .qida-cell-temp,.qida-actv-row .qida-cell-dias{display:none;}}',
+            /* v1.47: columna CONTACTO unificada (ref L##### chico junto al nombre) + "—" gris. */
+            '.qida-actv-contacto .qida-cell-line1{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;}',
+            '.qida-actv-ref{font-size:11px;color:var(--s500);font-variant-numeric:tabular-nums;}',
+            '.qida-actv-task-empty{color:var(--s400);font-style:italic;}',
+            '.qida-actv-dash{color:var(--s400);}',
+            '.qida-actv-estado{display:flex;align-items:center;}',
+            '.qida-actv-deadline-overdue{color:#991B1B;font-weight:600;}',
+            /* v1.47: ESTADO semáforo (mismo patrón .qida-dash-badge): rojo atrasada / ámbar hoy / neutro próxima. */
+            '.qida-dash-badge-estado-overdue{background:#FEF2F2;color:#991B1B;border:0.5px solid #FECACA;}',
+            '.qida-dash-badge-estado-today{background:#FEF3C7;color:#92400E;border:0.5px solid #FDE68A;}',
+            '.qida-dash-badge-estado-planned{background:#F5F5F4;color:#78716C;border:0.5px solid #E7E5E4;}',
+            /* v1.47: buscador (lupa) compartido Leads + Actividades. Mismo patrón que .qida-leader-search. */
+            '.qida-dash-search-wrap{position:relative;display:inline-flex;align-items:center;}',
+            '.qida-dash-search-wrap .qa-icon{position:absolute;left:10px;color:var(--s500);pointer-events:none;}',
+            '.qida-dash-search{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px 7px 32px;font-family:inherit;font-size:13px;color:var(--s800);outline:none;min-width:200px;max-width:280px;}',
+            '.qida-dash-search:focus{border-color:#3B82F6;}',
             /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
                FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
                distinto los fr y se desalinearían. */
@@ -3698,6 +3819,16 @@
         return !!(n && state.leadsLeidosEnSesion && state.leadsLeidosEnSesion.has(n));
     }
 
+    // v1.47: match del buscador de Leads: nombre de familia + ref display (L#####) + teléfono.
+    function leadMatchesSearch(row, q) {
+        if (!row) return false;
+        var hay = [];
+        if (row.familyName) hay.push(row.familyName);
+        if (row.id) hay.push(row.id);  // display_id 'L122581'
+        if (row.phone_normalized) hay.push(row.phone_normalized);
+        return hay.join(' ').toLowerCase().indexOf(q) > -1;
+    }
+
     function matchesSegment(row, seg) {
         if (!seg) return true;
         switch (seg) {
@@ -3720,11 +3851,15 @@
     // Filtros client-side (segmento AND pill WhatsApp) + agrupado "mensajes nuevos al tope"
     //   (sort por urgencia desc + dias desc) + resto en orden del endpoint + slice MAX_VISIBLE.
     function buildDashFeed(base) {
+        // v1.47: buscador del tab Leads (client-side, sobre la lista ya cargada). Sugerencias NO
+        //   tiene buscador -> solo aplica cuando la vista activa es 'leads'.
+        var q = (state.dashView === 'leads') ? (state.dashSearchQuery || '').trim().toLowerCase() : '';
         var filtered = [];
         for (var i = 0; i < base.length; i++) {
             var r = base[i];
             if (!matchesSegment(r, state.dashSegment)) continue;
             if (state.dashOnlyNew && !r.hasNewMessage) continue;
+            if (q && !leadMatchesSearch(r, q)) continue;
             filtered.push(r);
         }
         var news = [], rest = [];
@@ -3763,7 +3898,11 @@
             if (state.dashView !== view) return;  // race guard
             log('loadDashView failed', err && (err.code || err.message));
             state.dashLoading = false;
-            state.dashError = (err && err.userMessage) || 'No se pudieron cargar los leads. Reintentá.';
+            // v1.47: Actividades lee de Odoo same-origin -> el fallo típico es sesión/CORS. Copy
+            //   específico (NO el genérico de leads) y NO cae al viejo /api/me/activities.
+            state.dashError = (view === 'activities')
+                ? 'No se pudo cargar actividades. Asegurate de estar logueada en Odoo.'
+                : ((err && err.userMessage) || 'No se pudieron cargar los leads. Reintentá.');
             rerenderContent();
         });
     }
@@ -3864,28 +4003,33 @@
     // No reusa renderDashRow ni las cards/filtros de temperatura (son lead-centric). Render propio:
     //   chips de vista (para volver) + tabla de actividades. state.dashRows trae los activity objects.
     function renderActivitiesView() {
-        var rows = state.dashRows || [];
+        var allRows = state.dashRows || [];
+        var ordered = buildActivitiesFeed(allRows);  // v1.47: search + chips + orden (atrasadas arriba)
         var listHtml;
         if (state.dashError) {
             listHtml = renderDashError(state.dashError);
         } else if (state.dashRows === null && state.dashLoading) {
             listHtml = renderDashLoadingState();
-        } else if (!rows.length) {
-            listHtml = '<div class="qida-empty-state">No tenés actividades pendientes.</div>';
+        } else if (!ordered.length) {
+            // Distinguimos "no hay actividades" de "el filtro/buscador no matchea nada".
+            listHtml = '<div class="qida-empty-state">'
+                + (allRows.length ? 'No hay actividades que coincidan con el filtro.' : 'No tenés actividades pendientes.')
+                + '</div>';
         } else {
             listHtml = '';
-            for (var i = 0; i < rows.length; i++) listHtml += renderActivityRow(rows[i]);
+            for (var i = 0; i < ordered.length; i++) listHtml += renderActivityRow(ordered[i]);
         }
-        var countLabel = rows.length + (rows.length === 1 ? ' actividad' : ' actividades');
+        var countLabel = ordered.length + (ordered.length === 1 ? ' actividad' : ' actividades');
         var cardCls = 'qida-dash-table-card' + (state.dashLoading ? ' qida-dash-loading' : '');
         // v1.25 (ISSUE D): las metricas del top tambien en Actividades (igual que Leads/Sugerencias).
-        //   Con flag ON salen de state.dashMetrics (portfolio-wide). Como las filas de esta vista son
-        //   activities (sin temperatura), el fallback flag-off de renderDashCards usa la cartera
-        //   (MOCK_LEADS_RESPONSE) en vez de las activities -> conteos por temperatura coherentes.
+        //   Como las filas de esta vista son activities (sin temperatura), renderDashCards usa la
+        //   cartera (MOCK_LEADS_RESPONSE) para conteos por temperatura coherentes.
         return '<div class="qida-dash-dashboard">'
             + renderDashCards(MOCK_LEADS_RESPONSE)
+            // v1.47: toolbar con chips temporales (izq) + buscador (centro) + chips de vista (der).
             + '<div class="qida-dash-toolbar">'
-                + '<div class="qida-dash-toolbar-left"></div>'
+                + '<div class="qida-dash-toolbar-left"><div class="qida-dash-segments qida-actv-chips">' + renderActivityDateChips() + '</div></div>'
+                + '<div class="qida-dash-toolbar-center">' + renderDashSearch() + '</div>'
                 + '<div class="qida-dash-toolbar-right">' + renderViewChips() + '</div>'
             + '</div>'
             + '<div class="' + cardCls + '">'
@@ -3902,47 +4046,182 @@
         + '</div>';
     }
 
+    // v1.47: chips de filtro temporal (solo Actividades). Filtran SOLO las no-atrasadas; las
+    //   atrasadas siempre se muestran arriba (pedido explícito de Eva). Default 'all' (Todas).
+    function renderActivityDateChips() {
+        var chips = [
+            { id: 'all',   label: 'Todas' },
+            { id: 'today', label: 'Hoy' },
+            { id: 'week',  label: 'Esta semana' },
+            { id: 'month', label: 'Este mes' }
+        ];
+        var active = state.dashDateRange || 'all';
+        var html = '';
+        for (var i = 0; i < chips.length; i++) {
+            html += '<button class="qida-seg-chip' + (active === chips[i].id ? ' active' : '') + '" data-action="actv-set-range" data-id="' + chips[i].id + '">' + esc(chips[i].label) + '</button>';
+        }
+        return html;
+    }
+
+    // v1.47: buscador compartido (Leads + Actividades). id fijo para reposicionar el caret tras el
+    //   rerender (ver handleInput 'dash-search'). value desde state.dashSearchQuery (persiste al cambiar de tab).
+    function renderDashSearch() {
+        return '<span class="qida-dash-search-wrap">'
+            + icon('search', 14)
+            + '<input type="text" class="qida-dash-search" id="qida-dash-search" data-input="dash-search" placeholder="Buscar familia, L#####, teléfono" value="' + esc(state.dashSearchQuery || '') + '" />'
+        + '</span>';
+    }
+
+    // v1.47: 7 columnas. Eliminada TIPO; CONTACTO unifica Familia+Paciente; sumadas TEMP/SIN
+    //   CONTACTO (cruce con la cartera) + ESTADO semáforo.
     function renderActivityHeader() {
         return '<div class="qida-actv-header">'
-            + '<div>Familia</div>'
-            + '<div>Paciente</div>'
+            + '<div>Contacto</div>'
             + '<div>Tarea</div>'
+            + '<div>Temp</div>'
+            + '<div>Sin contacto</div>'
+            + '<div>Estado</div>'
             + '<div>Fecha limite</div>'
-            + '<div>Tipo</div>'
             + '<div></div>'
         + '</div>';
     }
 
-    // Una fila de actividad. lead_id (numerico) -> "Ir al lead" reusa select-lead (detail del lead).
+    // v1.47: metadata del badge ESTADO (semáforo por deadline de la actividad).
+    var ACTV_ESTADO_META = {
+        overdue: { label: 'Atrasada', cls: 'overdue' },
+        today:   { label: 'Hoy',      cls: 'today' },
+        planned: { label: 'Próxima',  cls: 'planned' }
+    };
+    function renderActivityEstadoBadge(stateVal) {
+        var meta = ACTV_ESTADO_META[stateVal] || ACTV_ESTADO_META.planned;
+        return '<div class="qida-dash-cell qida-actv-estado">'
+            + '<span class="qida-dash-badge qida-dash-badge-estado-' + meta.cls + '">' + esc(meta.label) + '</span>'
+        + '</div>';
+    }
+    // Celda "—" gris (TEMP / SIN CONTACTO sin leadData del cruce).
+    function emptyDashCell(cls) {
+        return '<div class="qida-dash-cell ' + cls + '"><span class="qida-actv-dash">—</span></div>';
+    }
+
+    // v1.47: res_name de Odoo ("L125118 Mariona (jueves 13,30)") -> { ref:'L125118', name:'Mariona (...)' }.
+    //   Sin match de prefijo L#####: ref='' y name = el string completo.
+    function parseLeadName(resName) {
+        if (!resName) return { ref: '', name: '' };  // Odoo manda false en res_name vacío
+        var s = String(resName).trim();
+        var m = s.match(/^(L\d+)\s+(.+)$/);
+        if (m) return { ref: m[1], name: m[2].trim() };
+        return { ref: '', name: s };
+    }
+
+    // leadData del cruce /api/me/leads (o cartera mock) para una actividad. null si no está.
+    function leadDataForActivity(act) {
+        if (!state.leadById || !act || act.leadId == null) return null;
+        return state.leadById[toNumericLeadId(act.leadId)] || null;
+    }
+
+    // Una fila de actividad. act.leadId (numerico, res_id) -> "Ir al lead" reusa select-lead.
     function renderActivityRow(act) {
         act = act || {};
-        var fam = act.family_name || ('Lead ' + (act.lead_id != null ? act.lead_id : ''));
-        var famLine = esc(fam) + (act.city ? ' &middot; ' + esc(act.city) : '');
-        var patient = act.patient_name || '—';
-        var summary = act.summary || 'Actividad';
-        var note = act.note || '';
-        var typeLabel = act.activity_type_label || ('Tipo ' + (act.activity_type_id != null ? act.activity_type_id : '?'));
-        var autoBadge = act.automated
-            ? '<span class="qida-actv-badge-auto">' + icon('refresh-cw', 10) + ' Automatica</span>'
+        var leadData = leadDataForActivity(act);
+
+        // CONTACTO (línea 1: nombre bold + ref L##### chico; línea 2: "cuida a su {parentesco}").
+        var parsed = parseLeadName(act.leadName);
+        var contactName = parsed.name || ('Lead ' + (act.leadId != null ? act.leadId : ''));
+        var refHtml = parsed.ref ? '<span class="qida-actv-ref">' + esc(parsed.ref) + '</span>' : '';
+        var parentesco = leadData ? (leadData.parentesco || (leadData.caregiverInfo && leadData.caregiverInfo.relation) || '') : '';
+        var line2 = parentesco
+            ? '<div class="qida-cell-line2">cuida a su ' + esc(String(parentesco).toLowerCase()) + '</div>'
             : '';
+
+        // TAREA: summary || stripHtml(note) || "Sin descripción". El ellipsis (CSS) trunca; title = texto completo.
+        var taskText = act.summary || stripHtml(act.note);
+        var taskHtml = taskText
+            ? '<span class="qida-actv-task-text" title="' + esc(taskText) + '">' + esc(taskText) + '</span>'
+            : '<span class="qida-actv-task-empty">Sin descripción</span>';
+
+        // TEMP / SIN CONTACTO: reusa los componentes del tab Sugerencias con el leadData del cruce.
+        var tempCell = leadData ? renderTempCell(leadData.temperature) : emptyDashCell('qida-cell-temp');
+        var diasCell = (leadData && leadData.daysWithoutTouch != null) ? renderDiasCell(leadData) : emptyDashCell('qida-cell-dias');
+
+        var deadlineCls = (act.state === 'overdue') ? ' qida-actv-deadline-overdue' : '';
+
         return '<div class="qida-actv-row">'
-            + '<div class="qida-dash-cell qida-actv-fam">'
-                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + famLine + '</span></div>'
+            + '<div class="qida-dash-cell qida-actv-contacto qida-cell-familia">'
+                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(contactName) + '</span>' + refHtml + '</div>'
+                + line2
             + '</div>'
-            + '<div class="qida-dash-cell qida-actv-patient">' + esc(patient) + '</div>'
-            // Tarea: título (ellipsis) + badge "Nota" si hay nota interna. El tooltip con el
-            //   texto de la nota sigue en el title de la celda. v1.43 (8b): el "•" ambiguo pasó
-            //   a un badge ámbar "Nota" (mismo patrón que "Pendiente").
-            + '<div class="qida-dash-cell qida-actv-task"' + (note ? ' title="' + esc(note) + '"' : '') + '>'
-                + '<span class="qida-actv-task-text">' + esc(summary) + '</span>'
-                + (note ? '<span class="qida-dash-badge qida-dash-badge-note" aria-label="Tiene nota">' + icon('file', 10) + 'Nota</span>' : '')
-            + '</div>'
-            + '<div class="qida-dash-cell qida-actv-deadline">' + esc(formatShortDate(act.deadline_date)) + '</div>'
-            + '<div class="qida-dash-cell qida-actv-type">' + esc(typeLabel) + autoBadge + '</div>'
+            + '<div class="qida-dash-cell qida-actv-task">' + taskHtml + '</div>'
+            + tempCell
+            + diasCell
+            + renderActivityEstadoBadge(act.state)
+            + '<div class="qida-dash-cell qida-actv-deadline' + deadlineCls + '">' + esc(formatShortDate(act.deadlineDate)) + '</div>'
             + '<div class="qida-actv-row-actions">'
-                + '<button class="qida-actv-goto" data-action="select-lead" data-id="' + esc(act.lead_id != null ? act.lead_id : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
+                + '<button class="qida-actv-goto" data-action="select-lead" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
             + '</div>'
         + '</div>';
+    }
+
+    // v1.47: pipeline del tab Actividades. (1) buscador sobre TODO; (2) split atrasadas vs resto;
+    //   (3) chips temporales SOLO al resto; (4) orden: atrasadas asc + resto (hoy<próxima) asc.
+    //   Las atrasadas SIEMPRE arriba, sin importar el chip (pedido de Eva).
+    function buildActivitiesFeed(rows) {
+        rows = rows || [];
+        var q = (state.dashSearchQuery || '').trim().toLowerCase();
+        var range = state.dashDateRange || 'all';
+        var searched = [];
+        var i;
+        for (i = 0; i < rows.length; i++) {
+            if (!q || activityMatchesSearch(rows[i], q)) searched.push(rows[i]);
+        }
+        var overdue = [], rest = [];
+        for (i = 0; i < searched.length; i++) {
+            if (isOverdueActivity(searched[i])) overdue.push(searched[i]); else rest.push(searched[i]);
+        }
+        var restFiltered = [];
+        for (i = 0; i < rest.length; i++) {
+            if (activityInRange(rest[i], range)) restFiltered.push(rest[i]);
+        }
+        overdue.sort(byDeadlineAsc);
+        restFiltered.sort(function (a, b) {
+            var r = activityStateRank(a) - activityStateRank(b);
+            return r !== 0 ? r : byDeadlineAsc(a, b);
+        });
+        return overdue.concat(restFiltered);
+    }
+    function isOverdueActivity(a) {
+        return !!a && (a.state === 'overdue' || daysBetween(a.deadlineDate) < 0);
+    }
+    function activityStateRank(a) {
+        var s = a && a.state;
+        return s === 'overdue' ? 0 : s === 'today' ? 1 : 2;
+    }
+    // Compara YYYY-MM-DD lexicográfico = cronológico. null -> al final.
+    function byDeadlineAsc(a, b) {
+        var da = (a && a.deadlineDate) || '9999-12-31';
+        var db = (b && b.deadlineDate) || '9999-12-31';
+        return da < db ? -1 : (da > db ? 1 : 0);
+    }
+    function activityInRange(a, range) {
+        if (range === 'all' || !range) return true;
+        var d = daysBetween(a && a.deadlineDate);
+        if (range === 'today') return d === 0;
+        if (range === 'week')  return d >= 0 && d <= 7;
+        if (range === 'month') return d >= 0 && d <= 30;
+        return true;
+    }
+    // Buscador: nombre de familia + ref L##### (de res_name) + teléfono normalizado (del cruce).
+    function activityMatchesSearch(a, q) {
+        if (!a) return false;
+        var parsed = parseLeadName(a.leadName);
+        var hay = [];
+        if (parsed.name) hay.push(parsed.name);
+        if (parsed.ref) hay.push(parsed.ref);
+        var ld = leadDataForActivity(a);
+        if (ld) {
+            if (ld.familyName) hay.push(ld.familyName);
+            if (ld.phone_normalized) hay.push(ld.phone_normalized);
+        }
+        return hay.join(' ').toLowerCase().indexOf(q) > -1;
     }
 
     // Banda superior: 2 grupos con label (estética .qida-leader-kpi del Panel de Líderes).
@@ -4009,9 +4288,11 @@
         var clearBtn = anyFilter
             ? '<button class="qida-dash-clear-btn" data-action="dash-clear-filters">' + icon('x', 12) + ' Quitar filtros</button>'
             : '';
+        // v1.47: buscador (lupa) en el tab Leads (Ana lo pidió). Sugerencias queda sin buscador.
+        var searchHtml = (state.dashView === 'leads') ? renderDashSearch() : '';
         return '<div class="qida-dash-toolbar">'
             + '<div class="qida-dash-toolbar-left">' + filterBtn + clearBtn + '</div>'
-            + '<div class="qida-dash-toolbar-center">' + renderWhatsappPill(base) + '</div>'
+            + '<div class="qida-dash-toolbar-center">' + searchHtml + renderWhatsappPill(base) + '</div>'
             + '<div class="qida-dash-toolbar-right">' + renderViewChips() + '</div>'
         + '</div>'
         + (state.dashFiltersExpanded ? '<div class="qida-dash-segments">' + renderFilterChips() + '</div>' : '');
@@ -5629,9 +5910,91 @@
 
     // v1.24: GET /api/me/activities -> array de actividades (shape activity-centric, SIN adapter:
     //   renderActivityRow lee los campos snake_case directo). Normaliza array | { items:[...] }.
+    // v1.47: el TAB Actividades del widget YA NO llama esto (ahora lee mail.activity directo de Odoo,
+    //   ver fetchActivitiesView). Se conserva: el endpoint sigue vivo como fallback/consumer de
+    //   dashboards de líderes. NO borrar sin verificar a quién más alimenta.
     function fetchActivitiesList() {
         return apiFetchJson('GET', '/api/me/activities', { noun: 'tus actividades' }).then(function (data) {
             return Array.isArray(data) ? data : (data && data.items) || [];
+        });
+    }
+
+    // ============================================================
+    // v1.47: TAB ACTIVIDADES desde ODOO directo (mail.activity) + cruce con /api/me/leads
+    // ============================================================
+    // POST /web/dataset/call_kw/mail.activity/web_search_read (same-origin, reusa odooCall).
+    //   Filtra por user_id (la AF) + res_model=crm.lead. web_search_read -> { records, length }.
+    function fetchOdooActivities(odooUserId) {
+        if (!odooUserId) return Promise.resolve([]);  // admin "como yo" / viewer sin uid -> vacío (no error)
+        return odooCall('mail.activity', 'web_search_read', [], {
+            domain: [['user_id', '=', odooUserId], ['res_model', '=', 'crm.lead']],
+            fields: ['id', 'res_id', 'res_name', 'activity_type_id', 'summary', 'note',
+                     'date_deadline', 'state', 'user_id', 'create_date'],
+            limit: 200,
+            order: 'date_deadline asc'
+        }).then(function (res) {
+            return (res && res.records) || [];
+        });
+    }
+
+    // ¿De qué AF traemos las actividades? Impersonando -> odoo_user_id del AF "visto"
+    //   (IMPERSONATABLE_AFS, resuelto por EMAIL = state.viewingAsEmail). Si no -> _odooUid de la
+    //   sesión (la AF viendo lo suyo). null -> fetchOdooActivities devuelve [] (sin error).
+    function resolveActivitiesOdooUserId() {
+        if (isImpersonating()) {
+            for (var i = 0; i < IMPERSONATABLE_AFS.length; i++) {
+                if (IMPERSONATABLE_AFS[i].email === state.viewingAsEmail) {
+                    return IMPERSONATABLE_AFS[i].odoo_user_id || null;
+                }
+            }
+            return null;  // viewer (Marina/Alba) sin uid mapeado
+        }
+        return _odooUid;
+    }
+
+    // Cartera para enriquecer las actividades (TEMP / SIN CONTACTO / parentesco). NUNCA rechaza:
+    //   si /api/me/leads falla, devuelve [] -> el cruce degrada a "—" (no rompe la tabla). En mock
+    //   usamos MOCK_LEADS_RESPONSE crudo (ya está en widget-shape: temperature/daysWithoutTouch/...).
+    function fetchLeadsForCrossRef() {
+        if (useRealApi()) {
+            return fetchLeadsList('leads').catch(function (err) {
+                log('activities cross-ref leads failed (degrada a —)', err && (err.userMessage || err.message));
+                return [];
+            });
+        }
+        return Promise.resolve(MOCK_LEADS_RESPONSE.slice());
+    }
+
+    // Index { [lead_id numérico]: leadRow }. La clave normaliza con toNumericLeadId para puentear
+    //   display_id ('L125118') de /api/me/leads con res_id (125118) de mail.activity.
+    function indexLeadsById(rows) {
+        var map = {};
+        rows = rows || [];
+        for (var i = 0; i < rows.length; i++) {
+            var k = toNumericLeadId(rows[i] && rows[i].id);
+            if (k) map[k] = rows[i];
+        }
+        return map;
+    }
+
+    // Orquestador del tab: actividades (Odoo real | mock) + cartera (cross-ref) EN PARALELO.
+    //   Setea state.leadById y devuelve el array de actividades (lo asigna loadDashView a dashRows).
+    //   Si las ACTIVIDADES fallan (Odoo caído/sin sesión) -> rechaza -> loadDashView.catch muestra
+    //   el error + Reintentar. El fallo de la cartera NO es fatal (ya viene neutralizado a []).
+    function fetchActivitiesView() {
+        var actsP = IS_ODOO_MODE
+            ? fetchOdooActivities(resolveActivitiesOdooUserId()).then(function (recs) {
+                  var out = [];
+                  for (var i = 0; i < recs.length; i++) out.push(mapOdooActivity(recs[i]));
+                  return out;
+              })
+            : simulateLatency(180, 360).then(function () {
+                  return MOCK_ODOO_ACTIVITIES.map(mapOdooActivity);
+              });
+        var leadsP = fetchLeadsForCrossRef();
+        return Promise.all([actsP, leadsP]).then(function (res) {
+            state.leadById = indexLeadsById(res[1]);
+            return res[0];
         });
     }
 
@@ -7325,6 +7688,11 @@
                 setState({ dashSegment: null, dashOnlyNew: false });
                 return;
             }
+            // v1.47: chips temporales del tab Actividades (Todas/Hoy/Semana/Mes). Client-side, re-click no limpia (default 'all').
+            case 'actv-set-range': {
+                setState({ dashDateRange: id || 'all' });
+                return;
+            }
 
             // v1.6: handlers set-panel / toggle-edit-temp / set-temp / copy-tpl eliminados.
             // El pane derecho (tabs) ya no existe y la temperatura del lead deja de ser editable
@@ -7741,6 +8109,19 @@
             }
             // Reposicionar foco en el search tras el outerHTML swap. El search NO esta en
             //   tableCard - vive en la toolbar (intacta), asi que el caret se mantiene.
+        } else if (input === 'dash-search') {
+            // v1.47: buscador del dashboard (Leads + Actividades). rerenderContent reconstruye todo
+            //   el innerHTML -> el <input> se recrea y pierde el foco; lo reponemos por id y
+            //   restauramos el caret a la posición previa para que escribir sea fluido.
+            state.dashSearchQuery = node.value;
+            var caret = null;
+            try { caret = node.selectionStart; } catch (e0) {}
+            rerenderContent();
+            var ni = document.getElementById('qida-dash-search');
+            if (ni) {
+                ni.focus();
+                if (caret != null) { try { ni.setSelectionRange(caret, caret); } catch (e1) {} }
+            }
         } else if (input === 'leader-filter-loc') {
             // v1.12: filtro localidad. Rerender completo - KPIs/donut/tabla se rebuilden con
             //   la data filtrada. v1.12.1: el area chart (tendencia) NO se filtra (es serie
@@ -8185,12 +8566,16 @@
         }
         // v1.13: reset del dashboard AF (vista, filtros y datos cacheados). completedTodayIds
         //   PERSISTE en sesion (igual que antes). dashRows se re-primea en el proximo render.
-        state.dashView = 'suggestions';
+        // v1.47: el default vuelve a Actividades (decisión: reabrir siempre muestra Actividades).
+        state.dashView = 'activities';
         state.dashRows = null;
         state.dashLoading = false;
         state.dashSegment = null;
         state.dashFiltersExpanded = false;
         state.dashOnlyNew = false;
+        state.dashSearchQuery = '';
+        state.dashDateRange = 'all';
+        state.leadById = null;
         // v1.6: limpiamos draft del WhatsApp y del chat IA, y attachmentsExpanded.
         // aiChatHistory PERSISTE durante toda la sesion del page load: NO se vacia aqui.
         state.draftMessage = '';
@@ -8247,6 +8632,7 @@
                 odooSession().then(function (sess) {
                     _baseContext = (sess && sess.user_context) || {};
                     _currentUserEmail = (sess && sess.username) || null;
+                    _odooUid = (sess && sess.uid) || null;  // v1.47: uid para fetchOdooActivities (AF viendo lo suyo)
                     _isLeader = !!(_currentUserEmail && LEADER_EMAILS[_currentUserEmail]);
                     log('Odoo session ready', { uid: sess && sess.uid, lang: _baseContext.lang, isLeader: _isLeader });
                     if (_isLeader) activateLeaderUi();
@@ -8260,6 +8646,7 @@
                     //   No inyectamos el badge ni ApexCharts. console.error para alertar.
                     _isLeader = false;
                     _currentUserEmail = null;
+                    _odooUid = null;  // v1.47: sin sesion -> sin uid (fetchOdooActivities cae al fallback graceful)
                     console.error('[QidaAssistant] Odoo session failed - leader UI disabled for safety');
                     console.info('[QidaAssistant] Leader mode:', false, null);
                     console.info('[QidaAssistant] ApexCharts loaded:', typeof window.ApexCharts !== 'undefined');
