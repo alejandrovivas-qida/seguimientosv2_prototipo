@@ -4,7 +4,8 @@
  * - audio recibido con URL renderiza <audio controls preload="metadata">
  * - audio sin URL queda como fallback no reproducible
  * - adjuntos no-audio mantienen paperclip
- * - MediaRecorder elige ogg/opus -> ogg -> mpeg y deshabilita si no hay formato compatible
+ * - MediaRecorder elige ogg/opus -> ogg -> webm/opus -> webm -> mp4 -> mpeg
+ *   y deshabilita si no hay formato compatible
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,8 @@ function buildMod(envSrc = '') {
         extractFn(SRC, 'esc') + '\n' +
         extractFn(SRC, 'formatConvTime') + '\n' +
         extractFn(SRC, 'normalizeConversation') + '\n' +
+        extractFn(SRC, 'formatCallDuration') + '\n' +
+        extractFn(SRC, 'renderCallRow') + '\n' +
         extractArrayVar(SRC, 'WA_RECORD_MIME_TYPES') + '\n' +
         extractFn(SRC, 'audioBaseMime') + '\n' +
         extractFn(SRC, 'chooseWaRecordMimeType') + '\n' +
@@ -47,7 +50,7 @@ function buildMod(envSrc = '') {
         extractFn(SRC, 'voiceFilenameForMime') + '\n' +
         extractFn(SRC, 'isAudioAttachment') + '\n' +
         extractFn(SRC, 'renderMessageAttachment') + '\n' +
-        'return { normalizeConversation, chooseWaRecordMimeType, waRecordSupport, voiceFilenameForMime, isAudioAttachment, renderMessageAttachment };'
+        'return { normalizeConversation, renderCallRow, chooseWaRecordMimeType, waRecordSupport, voiceFilenameForMime, isAudioAttachment, renderMessageAttachment };'
     )();
 }
 
@@ -77,6 +80,40 @@ test('normalizeConversation mapea attachment_mimetype a attachmentMimetype', () 
     });
     assert.equal(out.length, 1);
     assert.equal(out[0].attachmentMimetype, 'audio/ogg');
+});
+
+test('normalizeConversation mapea llamadas Aircall a kind=call', () => {
+    const out = mod.normalizeConversation({
+        messages: [{
+            type: 'call',
+            uid: 'call:1',
+            timestamp: '2026-06-03T09:00:00Z',
+            from_me: true,
+            direction: 'outbound',
+            answered: false,
+            duration_seconds: null
+        }]
+    });
+    assert.equal(out.length, 1);
+    assert.equal(out[0].kind, 'call');
+    assert.equal(out[0].from, 'af');
+    assert.equal(out[0].direction, 'outbound');
+    assert.equal(out[0].missed, true);
+});
+
+test('renderCallRow distingue contestada, llamada perdida y sin respuesta', () => {
+    const answered = mod.renderCallRow({ from: 'af', direction: 'outbound', missed: false, durationSeconds: 154, time: '03/06 11:00' });
+    assert.match(answered, /Llamada/);
+    assert.match(answered, /3 min/);
+    assert.match(answered, /data-icon="phone"/);
+
+    const missedIn = mod.renderCallRow({ from: 'lead', direction: 'inbound', missed: true, durationSeconds: null, time: '03/06 11:00' });
+    assert.match(missedIn, /Llamada perdida/);
+    assert.match(missedIn, /data-icon="phone-missed"/);
+
+    const missedOut = mod.renderCallRow({ from: 'af', direction: 'outbound', missed: true, durationSeconds: null, time: '03/06 11:00' });
+    assert.match(missedOut, /Sin respuesta/);
+    assert.match(missedOut, /data-icon="phone-off"/);
 });
 
 test('audio con URL renderiza player nativo', () => {
@@ -128,6 +165,26 @@ test('chooseWaRecordMimeType respeta el orden ogg opus -> ogg -> mpeg', () => {
     assert.deepEqual(seen, ['audio/ogg;codecs=opus', 'audio/ogg']);
 });
 
+test('chooseWaRecordMimeType cae a webm/opus en Chrome si ogg no existe', () => {
+    const seen = [];
+    const Ctor = {
+        isTypeSupported(type) {
+            seen.push(type);
+            return type === 'audio/webm;codecs=opus';
+        }
+    };
+    assert.equal(mod.chooseWaRecordMimeType(Ctor), 'audio/webm;codecs=opus');
+    assert.deepEqual(seen, ['audio/ogg;codecs=opus', 'audio/ogg', 'audio/webm;codecs=opus']);
+});
+
+test('voiceFilenameForMime usa extension correcta por contenedor', () => {
+    assert.equal(mod.voiceFilenameForMime('audio/webm;codecs=opus'), 'nota-voz.webm');
+    assert.equal(mod.voiceFilenameForMime('video/webm'), 'nota-voz.webm');
+    assert.equal(mod.voiceFilenameForMime('audio/mp4'), 'nota-voz.m4a');
+    assert.equal(mod.voiceFilenameForMime('audio/mpeg'), 'nota-voz.mp3');
+    assert.equal(mod.voiceFilenameForMime('audio/ogg;codecs=opus'), 'nota-voz.ogg');
+});
+
 test('waRecordSupport deshabilita si no hay formato compatible', () => {
     const unsupported = buildMod(
         'var navigator = { mediaDevices: { getUserMedia: function () {} } };\n' +
@@ -135,7 +192,7 @@ test('waRecordSupport deshabilita si no hay formato compatible', () => {
     );
     const support = unsupported.waRecordSupport();
     assert.equal(support.ok, false);
-    assert.match(support.reason, /ogg\/oga\/mp3/);
+    assert.match(support.reason, /ogg\/webm\/mp4\/mp3/);
 });
 
 console.log('\n' + passed + ' passed' + (process.exitCode ? ', con fallos' : ''));
