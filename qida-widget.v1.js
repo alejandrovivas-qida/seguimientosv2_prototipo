@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.44.0
+ * QIDA ASSISTANT v1.45.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,22 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.45.0 (2026-06-04 — llamadas Aircall intercaladas en el timeline de conversación del lead; convive con audios v1.44.0 y el resto de features):
+ *   - Backend (PR feat/calls-in-conversation) mergea llamadas Aircall con WhatsApp en
+ *     GET /api/leads/{id}/conversation, con items type:"call". Resuelve los leads cuya
+ *     interacción fue solo telefónica (parecían "Sin mensajes" en el widget).
+ *   - normalizeConversation ramifica por m.type: "call" -> { kind:'call', from (outbound=AF
+ *     derecha / inbound=lead izquierda), direction, missed (answered===false), durationSeconds }.
+ *     WhatsApp queda kind:'wa' (mapeo intacto). El merge por timestamp lo hace el backend (DESC);
+ *     el reverse a ASC deja las llamadas intercaladas en su lugar cronológico.
+ *   - renderCallRow: icono 📞 + "Llamada · N min" (duración REDONDEADA a minutos, solo contestadas).
+ *     No contestadas (decisión #2): inbound -> "Llamada perdida" (icono phone-missed rojo);
+ *     outbound -> "Sin respuesta" (icono phone-off gris). NO dice "Llamada de WhatsApp" (no
+ *     sabemos si fue VoIP de WA o nativa). v1: solo metadata (sin grabación/voicemail/transcript).
+ *   - Iconos nuevos 'phone-missed'/'phone-off' (lucide); CSS .qida-msg-call/.qida-call-line.
+ *   - MOCK_WHATSAPP['L122581'] suma 3 llamadas demo (mock mode, sin backend). Test = index.html /
+ *     Tampermonkey (no hay test runner). Flag useRealAPI sin cambios. NO publicado al Blob.
  *
  * Cambios v1.44.0 (2026-06-04 — Audios WhatsApp end-to-end: reproductor de audios recibidos + grabación de notas de voz; respeta el principio rector — la AF elige enviar, el widget no genera contenido):
  *   - Reproductor inline para audios recibidos (audio/ogg) servidos desde el Blob vía attachment_blob_url.
@@ -1467,7 +1483,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.44.0';
+    var VERSION = '1.45.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1553,6 +1569,10 @@
             { from: 'af',   text: 'Buenas tardes Maria, gracias por contactarnos. Lamento lo de tu padre. Tienes 10 minutos manana para que podamos entender mejor la situacion?', time: 'Lun 17:42' },
             { from: 'lead', text: 'Si, manana a las 10 podemos.', time: 'Lun 17:50' },
             { from: 'af',   text: 'Perfecto, te llamo a las 10. Hablamos.', time: 'Lun 17:52' },
+            // v1.44: demo de llamadas Aircall intercaladas (mock). En real mode vienen del backend.
+            { kind: 'call', from: 'af',   direction: 'outbound', missed: false, durationSeconds: 154, time: 'Mar 10:02' },
+            { kind: 'call', from: 'lead', direction: 'inbound',  missed: true,  durationSeconds: null, time: 'Mie 12:30' },
+            { kind: 'call', from: 'af',   direction: 'outbound', missed: true,  durationSeconds: null, time: 'Jue 09:15' },
             { from: 'lead', text: 'Hola, vi el presupuesto. Queria preguntarte dos cosas: incluye fines de semana? Y se puede empezar la semana que viene?', time: 'Hoy 09:45' }
         ],
         L122613: [
@@ -2872,6 +2892,10 @@
         arrowUp:     '<polyline points="18 15 12 9 6 15"/>',
         arrowDown:   '<polyline points="6 9 12 15 18 9"/>',
         phone:       '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72A2 2 0 0 1 22 16.92z"/>',
+        // v1.44: lucide PhoneMissed (X arriba a la derecha) para "Llamada perdida".
+        'phone-missed':'<line x1="22" y1="2" x2="16" y2="8"/><line x1="16" y1="2" x2="22" y2="8"/><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72A2 2 0 0 1 22 16.92z"/>',
+        // v1.44: lucide PhoneOff (teléfono tachado) para "Sin respuesta" (outbound no contestada).
+        'phone-off':  '<path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2A19.79 19.79 0 0 1 8.63 19.4a19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34A19.79 19.79 0 0 1 2.92 4.18 2 2 0 0 1 4.9 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="22" y1="2" x2="2" y2="22"/>',
         mapPin:      '<path d="M20 10c0 7-8 13-8 13s-8-6-8-13a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
         users:       '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
         check:       '<path d="M20 6 9 17l-5-5"/>',
@@ -3068,6 +3092,12 @@
             '.qida-msg.from-af .qida-msg-bubble{background:#DCF8C6;color:var(--s800);border-radius:8px 0 8px 8px;}',
             '.qida-msg.from-lead .qida-msg-bubble{background:#fff;color:var(--s800);border:0.5px solid var(--s300);border-radius:0 8px 8px 8px;}',
             '.qida-msg-text{font-size:12.5px;font-weight:400;line-height:1.4;margin:0;}',
+            /* v1.44: fila de llamada Aircall. Reusa el bubble (color del lado from-af/from-lead). */
+            '.qida-msg-call{min-width:120px;}',
+            '.qida-call-line{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;line-height:1.3;}',
+            '.qida-call-line .qa-icon{flex-shrink:0;}',
+            '.qida-msg-call.missed-in .qida-call-line{color:#C0392B;}',   /* perdida (inbound): rojo */
+            '.qida-msg-call.missed-out .qida-call-line{color:var(--s500);}', /* sin respuesta (outbound): gris */
             '.qida-msg-att{display:inline-flex;align-items:center;gap:5px;margin:4px 0 0;font-size:11.5px;color:var(--s600);}',
             '.qida-msg-att.audio{display:block;max-width:260px;}',
             '.qida-msg-att.missing{padding:4px 7px;border:0.5px solid var(--s300);border-radius:999px;background:rgba(255,255,255,.5);}',
@@ -5449,14 +5479,29 @@
         return apiFetchJson('GET', '/api/leads/' + numericId + '/conversation', { noun: 'la conversación de este lead' });
     }
     // Normaliza la respuesta del backend a la shape interna del pane WhatsApp:
-    //   { from:'af'|'lead', text, time, hasAttachment, attachmentName, attachmentUrl, status }.
+    //   WhatsApp: { kind:'wa', from:'af'|'lead', text, time, hasAttachment, attachmentName, attachmentUrl, status }.
+    //   Llamada:  { kind:'call', from, direction, missed, durationSeconds, time }.
     //   from_me=true -> AF (derecha/verde); from_me=false -> lead (izquierda/gris).
+    // v1.44: el backend puede intercalar items type:"call" (Aircall) con los de WhatsApp.
+    //   Ramificamos por m.type; ausencia de type = whatsapp (retrocompat).
     function normalizeConversation(resp) {
         var msgs = (resp && resp.messages) || [];
         var out = [];
         for (var i = 0; i < msgs.length; i++) {
             var m = msgs[i] || {};
+            if (m.type === 'call') {
+                out.push({
+                    kind: 'call',
+                    from: m.direction === 'outbound' ? 'af' : 'lead',
+                    direction: m.direction || '',
+                    missed: m.answered === false,  // answered===false -> perdida/sin respuesta
+                    durationSeconds: (typeof m.duration_seconds === 'number') ? m.duration_seconds : null,
+                    time: formatConvTime(m.timestamp)
+                });
+                continue;
+            }
             out.push({
+                kind: 'wa',
                 from: m.from_me ? 'af' : 'lead',
                 text: m.text || '',
                 time: formatConvTime(m.timestamp),
@@ -5470,6 +5515,8 @@
         // v1.31 (FIX E): el backend devuelve los mensajes DESC (más reciente primero); el pane
         //   debe mostrarlos en orden cronológico ASC (viejo arriba, nuevo abajo) como WhatsApp real.
         //   Los mensajes enviados (sendWhatsAppReal) se appendean al final -> quedan abajo. OK.
+        //   Las llamadas (v1.44) ya vienen mergeadas por timestamp DESC desde el backend -> el
+        //   reverse las deja en su lugar cronológico correcto, intercaladas con los mensajes.
         return out.reverse();
     }
     // ISO 8601 -> "DD/MM HH:MM" (local). Robusto a valores inválidos.
@@ -5503,6 +5550,37 @@
             return '<p class="qida-msg-att missing">' + icon('paperclip', 11) + ' Audio no disponible</p>';
         }
         return '<p class="qida-msg-att">' + icon('paperclip', 11) + ' ' + esc(name) + '</p>';
+    }
+
+    // v1.44: duración de llamada redondeada a minutos enteros (decisión #1). Solo se llama
+    //   en contestadas; "<1 min" si dura menos de medio minuto. null/0 -> ''.
+    function formatCallDuration(seconds) {
+        if (seconds == null || isNaN(seconds)) return '';
+        var mins = Math.round(seconds / 60);
+        return mins < 1 ? '<1 min' : (mins + ' min');
+    }
+
+    // v1.44: fila de llamada Aircall en el timeline. NO dice "Llamada de WhatsApp" (no sabemos
+    //   si fue VoIP de WA o nativa). Diferenciación de no-contestadas (decisión #2):
+    //     inbound  + missed -> "Llamada perdida" (icono rojo).
+    //     outbound + missed -> "Sin respuesta"   (icono gris/neutro).
+    //     contestada         -> "Llamada · N min" (duración redondeada).
+    function renderCallRow(m) {
+        var label, iconName, cls;
+        if (m.missed) {
+            if (m.direction === 'inbound') { label = 'Llamada perdida'; iconName = 'phone-missed'; cls = ' missed-in'; }
+            else { label = 'Sin respuesta'; iconName = 'phone-off'; cls = ' missed-out'; }
+        } else {
+            label = 'Llamada'; iconName = 'phone'; cls = ' answered';
+            var dur = formatCallDuration(m.durationSeconds);
+            if (dur) label += ' · ' + dur;
+        }
+        return '<div class="qida-msg from-' + m.from + '">'
+            + '<div class="qida-msg-bubble qida-msg-call' + cls + '">'
+                + '<span class="qida-call-line">' + icon(iconName, 13) + ' ' + esc(label) + '</span>'
+                + '<p class="qida-msg-time">' + esc(m.time) + '</p>'
+            + '</div>'
+        + '</div>';
     }
 
     // ---- ENDPOINT 3: chat conversacional con el asistente (POST) ----
@@ -6000,6 +6078,12 @@
                 msgsHtml = '<div class="qida-msgs">';
                 for (var i = 0; i < msgs.length; i++) {
                     var m = msgs[i];
+                    // v1.44: llamada Aircall -> fila propia (icono 📞 + duración/estado), mismo
+                    //   lado que WhatsApp (outbound=AF derecha, inbound=lead izquierda).
+                    if (m.kind === 'call') {
+                        msgsHtml += renderCallRow(m);
+                        continue;
+                    }
                     var hasText = !!(m.text && String(m.text).trim());
                     // v1.31 (FIX H): no renderear burbujas sin texto NI adjunto (mensajes vacíos/
                     //   inválidos -> burbuja verde vacía reportada). Con adjunto sin texto -> placeholder.
