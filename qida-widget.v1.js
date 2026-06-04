@@ -2005,6 +2005,15 @@
         waSending: false,               // v1.23: true mientras vuelve el POST de envio real (deshabilita Enviar + spinner)
         waUploading: false,             // v1.36: true mientras sube un adjunto del clip (deshabilita clip + spinner; bloquea doble-pick).
         waSendError: null,              // v1.23: userMessage del error de envio (banner inline + Reintentar). null = sin error.
+        waRecording: false,
+        waRecorder: null,
+        waRecordStream: null,
+        waRecordChunks: [],
+        waRecordMimeType: null,
+        waRecordStartedAt: null,
+        waVoicePreview: null,
+        waVoiceSending: false,
+        waVoiceError: null,
         pendingAttachments: [],         // v1.26: chips de material a adjuntar [{kind:'material_link',title,url} | {kind:'file_upload',title,file_uid}]. Se suman al texto/file_uid al enviar; se limpian tras envio.
         attachmentsExpanded: false,     // colapsable de adjuntos en el pane central
         aiChatHistory: {},              // { leadId: [{ from: 'user'|'ai', payload }] } - PERSISTENTE en sesion
@@ -2877,6 +2886,8 @@
         arrowRight:  '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
         history:     '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/><path d="M12 7v5l3 1.5"/>',
         send:        '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+        mic:         '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
+        square:      '<rect x="6" y="6" width="12" height="12" rx="2"/>',
         listOrdered: '<line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
         briefcase:   '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
         moreHoriz:   '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
@@ -3021,10 +3032,24 @@
             '.qida-wa-attach-url{color:var(--s500);}',
             '.qida-wa-attach-x{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--s500);cursor:pointer;}',
             '.qida-wa-attach-x:hover{background:rgba(0,0,0,.06);color:var(--s900);}',
+            '.qida-wa-voice-area{display:flex;flex-direction:column;gap:7px;margin-bottom:8px;padding:8px 10px;background:#fff;border:0.5px solid var(--s300);border-radius:8px;}',
+            '.qida-wa-voice-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;}',
+            '.qida-wa-voice-status{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:12px;color:var(--s700);}',
+            '.qida-wa-voice-dot{width:7px;height:7px;border-radius:50%;background:#dc2626;box-shadow:0 0 0 4px rgba(220,38,38,.12);flex-shrink:0;}',
+            '.qida-wa-voice-preview{flex:1;min-width:120px;max-width:260px;height:32px;}',
+            '.qida-wa-voice-actions{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;}',
+            '.qida-wa-voice-btn{display:inline-flex;align-items:center;gap:4px;border:0.5px solid var(--s300);background:var(--s50);color:var(--s700);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap;}',
+            '.qida-wa-voice-btn:hover:not(:disabled){background:#fff;color:var(--s900);border-color:var(--s400);}',
+            '.qida-wa-voice-btn.primary{background:#0F6E56;border-color:#0F6E56;color:#fff;}',
+            '.qida-wa-voice-btn.primary:hover:not(:disabled){background:var(--qgH);border-color:var(--qgH);color:#fff;}',
+            '.qida-wa-voice-btn:disabled{opacity:.6;cursor:not-allowed;}',
+            '.qida-wa-voice-error{font-size:11.5px;color:#991b1b;margin:0;}',
             '.qida-wa-input{display:flex;align-items:flex-end;gap:8px;background:#fff;border:0.5px solid var(--s300);border-radius:18px;padding:6px 8px 6px 10px;}',
             '.qida-wa-input:focus-within{border-color:#0F6E56;}',
-            '.qida-wa-clip{background:transparent;border:0;padding:6px;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}',
-            '.qida-wa-clip:hover{color:var(--s900);}',
+            '.qida-wa-clip,.qida-wa-mic{background:transparent;border:0;padding:6px;color:var(--s500);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}',
+            '.qida-wa-clip:hover:not(:disabled),.qida-wa-mic:hover:not(:disabled){color:var(--s900);}',
+            '.qida-wa-clip:disabled,.qida-wa-mic:disabled{color:var(--s300);cursor:not-allowed;}',
+            '.qida-wa-mic.active{color:#b91c1c;}',
             '.qida-wa-textarea{flex:1;min-height:24px;max-height:120px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
             '.qida-wa-textarea::placeholder{color:var(--s400);}',
             '.qida-wa-send{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:#0F6E56;color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s;}',
@@ -3038,6 +3063,10 @@
             '.qida-msg.from-af .qida-msg-bubble{background:#DCF8C6;color:var(--s800);border-radius:8px 0 8px 8px;}',
             '.qida-msg.from-lead .qida-msg-bubble{background:#fff;color:var(--s800);border:0.5px solid var(--s300);border-radius:0 8px 8px 8px;}',
             '.qida-msg-text{font-size:12.5px;font-weight:400;line-height:1.4;margin:0;}',
+            '.qida-msg-att{display:inline-flex;align-items:center;gap:5px;margin:4px 0 0;font-size:11.5px;color:var(--s600);}',
+            '.qida-msg-att.audio{display:block;max-width:260px;}',
+            '.qida-msg-att.missing{padding:4px 7px;border:0.5px solid var(--s300);border-radius:999px;background:rgba(255,255,255,.5);}',
+            '.qida-msg-audio{display:block;width:230px;max-width:100%;height:32px;}',
             '.qida-msg-time{font-size:10px;font-weight:400;color:var(--s500);margin-top:3px;text-align:right;}',
             '.qida-empty-msgs{font-size:12px;color:var(--s500);font-style:italic;padding:24px 8px;text-align:center;}',
 
@@ -4574,6 +4603,242 @@
         return '';
     }
 
+    var WA_RECORD_MIME_TYPES = ['audio/ogg;codecs=opus', 'audio/ogg', 'audio/mpeg'];
+
+    function audioBaseMime(mimeType) {
+        return String(mimeType || '').split(';')[0].toLowerCase();
+    }
+
+    function chooseWaRecordMimeType(MediaRecorderCtor) {
+        if (!MediaRecorderCtor || typeof MediaRecorderCtor.isTypeSupported !== 'function') return null;
+        for (var i = 0; i < WA_RECORD_MIME_TYPES.length; i++) {
+            try {
+                if (MediaRecorderCtor.isTypeSupported(WA_RECORD_MIME_TYPES[i])) return WA_RECORD_MIME_TYPES[i];
+            } catch (e) {}
+        }
+        return null;
+    }
+
+    function waRecordSupport() {
+        var nav = (typeof navigator !== 'undefined') ? navigator : null;
+        var win = (typeof window !== 'undefined') ? window : null;
+        var MediaRecorderCtor = win && win.MediaRecorder;
+        if (!nav || !nav.mediaDevices || typeof nav.mediaDevices.getUserMedia !== 'function') {
+            return { ok: false, mimeType: null, reason: 'Tu navegador no permite grabar audio aqui.' };
+        }
+        if (!MediaRecorderCtor) {
+            return { ok: false, mimeType: null, reason: 'Tu navegador no soporta grabacion de audio.' };
+        }
+        var mimeType = chooseWaRecordMimeType(MediaRecorderCtor);
+        if (!mimeType) {
+            return { ok: false, mimeType: null, reason: 'Tu navegador no soporta ogg/oga/mp3 para notas de voz.' };
+        }
+        return { ok: true, mimeType: mimeType, reason: '' };
+    }
+
+    function voiceFilenameForMime(mimeType) {
+        return audioBaseMime(mimeType) === 'audio/mpeg' ? 'nota-voz.mp3' : 'nota-voz.ogg';
+    }
+
+    function stopWaStream(stream) {
+        if (!stream || typeof stream.getTracks !== 'function') return;
+        var tracks = stream.getTracks();
+        for (var i = 0; i < tracks.length; i++) {
+            try { tracks[i].stop(); } catch (e) {}
+        }
+    }
+
+    function revokeWaPreviewUrl(preview) {
+        if (!preview || !preview.url || typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
+        try { URL.revokeObjectURL(preview.url); } catch (e) {}
+    }
+
+    function resetWaVoiceState(revokePreview) {
+        var recorder = state.waRecorder;
+        if (recorder) {
+            recorder.ondataavailable = null;
+            recorder.onstop = null;
+            try {
+                if (!recorder.state || recorder.state !== 'inactive') recorder.stop();
+            } catch (e) {}
+        }
+        stopWaStream(state.waRecordStream);
+        if (revokePreview) revokeWaPreviewUrl(state.waVoicePreview);
+        state.waRecording = false;
+        state.waRecorder = null;
+        state.waRecordStream = null;
+        state.waRecordChunks = [];
+        state.waRecordMimeType = null;
+        state.waRecordStartedAt = null;
+        state.waVoicePreview = null;
+        state.waVoiceSending = false;
+        state.waVoiceError = null;
+    }
+
+    function startWaRecording() {
+        if (state.waRecording || state.waVoiceSending || state.waVoicePreview) return;
+        if (!useRealApi()) {
+            showToast('La grabacion de audio requiere API real.');
+            return;
+        }
+        var support = waRecordSupport();
+        if (!support.ok) {
+            showToast(support.reason);
+            return;
+        }
+        var leadId = state.currentLeadId;
+        resetWaVoiceState(true);
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+            if (state.currentLeadId !== leadId) {
+                stopWaStream(stream);
+                return;
+            }
+            var chunks = [];
+            var startedAt = Date.now();
+            var recorder;
+            try {
+                recorder = new window.MediaRecorder(stream, { mimeType: support.mimeType });
+            } catch (err) {
+                stopWaStream(stream);
+                state.waVoiceError = 'No pude iniciar la grabacion en este navegador.';
+                rerenderContent();
+                showToast(state.waVoiceError);
+                return;
+            }
+            recorder.ondataavailable = function (ev) {
+                if (ev && ev.data && ev.data.size) chunks.push(ev.data);
+            };
+            recorder.onstop = function () {
+                stopWaStream(stream);
+                if (state.currentLeadId !== leadId) return;
+                state.waRecording = false;
+                state.waRecorder = null;
+                state.waRecordStream = null;
+                state.waRecordChunks = [];
+                state.waRecordMimeType = null;
+                state.waRecordStartedAt = null;
+                var mimeType = audioBaseMime(support.mimeType) || support.mimeType;
+                var blob = new Blob(chunks, { type: mimeType });
+                if (!blob.size) {
+                    state.waVoicePreview = null;
+                    state.waVoiceError = 'No se grabo audio. Proba de nuevo.';
+                    rerenderContent();
+                    return;
+                }
+                var url = (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') ? URL.createObjectURL(blob) : '';
+                state.waVoicePreview = {
+                    blob: blob,
+                    url: url,
+                    mimeType: mimeType,
+                    filename: voiceFilenameForMime(mimeType),
+                    durationMs: Date.now() - startedAt
+                };
+                state.waVoiceError = null;
+                rerenderContent();
+            };
+            try {
+                recorder.start();
+            } catch (err2) {
+                stopWaStream(stream);
+                state.waVoiceError = 'No pude iniciar la grabacion en este navegador.';
+                rerenderContent();
+                showToast(state.waVoiceError);
+                return;
+            }
+            state.waRecording = true;
+            state.waRecorder = recorder;
+            state.waRecordStream = stream;
+            state.waRecordChunks = chunks;
+            state.waRecordMimeType = support.mimeType;
+            state.waRecordStartedAt = startedAt;
+            state.waVoiceError = null;
+            rerenderContent();
+        }).catch(function () {
+            if (state.currentLeadId !== leadId) return;
+            state.waVoiceError = 'No pude acceder al microfono.';
+            rerenderContent();
+            showToast(state.waVoiceError);
+        });
+    }
+
+    function stopWaRecording() {
+        var recorder = state.waRecorder;
+        if (!recorder || !state.waRecording) return;
+        try {
+            recorder.stop();
+        } catch (e) {
+            resetWaVoiceState(true);
+            rerenderContent();
+            showToast('No pude cerrar la grabacion.');
+        }
+    }
+
+    function fetchSendVoiceMessage(leadId, preview) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numerico del lead.', 'BAD_LEAD_ID', 0));
+        var phone = resolveSendPhone(leadId);
+        if (!phone) return Promise.reject(makeApiError('No encontre telefono para enviar el audio.', 'NO_PHONE', 0));
+        var headers = afEmailHeaders();
+        if (!headers['X-AF-Email']) return Promise.reject(makeApiError('No hay email de AF en sesion para autenticar el envio.', 'NO_AF_EMAIL', 0));
+        var fd = new FormData();
+        fd.append('phone', phone);
+        fd.append('file', preview.blob, preview.filename || voiceFilenameForMime(preview.mimeType));
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/conversation/voice-messages';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers, body: fd }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) { log('voice message ok', { lead: numericId, ms: Date.now() - t0 }); return data; }
+                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (res.status === 422 ? format422Detail(data) : null)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || (typeof (data && data.detail) === 'string' ? data.detail : null);
+                log('voice message error', { lead: numericId, status: res.status, code: code });
+                throw makeApiError(apiErrorCopy(res.status, serverMsg, 'el audio'), code, res.status);
+            });
+        });
+    }
+
+    function sendWaVoicePreview() {
+        var preview = state.waVoicePreview;
+        if (!preview || state.waVoiceSending) return;
+        var leadId = state.currentLeadId;
+        state.waVoiceSending = true;
+        state.waVoiceError = null;
+        rerenderContent();
+        fetchSendVoiceMessage(leadId, preview).then(function (resp) {
+            if (state.currentLeadId !== leadId) return;
+            state.waVoiceSending = false;
+            state.waVoiceError = null;
+            var conv = state.conversationCache[leadId] || (state.conversationCache[leadId] = { _loading: false, _error: null, messages: [] });
+            if (!conv.messages) conv.messages = [];
+            conv.messages.push({
+                from: 'af',
+                text: '',
+                time: formatConvTime(new Date().toISOString()),
+                hasAttachment: true,
+                attachmentName: preview.filename || 'nota de voz',
+                attachmentUrl: preview.url,
+                attachmentMimetype: preview.mimeType || 'audio/ogg',
+                status: 'sent',
+                uid: (resp && resp.message_uid) || null
+            });
+            state.waVoicePreview = null;
+            state.__waNeedsScroll = true;
+            rerenderContent();
+            showToast('Audio enviado');
+        }).catch(function (err) {
+            log('voice message failed', err && (err.code || err.message));
+            if (state.currentLeadId !== leadId) return;
+            state.waVoiceSending = false;
+            state.waVoiceError = (err && err.userMessage) || 'No se pudo enviar el audio. Reintenta.';
+            rerenderContent();
+            showToast(state.waVoiceError);
+        });
+    }
+
     // v1.23: envio REAL via POST /api/leads/{id}/conversation/messages (resuelve TODO[send-not-wired]).
     //   loading (waSending) -> success (push msg con uid real + toast) | error (texto restaurado +
     //   banner Reintentar + toast). NOTA: el backend aplica TEST_PHONE_OVERRIDE en testing.
@@ -5193,6 +5458,7 @@
                 hasAttachment: !!m.has_attachment,
                 attachmentName: m.attachment_filename || null,
                 attachmentUrl: m.attachment_url || null,
+                attachmentMimetype: m.attachment_mimetype || null,
                 status: m.status || null
             });
         }
@@ -5208,6 +5474,30 @@
         if (isNaN(d.getTime())) return String(iso);
         function p(n) { return (n < 10 ? '0' : '') + n; }
         return p(d.getDate()) + '/' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    function isAudioAttachment(m) {
+        if (!m) return false;
+        var mt = String(m.attachmentMimetype || m.attachment_mimetype || '').toLowerCase();
+        if (mt.indexOf('audio/') === 0) return true;
+        var name = String(m.attachmentName || m.attachment_filename || m.attachmentUrl || m.attachment_url || '');
+        return /\.(oga|ogg|opus|mp3|m4a)(\?|#|$)/i.test(name);
+    }
+
+    function renderMessageAttachment(m) {
+        if (!m || !m.hasAttachment) return '';
+        var isAudio = isAudioAttachment(m);
+        var url = m.attachmentUrl || m.attachment_url || '';
+        var name = m.attachmentName || m.attachment_filename || (isAudio ? 'audio' : 'archivo adjunto');
+        if (isAudio && url) {
+            return '<div class="qida-msg-att audio">'
+                + '<audio class="qida-msg-audio" controls preload="metadata" src="' + esc(url) + '" title="' + esc(name) + '"></audio>'
+            + '</div>';
+        }
+        if (isAudio) {
+            return '<p class="qida-msg-att missing">' + icon('paperclip', 11) + ' Audio no disponible</p>';
+        }
+        return '<p class="qida-msg-att">' + icon('paperclip', 11) + ' ' + esc(name) + '</p>';
     }
 
     // ---- ENDPOINT 3: chat conversacional con el asistente (POST) ----
@@ -5709,9 +5999,7 @@
                     // v1.31 (FIX H): no renderear burbujas sin texto NI adjunto (mensajes vacíos/
                     //   inválidos -> burbuja verde vacía reportada). Con adjunto sin texto -> placeholder.
                     if (!hasText && !m.hasAttachment) continue;
-                    var att = m.hasAttachment
-                        ? '<p class="qida-msg-att">' + icon('paperclip', 11) + ' ' + esc(m.attachmentName || 'archivo adjunto') + '</p>'
-                        : '';
+                    var att = renderMessageAttachment(m);
                     var textHtml = hasText ? '<p class="qida-msg-text">' + esc(m.text) + '</p>' : '';
                     msgsHtml += '<div class="qida-msg from-' + m.from + '">'
                         + '<div class="qida-msg-bubble">'
@@ -5728,12 +6016,20 @@
         var draft = state.draftMessage || '';
         // v1.23: durante el envio real, deshabilitar Enviar + spinner. Banner de error con Reintentar.
         var sending = !!state.waSending;
+        var voiceBusy = !!(state.waRecording || state.waVoiceSending || state.waVoicePreview);
         // v1.26: habilitar Enviar si hay texto O al menos un attachment (chip-only permitido).
         var hasAtt = !!(state.pendingAttachments && state.pendingAttachments.length);
-        var sendDisabled = (sending || (!draft.trim() && !hasAtt)) ? ' disabled' : '';
+        var sendDisabled = (sending || voiceBusy || (!draft.trim() && !hasAtt)) ? ' disabled' : '';
         var sendInner = sending
             ? '<span class="qida-spinner" aria-hidden="true"></span>'
             : icon('send', 14);
+        var support = waRecordSupport();
+        var micDisabled = (!support.ok || state.waUploading || sending || state.waVoiceSending || !!state.waVoicePreview) ? ' disabled' : '';
+        var micAction = state.waRecording ? 'wa-record-stop' : 'wa-record-start';
+        var micTitle = state.waRecording ? 'Detener grabacion'
+            : (!support.ok ? support.reason : (state.waVoicePreview ? 'Envia o descarta el audio actual' : 'Grabar audio'));
+        var micClass = state.waRecording ? 'qida-wa-mic active' : 'qida-wa-mic';
+        var micInner = state.waRecording ? icon('square', 16) : icon('mic', 16);
         var errBanner = state.waSendError
             ? '<div class="qida-wa-send-error">'
                 + '<span>' + icon('alert-triangle', 12) + ' ' + esc(state.waSendError) + '</span>'
@@ -5747,14 +6043,16 @@
             + '<div class="qida-wa-input-wrap">'
                 + errBanner
                 + renderWaAttachArea()
+                + renderWaVoiceArea()
                 + '<div class="qida-wa-input">'
                     // v1.36 (FIX 2): clip 📎 funcional (revierte el "oculto" de v1.33). Real -> dispara el file
                     //   picker oculto -> POST /api/leads/{id}/attachments (multipart) -> chip file_upload con file_uid.
                     //   Mock -> toast + chip falso. Durante el upload, spinner + disabled (state.waUploading).
                     + '<input type="file" id="qida-wa-file-picker" data-input="wa-file" accept=".pdf,.doc,.docx,image/*,audio/*" hidden />'
-                    + '<button class="qida-wa-clip" data-action="wa-clip"' + (state.waUploading ? ' disabled' : '') + ' aria-label="Adjuntar archivo">'
+                    + '<button class="qida-wa-clip" data-action="wa-clip"' + ((state.waUploading || voiceBusy) ? ' disabled' : '') + ' aria-label="Adjuntar archivo">'
                         + (state.waUploading ? '<span class="qida-spinner" aria-hidden="true"></span>' : icon('paperclip', 16))
                     + '</button>'
+                    + '<button class="' + micClass + '" data-action="' + micAction + '"' + micDisabled + ' aria-label="' + esc(micTitle) + '" title="' + esc(micTitle) + '">' + micInner + '</button>'
                     + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1" placeholder="Escribe un mensaje...">' + esc(draft) + '</textarea>'
                     + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + sendInner + '</button>'
                 + '</div>'
@@ -5789,6 +6087,50 @@
             + '</span>';
         }
         return '<div class="qida-wa-attach-area">' + chips + '</div>';
+    }
+
+    function formatWaDuration(ms) {
+        var total = Math.max(0, Math.round((ms || 0) / 1000));
+        var min = Math.floor(total / 60);
+        var sec = total % 60;
+        return min + ':' + (sec < 10 ? '0' : '') + sec;
+    }
+
+    function renderWaVoiceArea() {
+        var error = state.waVoiceError
+            ? '<p class="qida-wa-voice-error">' + icon('alert-triangle', 11) + ' ' + esc(state.waVoiceError) + '</p>'
+            : '';
+        if (state.waRecording) {
+            return '<div class="qida-wa-voice-area">'
+                + '<div class="qida-wa-voice-row">'
+                    + '<span class="qida-wa-voice-status"><span class="qida-wa-voice-dot" aria-hidden="true"></span>Grabando audio</span>'
+                    + '<span class="qida-wa-voice-actions">'
+                        + '<button class="qida-wa-voice-btn primary" data-action="wa-record-stop">' + icon('square', 11) + ' Detener</button>'
+                        + '<button class="qida-wa-voice-btn" data-action="wa-record-cancel">' + icon('x', 11) + ' Descartar</button>'
+                    + '</span>'
+                + '</div>'
+                + error
+            + '</div>';
+        }
+        if (state.waVoicePreview) {
+            var p = state.waVoicePreview;
+            return '<div class="qida-wa-voice-area">'
+                + '<div class="qida-wa-voice-row">'
+                    + (p.url
+                        ? '<audio class="qida-wa-voice-preview" controls preload="metadata" src="' + esc(p.url) + '"></audio>'
+                        : '<span class="qida-wa-voice-status">' + icon('paperclip', 11) + ' Audio listo (' + esc(formatWaDuration(p.durationMs)) + ')</span>')
+                    + '<span class="qida-wa-voice-actions">'
+                        + '<button class="qida-wa-voice-btn primary" data-action="wa-voice-send"' + (state.waVoiceSending ? ' disabled' : '') + '>'
+                            + (state.waVoiceSending ? '<span class="qida-spinner" aria-hidden="true"></span>' : icon('send', 11)) + ' Enviar</button>'
+                        + '<button class="qida-wa-voice-btn" data-action="wa-voice-rerecord"' + (state.waVoiceSending ? ' disabled' : '') + '>' + icon('mic', 11) + ' Regrabar</button>'
+                        + '<button class="qida-wa-voice-btn" data-action="wa-voice-discard"' + (state.waVoiceSending ? ' disabled' : '') + '>' + icon('x', 11) + ' Descartar</button>'
+                    + '</span>'
+                + '</div>'
+                + error
+            + '</div>';
+        }
+        if (error) return '<div class="qida-wa-voice-area">' + error + '</div>';
+        return '';
     }
 
     // v1.11: renderCenterPane recibe cached y lo propaga a los renderers de paneles
@@ -6812,6 +7154,7 @@
                 //   inicio y el race-guard de LeadDetailService.fetchAll compare con ===
                 //   estricto sin coercion.
                 var leadIdNum = (typeof id === 'string' && /^\d+$/.test(id)) ? parseInt(id, 10) : id;
+                resetWaVoiceState(true);
                 setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.11: SIEMPRE llamamos a fetchAll (incluso en modo mock - el service lo
                 //   detecta y hace mockHydrate sync, sin loading visible). Solo skipeamos si
@@ -6829,6 +7172,7 @@
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
+                resetWaVoiceState(true);
                 setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.43.3: NO re-fetch al volver (revierte FIX B de v1.43.2). El re-fetch traía
                 //   has_unread fresco y, por el orden "nuevos al tope" + slice MAX_VISIBLE de
@@ -6937,21 +7281,44 @@
 
             // v1.6: WhatsApp send mock + clip visual
             case 'wa-send':
+                if (state.waRecording || state.waVoiceSending || state.waVoicePreview) return;
                 var waTa = document.getElementById('qida-wa-textarea');
                 if (waTa) state.draftMessage = waTa.value;
                 sendWhatsAppMock(state.currentLeadId, state.draftMessage);
                 return;
             // v1.23: Reintentar el envio tras un error (texto quedo en el textarea; puede haberse editado).
             case 'wa-send-retry':
+                if (state.waRecording || state.waVoiceSending || state.waVoicePreview) return;
                 var waTaR = document.getElementById('qida-wa-textarea');
                 if (waTaR) state.draftMessage = waTaR.value;
                 state.waSendError = null;
                 sendWhatsAppMock(state.currentLeadId, state.draftMessage);
                 return;
+            case 'wa-record-start':
+                startWaRecording();
+                return;
+            case 'wa-record-stop':
+                stopWaRecording();
+                return;
+            case 'wa-record-cancel':
+                resetWaVoiceState(true);
+                rerenderContent();
+                return;
+            case 'wa-voice-send':
+                sendWaVoicePreview();
+                return;
+            case 'wa-voice-rerecord':
+                resetWaVoiceState(true);
+                startWaRecording();
+                return;
+            case 'wa-voice-discard':
+                resetWaVoiceState(true);
+                rerenderContent();
+                return;
             case 'wa-clip':
                 // v1.36 (FIX 2): real -> abre el file picker nativo (el onchange sube + mete el chip).
                 //   mock -> toast + chip falso (sin upload real) para demostrar la mecánica.
-                if (state.waUploading) return;
+                if (state.waUploading || state.waRecording || state.waVoiceSending || state.waVoicePreview) return;
                 if (useRealApi()) {
                     var picker = document.getElementById('qida-wa-file-picker');
                     if (picker) picker.click();
@@ -7227,7 +7594,10 @@
         // Si veniamos del detail, volver al dashboard. Si veniamos del dashboard (sugerencias/actividades), mantener vista.
         var goingBack = (state.scheduleOrigin === 'detail');
         closeScheduleModal();
-        if (goingBack) setState({ view: 'dashboard', currentLeadId: null });
+        if (goingBack) {
+            resetWaVoiceState(true);
+            setState({ view: 'dashboard', currentLeadId: null });
+        }
     }
 
     function handleInput(e) {
@@ -7250,7 +7620,9 @@
             state.draftMessage = node.value;
             var sendBtnWa = document.querySelector('.qida-wa-send');
             if (sendBtnWa) {
-                if (node.value.trim()) sendBtnWa.removeAttribute('disabled');
+                var hasWaAtt = !!(state.pendingAttachments && state.pendingAttachments.length);
+                var blockedWa = !!(state.waSending || state.waRecording || state.waVoiceSending || state.waVoicePreview);
+                if (!blockedWa && (node.value.trim() || hasWaAtt)) sendBtnWa.removeAttribute('disabled');
                 else sendBtnWa.setAttribute('disabled', '');
             }
             autoResizeTextarea(node);
@@ -7507,6 +7879,7 @@
             var leadId = state.currentLeadId;
             var text = node.value;
             state.draftMessage = text;
+            if (state.waRecording || state.waVoiceSending || state.waVoicePreview) return;
             sendWhatsAppMock(leadId, text);
         } else if (input === 'ai-chat-input') {
             if (e.shiftKey) return;  // v1.30: Shift+Enter = newline (idem textarea de WhatsApp)
@@ -7688,6 +8061,7 @@
     function closeModal() {
         var overlay = document.querySelector('.qida-overlay');
         if (overlay) overlay.className = 'qida-overlay';
+        resetWaVoiceState(true);
         // Reset transient state.
         state.view = 'dashboard';
         state.currentLeadId = null;
