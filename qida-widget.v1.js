@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.47.0
+ * QIDA ASSISTANT v1.48.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,14 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.48.0 (2026-06-04 - crear/cerrar actividades de Odoo desde el widget; rebase sobre v1.47):
+ *   - Boton "+ Nueva actividad" en el detalle del lead: modal con tipo, resumen, nota y fecha limite;
+ *     crea mail.activity via JSON-RPC same-origin contra Odoo.
+ *   - Boton "Hecho" en filas del tab Actividades y en el detalle: confirm obligatorio y cierre por
+ *     action_feedback. No toca el "Marcar hecho" de seguimiento a nivel lead.
+ *   - Probe same-origin al arrancar: si Odoo write no esta disponible, los botones quedan ocultos.
+ *   - Rebase conserva Actividades v2, llamadas en timeline, audios/WebM y safe content swap de v1.47.
  *
  * Cambios v1.47.0 (2026-06-04 — Tab Actividades desde Odoo directo + rediseño tabla + cruce /api/me/leads):
  *   - Tab Actividades: lectura DIRECTA de Odoo (mail.activity/web_search_read, same-origin via
@@ -63,6 +71,24 @@
  *   - ROOT CAUSE (H2): markLeadRead buscaba la fila en dashRows por igualdad EXACTA de id, pero la tabla manda display_id ("L124260") y "Ir al lead" de Actividades manda lead_id numérico (124260). El lookup "L124260" === "124260" fallaba -> early return -> ni optimistic ni POST /read -> badge quedaba (y tras F5, porque el backend nunca recibía el POST). La tabla Sugerencias/Leads sí funcionaba (mismo id).
  *   - FIX A: markLeadRead normaliza a id NUMÉRICO (toNumericLeadId) y SIEMPRE pega POST /read en modo real, para CUALQUIER path (select-lead es el único entry point). FIX B: al "Volver" se re-fetchea la vista activa (loadDashView, solo real).
  *   - FIX C (race POST /read vs re-fetch): Set state.leadsLeidosEnSesion; liveDashRows apaga el badge de esos leads POR ENCIMA del has_unread del backend. FIX D: si POST /read falla, revierte la marca + toast de error (estado honesto).
+ * Cambios v1.44.0 (crear actividad + cerrar actividad a nivel ACTIVITY, via JSON-RPC directo a Odoo — B1, same-origin; respeta el principio rector: una mail.activity es trabajo INTERNO de la AF, no un mensaje al lead):
+ *   - [A] "+ Nueva actividad" en el header del panel "Próximas actividades" del DETALLE del lead
+ *     (donde el lead — y por tanto el res_id de Odoo — es inequívoco y no editable, como pide el form).
+ *     Modal: Tipo (whitelist Por hacer/Llamada/Email/Reunión, resuelto contra mail.activity.type al
+ *     arrancar), Resumen (obligatorio), Nota (opcional), Fecha límite (default mañana, min hoy, max
+ *     hoy+30), Asignada a vos + Lead fijos. Submit -> POST /web/dataset/call_kw/mail.activity/create
+ *     (res_model='crm.lead'). Optimistic add (badge "Pendiente") + toast; revert + error si Odoo rechaza.
+ *   - [B] "✓ Hecho" por fila en el tab "Actividades" del dashboard Y en el panel del detalle. Confirm
+ *     OBLIGATORIO ("¿Cerrar esta actividad?" + preview) -> POST .../mail.activity/action_feedback
+ *     (borra la activity + postea mail.message de audit). Optimistic remove; revert + error si falla.
+ *     Sin undo (action_feedback es irreversible; el confirm previo evita el click accidental).
+ *   - OJO: esto es a nivel ACTIVITY (una mail.activity). NO confundir con el "Marcar hecho" de v1.43
+ *     (nivel LEAD, followup_done_today en Postgres) — esa feature queda intacta.
+ *   - Defensive: probe same-origin al arrancar (verifyOdooWriteCapability -> res.users.read). Si falla
+ *     (CORS / fuera de erp.qida.es), state.odooWriteEnabled=false y los botones de [A]/[B] NO se muestran
+ *     (modo read-only). En dev local (index.html) se habilitan para iterar la UI (sin Odoo real).
+ *   - Errores de Odoo: odooErrMsg parsea el JSON-RPC error (mensaje legible en el toast, sin JSON crudo).
+ *   - Cero backend nuevo: solo qida-widget.v1.js. No publica al Blob (lo hace Alejandro tras merge).
  *
  * Cambios v1.43.1 (viewers: Marina y Alba pueden ver el switcher "Ver como"; solo gating de UI, sin tocar backend/AFs):
  *   - ADMIN_EMAILS_DEFAULT suma 'marina.costa@qida.es' y 'alba.alvarez@qida.es'. Ese array es el gate
@@ -1507,7 +1533,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.47.0';
+    var VERSION = '1.48.0';
     var CONFIG = null;
 
     // ============================================================
@@ -1531,10 +1557,11 @@
     //   degradar a false si odooSession() falla (fallback graceful a modo mock).
     var IS_ODOO_MODE = false;
     var _baseContext = {};
-    // v1.47: uid (res.users.id) de la sesion Odoo logueada. Se hidrata en init desde
-    //   odooSession().result.uid. Es el user_id que usa fetchOdooActivities para traer las
-    //   actividades de la AF logueada (cuando NO esta impersonando). null hasta hidratar / si falla.
+    // v1.48: uid de la sesion Odoo + cache de mail.activity.type.
+    //   _odooUid alimenta fetchOdooActivities y el probe de escritura; _odooActivityTypes
+    //   alimenta el modal "Nueva actividad". null hasta hidratar / si falla.
     var _odooUid = null;
+    var _odooActivityTypes = null;
     // v1.12: whitelist de emails con acceso al panel de lideres. _isLeader se setea en
     //   init() comparando sess.username (modo Odoo) contra LEADER_EMAILS. En modo dev
     //   local (!IS_ODOO_MODE desde el inicio) se setea true automatico para iterar la UI.
@@ -2147,6 +2174,17 @@
         scheduleOrigin: 'detail',       // 'detail' | 'suggestion' | 'activity' (afecta el callback de confirm)
         scheduleLeadIdOverride: null,   // leadId target cuando origin !== 'detail'
 
+        // v1.44: crear actividad + marcar hecho via JSON-RPC directo a Odoo (B1, same-origin).
+        //   odooWriteEnabled: gate. true SOLO si el probe same-origin (verifyOdooWriteCapability)
+        //     respondió OK en init. Con false, los botones de [A] y [B] quedan ocultos (read-only).
+        //   activityModal: null | { leadId, resId, leadName, typeId, summary, note, deadline,
+        //     submitting, error }  -> modal "Nueva actividad".
+        //   activityConfirm: null | { activityId, source('dash'|'detail'), leadId, summary,
+        //     submitting } -> confirm previo a action_feedback ("¿Cerrar esta actividad?").
+        odooWriteEnabled: false,
+        activityModal: null,
+        activityConfirm: null,
+
         // Toast
         toast: null,                    // { msg, ts }
 
@@ -2476,6 +2514,96 @@
             if (!res.ok) throw new Error('Odoo session_info HTTP ' + res.status);
             return res.json();
         }).then(function (data) { return data && data.result; });
+    }
+
+    // ============================================================
+    // v1.44: ESCRITURA a Odoo (mail.activity) via JSON-RPC same-origin (B1)
+    // ============================================================
+    // UNICAS llamadas de escritura del widget. Reusan odooCall (mismo /web/dataset/call_kw +
+    //   manejo de 401/403/no-JSON/data.error). Principio rector intacto: crear/cerrar una
+    //   mail.activity es trabajo INTERNO de la AF, NO genera mensaje al lead.
+    // Capacidad: state.odooWriteEnabled se setea SOLO si verifyOdooWriteCapability() confirma
+    //   sesion same-origin. Con false -> los botones de [A]/[B] quedan ocultos (modo read-only).
+
+    // Whitelist del dropdown de tipos. El id real se resuelve contra mail.activity.type
+    //   (search_read al arrancar, cacheado) por matching de nombre (insensible a may/idioma).
+    var ACTIVITY_TYPE_WHITELIST = [
+        { key: 'todo',    label: 'Por hacer', match: ['por hacer', 'to do', 'todo'] },
+        { key: 'call',    label: 'Llamada',   match: ['llamada', 'call', 'phonecall'] },
+        { key: 'email',   label: 'Email',     match: ['correo', 'email', 'e-mail'] },
+        { key: 'meeting', label: 'Reunión',   match: ['reunión', 'reunion', 'meeting'] }
+    ];
+
+    // Probe de capacidad de escritura: un read trivial a res.users con el uid de la sesion.
+    //   Si responde [{id, login}] -> sesion same-origin OK (habilita [A]/[B]). Si falla
+    //   (CORS, no-JSON, 401/403) odooCall rechaza -> el caller deja odooWriteEnabled=false.
+    //   (read necesita ids; usamos el uid de get_session_info. Sin uid, fallback a search_read.)
+    function verifyOdooWriteCapability() {
+        var uid = _odooUid || (_baseContext && _baseContext.uid) || null;
+        if (uid) return odooCall('res.users', 'read', [[uid], ['id', 'login']], {}).then(_capOk);
+        return odooCall('res.users', 'search_read', [[], ['id', 'login']], { limit: 1 }).then(_capOk);
+    }
+    function _capOk(rows) {
+        return !!(rows && rows.length && rows[0] && rows[0].login != null);
+    }
+
+    // search_read de mail.activity.type -> cache en memoria (_odooActivityTypes). Idempotente.
+    function loadActivityTypes() {
+        if (_odooActivityTypes) return Promise.resolve(_odooActivityTypes);
+        return odooCall('mail.activity.type', 'search_read', [[]], { fields: ['id', 'name'] })
+            .then(function (rows) { _odooActivityTypes = rows || []; return _odooActivityTypes; })
+            .catch(function (err) { log('loadActivityTypes failed', err && err.message); return []; });
+    }
+
+    // Resuelve la whitelist -> [{ id, label, key }] usando los tipos cacheados (solo los que matchean).
+    function resolvedActivityTypes() {
+        var types = _odooActivityTypes || [];
+        var out = [];
+        for (var i = 0; i < ACTIVITY_TYPE_WHITELIST.length; i++) {
+            var w = ACTIVITY_TYPE_WHITELIST[i];
+            var found = null;
+            for (var j = 0; j < types.length && !found; j++) {
+                var nm = String(types[j].name || '').toLowerCase();
+                for (var k = 0; k < w.match.length; k++) {
+                    if (nm.indexOf(w.match[k]) !== -1) { found = types[j]; break; }
+                }
+            }
+            if (found) out.push({ id: found.id, label: w.label, key: w.key });
+        }
+        return out;
+    }
+
+    // CREATE de mail.activity. params: { resId, activityTypeId, summary, note, deadline }.
+    //   Devuelve el id (int) de la activity creada. res_model:'crm.lead' (Odoo deriva res_model_id).
+    function createOdooActivity(params) {
+        return odooCall('mail.activity', 'create', [{
+            res_model: 'crm.lead',
+            res_id: params.resId,
+            activity_type_id: params.activityTypeId,
+            summary: params.summary,
+            note: params.note || '',
+            date_deadline: params.deadline
+        }], {}).then(function (result) {
+            if (typeof result === 'number') return result;
+            if (result && result.length) return result[0];
+            return result;
+        });
+    }
+
+    // action_feedback: cierra (borra) la activity en Odoo + postea un mail.message de audit en el lead.
+    //   NO es reversible -> el caller exige un confirm previo. feedback:'' (sin comentario).
+    function completeOdooActivity(activityId) {
+        return odooCall('mail.activity', 'action_feedback', [[activityId]], { feedback: '' });
+    }
+
+    // Mensaje legible desde un error de odooCall (que ya extrajo data.error.data.message).
+    //   Quita el prefijo "Odoo <model>/<method>: " y trunca, para no dumpear JSON crudo en el toast.
+    function odooErrMsg(err) {
+        var m = (err && err.message) ? String(err.message) : 'Error de Odoo';
+        var idx = m.indexOf(': ');
+        if (idx !== -1 && m.indexOf('Odoo ') === 0) m = m.slice(idx + 2);
+        if (m.length > 160) m = m.slice(0, 157) + '...';
+        return m;
     }
 
     // ---- Sanitizacion de HTML pre-renderizado de Odoo (mail.message.body) ----
@@ -3480,7 +3608,7 @@
                que la grid pisara el flex y la fecha se saliera del div). */
             /* v1.47: 7 columnas (Contacto · Tarea · Temp · Sin contacto · Estado · Fecha · Acción).
                Eliminada TIPO; sumadas TEMP + SIN CONTACTO (cruce /api/me/leads) + ESTADO semáforo. */
-            '.qida-actv-header,.qida-actv-row{display:grid;grid-template-columns:minmax(150px,1.9fr) minmax(150px,2.1fr) 104px 84px 96px 84px 116px;gap:14px;align-items:center;}',
+            '.qida-actv-header,.qida-actv-row{display:grid;grid-template-columns:minmax(150px,1.9fr) minmax(150px,2.1fr) 104px 84px 96px 84px 184px;gap:14px;align-items:center;}',
             '.qida-actv-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
             '.qida-actv-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);}',
             /* v1.47: zebra sutil + hover (hover DEBE ir después de la zebra para ganar a igual especificidad). */
@@ -3494,12 +3622,12 @@
             '.qida-actv-deadline{font-variant-numeric:tabular-nums;color:var(--s700);}',
             '.qida-actv-type{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}',
             '.qida-actv-badge-auto{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:999px;background:var(--s100);color:var(--s600);font-size:10px;font-weight:500;}',
-            '.qida-actv-row-actions{display:flex;justify-content:flex-end;}',
+            '.qida-actv-row-actions{display:flex;justify-content:flex-end;gap:6px;}',
             '.qida-actv-goto{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;}',
             '.qida-actv-goto:hover{background:var(--s50);}',
             /* v1.47: en angosto ocultamos TEMP (col 3) y SIN CONTACTO (col 4) -> 5 cols. Scoped a
                .qida-actv-* para NO afectar la tabla de Leads (.qida-dash-row usa .qida-cell-temp/dias). */
-            '@media (max-width:1100px){.qida-actv-header,.qida-actv-row{grid-template-columns:minmax(130px,1.7fr) minmax(150px,2.2fr) 96px 84px 110px;}.qida-actv-header > div:nth-child(3),.qida-actv-header > div:nth-child(4){display:none;}.qida-actv-row .qida-cell-temp,.qida-actv-row .qida-cell-dias{display:none;}}',
+            '@media (max-width:1100px){.qida-actv-header,.qida-actv-row{grid-template-columns:minmax(130px,1.7fr) minmax(150px,2.2fr) 96px 84px 184px;}.qida-actv-header > div:nth-child(3),.qida-actv-header > div:nth-child(4){display:none;}.qida-actv-row .qida-cell-temp,.qida-actv-row .qida-cell-dias{display:none;}}',
             /* v1.47: columna CONTACTO unificada (ref L##### chico junto al nombre) + "—" gris. */
             '.qida-actv-contacto .qida-cell-line1{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;}',
             '.qida-actv-ref{font-size:11px;color:var(--s500);font-variant-numeric:tabular-nums;}',
@@ -3516,6 +3644,24 @@
             '.qida-dash-search-wrap .qa-icon{position:absolute;left:10px;color:var(--s500);pointer-events:none;}',
             '.qida-dash-search{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px 7px 32px;font-family:inherit;font-size:13px;color:var(--s800);outline:none;min-width:200px;max-width:280px;}',
             '.qida-dash-search:focus{border-color:#3B82F6;}',
+            /* v1.44: crear actividad ([A]) + cerrar actividad ([B]) */
+            '.qida-actv-row-actions{gap:6px;}',
+            '.qida-actv-done{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#0F6E56;border:0.5px solid #0F6E56;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
+            '.qida-actv-done:hover{background:#ecfdf5;}',
+            '.qida-actv-done[disabled]{opacity:.5;cursor:default;}',
+            '.qida-act-new-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
+            '.qida-act-new-btn:hover{background:#0c5a46;}',
+            '.qida-act-done-mini{margin-left:auto;display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#fff;color:#0F6E56;border:0.5px solid #0F6E56;border-radius:7px;font-size:10.5px;font-weight:600;cursor:pointer;font-family:inherit;flex:0 0 auto;}',
+            '.qida-act-done-mini:hover{background:#ecfdf5;}',
+            '.qida-actv-badge-pending{display:inline-flex;align-items:center;gap:3px;margin-left:6px;padding:1px 7px;border-radius:999px;background:#fef3c7;color:#92400e;font-size:10px;font-weight:600;vertical-align:middle;}',
+            '.qida-actv-input{width:100%;box-sizing:border-box;padding:8px 10px;font-family:inherit;font-size:13px;color:var(--s900);border:1px solid var(--s200);border-radius:6px;outline:none;}',
+            '.qida-actv-input:focus{border-color:var(--qg);}',
+            '.qida-actv-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--s600);}',
+            '.qida-actv-meta span{display:inline-flex;align-items:center;gap:5px;}',
+            '.qida-actv-error{margin:0;padding:8px 10px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#b91c1c;font-size:12px;display:flex;align-items:center;gap:6px;}',
+            '.qida-activity-modal{max-width:480px;}',
+            '.qida-actv-confirm{max-width:420px;}',
+            '.qida-actv-confirm-preview{margin:0;padding:10px 12px;background:var(--s50);border-left:3px solid var(--qg);border-radius:4px;font-size:13px;color:var(--s700);font-style:italic;}',
             /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
                FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
                distinto los fr y se desalinearían. */
@@ -4135,9 +4281,14 @@
 
         // TAREA: summary || stripHtml(note) || "Sin descripción". El ellipsis (CSS) trunca; title = texto completo.
         var taskText = act.summary || stripHtml(act.note);
+        var pendingBadge = act._pending
+            ? '<span class="qida-actv-badge-pending" aria-label="Pendiente de sincronizar">' + icon('clock', 10) + 'Pendiente</span>'
+            : '';
         var taskHtml = taskText
             ? '<span class="qida-actv-task-text" title="' + esc(taskText) + '">' + esc(taskText) + '</span>'
             : '<span class="qida-actv-task-empty">Sin descripción</span>';
+
+        if (pendingBadge) taskHtml += pendingBadge;
 
         // TEMP / SIN CONTACTO: reusa los componentes del tab Sugerencias con el leadData del cruce.
         var tempCell = leadData ? renderTempCell(leadData.temperature) : emptyDashCell('qida-cell-temp');
@@ -4156,6 +4307,9 @@
             + renderActivityEstadoBadge(act.state)
             + '<div class="qida-dash-cell qida-actv-deadline' + deadlineCls + '">' + esc(formatShortDate(act.deadlineDate)) + '</div>'
             + '<div class="qida-actv-row-actions">'
+                + ((state.odooWriteEnabled && isRealActivityId(act.id))
+                    ? '<button class="qida-actv-done" data-action="activity-complete" data-id="' + esc(act.id) + '" data-source="dash" data-lead="' + esc(act.leadId != null ? act.leadId : '') + '" title="Cerrar esta actividad en Odoo">' + icon('check', 11) + ' Hecho</button>'
+                    : '')
                 + '<button class="qida-actv-goto" data-action="select-lead" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
             + '</div>'
         + '</div>';
@@ -4820,15 +4974,35 @@
                 var deadlineLabel = a.deadline ? formatDateEs(a.deadline) : 'sin fecha';
                 if (st === 'today') deadlineLabel = 'Hoy';
                 else if (st === 'overdue') deadlineLabel = 'Vencida (' + deadlineLabel + ')';
+                // v1.44: badge "Pendiente" para la actividad recién creada (optimista) hasta el recompute.
+                var pendBadge = a._pending ? '<span class="qida-actv-badge-pending">' + icon('clock', 10) + 'Pendiente</span>' : '';
+                // v1.44 [B]: "✓ Hecho" por fila (action_feedback en Odoo). Solo con escritura habilitada
+                //   y un id NUMERICO real de mail.activity (las mock 'local-*' no se pueden cerrar).
+                var doneBtn = (state.odooWriteEnabled && isRealActivityId(a.id))
+                    ? '<button class="qida-act-done-mini" data-action="activity-complete" data-id="' + esc(a.id) + '" data-source="detail" data-lead="' + esc(leadId) + '" title="Cerrar esta actividad en Odoo">' + icon('check', 11) + ' Hecho</button>'
+                    : '';
                 html += '<div class="' + cls + '">'
                     + '<span class="qida-act-dot"></span>'
-                    + '<span class="qida-act-row-text">' + esc(a.summary) + '</span>'
+                    + '<span class="qida-act-row-text">' + esc(a.summary) + pendBadge + '</span>'
                     + '<span class="qida-act-row-when">' + esc(deadlineLabel) + '</span>'
+                    + doneBtn
                 + '</div>';
             }
         }
 
-        return infoCard(title, '', html);
+        // v1.44 [A]: "+ Nueva actividad" en el header del panel (slot de acciones del infoCard).
+        //   Solo en modo escritura (same-origin OK) y con un lead numerico (res_id de Odoo).
+        var newActBtn = (state.odooWriteEnabled && isRealActivityId(toNumericLeadId(leadId)))
+            ? '<button class="qida-act-new-btn" data-action="activity-new">' + icon('plus', 12) + ' Nueva actividad</button>'
+            : '';
+        return infoCard(title, newActBtn, html);
+    }
+
+    // v1.44: ¿el id es un id real de Odoo (entero), no un placeholder mock 'local-*' / 'pending-*'?
+    function isRealActivityId(id) {
+        if (id == null) return false;
+        if (typeof id === 'number') return isFinite(id) && id > 0;
+        return /^[0-9]+$/.test(String(id));
     }
 
     // v1.18: renderFollowers ("Equipo siguiendo") ELIMINADO de la UI del detalle. La data layer
@@ -6777,6 +6951,89 @@
     }
 
     // ============================================================
+    // v1.44: MODAL "Nueva actividad" + CONFIRM "Cerrar actividad"
+    // ============================================================
+    // Reutiliza las clases del Schedule modal (.qida-schedule*, .qida-sb-*) para consistencia
+    //   visual y cero CSS nuevo de layout. Se montan via syncActivityModal() (append al shell).
+    function renderActivityModal() {
+        var m = state.activityModal;
+        if (!m) return '';
+        var types = resolvedActivityTypes();
+        var typeOpts = '';
+        if (!types.length) {
+            // Tipos aún no cargados (o no matchearon) -> opción placeholder; el submit valida.
+            typeOpts = '<option value="">(cargando tipos…)</option>';
+        } else {
+            for (var i = 0; i < types.length; i++) {
+                var sel = (types[i].id === m.typeId) ? ' selected' : '';
+                typeOpts += '<option value="' + esc(types[i].id) + '"' + sel + '>' + esc(types[i].label) + '</option>';
+            }
+        }
+        var submitDisabled = (m.submitting || !m.summary || !m.summary.trim()) ? ' disabled' : '';
+        var submitLabel = m.submitting ? 'Creando…' : 'Crear actividad';
+        return '<div class="qida-schedule-bg" data-action="activity-bg">'
+            + '<div class="qida-schedule qida-activity-modal">'
+                + '<div class="qida-schedule-head">'
+                    + '<h3 class="qida-schedule-title">Nueva actividad</h3>'
+                    + '<p class="qida-schedule-sub">Para <strong>' + esc(m.leadName) + '</strong> &middot; se crea en Odoo. <strong>No es un mensaje al lead</strong>, es una tarea interna tuya.</p>'
+                + '</div>'
+                + '<div class="qida-schedule-body">'
+                    + '<div class="qida-sb-section">'
+                        + '<div class="qida-sb-label">Tipo</div>'
+                        + '<select class="qida-leader-select qida-actv-input" data-input="activity-type">' + typeOpts + '</select>'
+                    + '</div>'
+                    + '<div class="qida-sb-section">'
+                        + '<div class="qida-sb-label">Resumen *</div>'
+                        + '<input type="text" class="qida-actv-input" data-input="activity-summary" maxlength="200" placeholder="Ej: Llamar para coordinar la visita" value="' + esc(m.summary) + '" />'
+                    + '</div>'
+                    + '<div class="qida-sb-section">'
+                        + '<div class="qida-sb-label">Nota (opcional)</div>'
+                        + '<textarea class="qida-sb-note" data-input="activity-note" placeholder="Detalle interno para vos o la AF que tome el lead…">' + esc(m.note) + '</textarea>'
+                    + '</div>'
+                    + '<div class="qida-sb-section">'
+                        + '<div class="qida-sb-label">Fecha límite</div>'
+                        + '<input type="date" class="qida-actv-input" data-input="activity-deadline" value="' + esc(m.deadline || '') + '" min="' + esc(todayISO()) + '" max="' + esc(addDaysISO(30)) + '" />'
+                    + '</div>'
+                    + '<div class="qida-sb-section qida-actv-meta">'
+                        + '<span>' + icon('check', 11) + ' Asignada a vos</span>'
+                        + '<span>' + icon('arrowRight', 11) + ' Lead: ' + esc(m.leadName) + '</span>'
+                    + '</div>'
+                    + (m.error ? '<p class="qida-actv-error">' + icon('alert', 11) + ' ' + esc(m.error) + '</p>' : '')
+                + '</div>'
+                + '<div class="qida-schedule-foot">'
+                    + '<div class="qida-sb-actions">'
+                        + '<button class="qida-sb-cancel" data-action="activity-cancel">Cancelar</button>'
+                        + '<button class="qida-btn-primary qida-activity-submit" data-action="activity-submit"' + submitDisabled + '>' + icon('plus', 13) + ' ' + esc(submitLabel) + '</button>'
+                    + '</div>'
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    function renderActivityConfirm() {
+        var c = state.activityConfirm;
+        if (!c) return '';
+        var preview = c.summary ? '<p class="qida-actv-confirm-preview">&ldquo;' + esc(c.summary) + '&rdquo;</p>' : '';
+        var yesLabel = c.submitting ? 'Cerrando…' : 'Sí, cerrar';
+        var yesDisabled = c.submitting ? ' disabled' : '';
+        return '<div class="qida-schedule-bg" data-action="activity-confirm-bg">'
+            + '<div class="qida-schedule qida-actv-confirm">'
+                + '<div class="qida-schedule-head">'
+                    + '<h3 class="qida-schedule-title">¿Cerrar esta actividad?</h3>'
+                    + '<p class="qida-schedule-sub">Se marca como hecha en Odoo (queda registrada en el historial del lead). <strong>No se puede deshacer.</strong></p>'
+                + '</div>'
+                + '<div class="qida-schedule-body">' + preview + '</div>'
+                + '<div class="qida-schedule-foot">'
+                    + '<div class="qida-sb-actions">'
+                        + '<button class="qida-sb-cancel" data-action="activity-confirm-cancel">Cancelar</button>'
+                        + '<button class="qida-btn-primary" data-action="activity-confirm-yes"' + yesDisabled + '>' + icon('check', 13) + ' ' + esc(yesLabel) + '</button>'
+                    + '</div>'
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    // ============================================================
     // RENDER: PANEL DE LIDERES (v1.12)
     // ============================================================
     // Devuelve las iniciales (1-2 letras) para el avatar de la tabla.
@@ -7236,6 +7493,7 @@
         syncShellHeader();
         syncAfSwitcher();   // v1.19: barra del AF switcher (solo admins)
         syncScheduleModal();
+        syncActivityModal();  // v1.44: modal "Nueva actividad" + confirm "Cerrar actividad"
         // v1.10: syncAssistantHeader eliminada (junto con todo el bloque del asistente).
         syncToast();
         // v1.12: mount ApexCharts post-innerHTML solo si estamos en la vista leaders.
@@ -7471,6 +7729,30 @@
             shell.appendChild(div);
         } else {
             if (existing) existing.parentNode.removeChild(existing);
+        }
+    }
+
+    // v1.44: monta/desmonta el modal "Nueva actividad" y el confirm "Cerrar actividad" en el shell
+    //   (mismo patrón que syncScheduleModal). Independiente de la vista: el confirm de cerrar puede
+    //   dispararse tanto desde el tab "Actividades" del dashboard como desde el detalle del lead.
+    function syncActivityModal() {
+        var shell = document.getElementById('qida-shell');
+        if (!shell) return;
+        var existing = document.getElementById('qida-activity-root');
+        if (existing) existing.parentNode.removeChild(existing);
+        if (state.activityModal) {
+            var div = document.createElement('div');
+            div.id = 'qida-activity-root';
+            div.innerHTML = renderActivityModal();
+            shell.appendChild(div);
+        }
+        var existingC = document.getElementById('qida-activity-confirm-root');
+        if (existingC) existingC.parentNode.removeChild(existingC);
+        if (state.activityConfirm) {
+            var divc = document.createElement('div');
+            divc.id = 'qida-activity-confirm-root';
+            divc.innerHTML = renderActivityConfirm();
+            shell.appendChild(divc);
         }
     }
 
@@ -7970,6 +8252,38 @@
             case 'schedule-close-apply':
                 handleScheduleCloseApply();
                 return;
+
+            // --- v1.44: crear actividad ([A]) + marcar hecho a nivel ACTIVITY ([B]) ---
+            //   OJO: 'mark-done'/'undo-mark-done' (arriba) son a nivel LEAD (v1.43, followup_done).
+            //   Estos son a nivel ACTIVITY (una mail.activity individual) -> action_feedback de Odoo.
+            case 'activity-new':
+                openActivityModal();
+                return;
+            case 'activity-cancel':
+                setState({ activityModal: null });
+                return;
+            case 'activity-bg':
+                if (e.target === target) setState({ activityModal: null });
+                return;
+            case 'activity-submit':
+                handleActivitySubmit();
+                return;
+            case 'activity-complete':
+                openActivityConfirm(
+                    parseInt(id, 10),
+                    target.getAttribute('data-source') || 'dash',
+                    target.getAttribute('data-lead') || state.currentLeadId
+                );
+                return;
+            case 'activity-confirm-cancel':
+                setState({ activityConfirm: null });
+                return;
+            case 'activity-confirm-bg':
+                if (e.target === target) setState({ activityConfirm: null });
+                return;
+            case 'activity-confirm-yes':
+                handleActivityComplete();
+                return;
         }
     }
 
@@ -8037,6 +8351,171 @@
             scheduleOrigin: 'detail',
             scheduleLeadIdOverride: null
         });
+    }
+
+    // ============================================================
+    // v1.44: handlers de crear actividad ([A]) + cerrar actividad ([B])
+    // ============================================================
+    // [A] Abre el modal "Nueva actividad" anclado al lead del detalle (res_id = id numérico Odoo).
+    function openActivityModal() {
+        if (!state.odooWriteEnabled) { showToast('Función no disponible en este modo.', 'error'); return; }
+        var leadId = state.currentLeadId;
+        var resId = parseInt(toNumericLeadId(leadId), 10);
+        if (!resId || isNaN(resId)) { showToast('No pude identificar el lead.', 'error'); return; }
+        var lead = currentLead(leadId);
+        // Si los tipos aún no se cargaron, dispararlos y re-renderizar el modal cuando lleguen.
+        if (!_odooActivityTypes) { loadActivityTypes().then(function () { if (state.activityModal) rerenderContent(); }); }
+        var types = resolvedActivityTypes();
+        setState({ activityModal: {
+            leadId: leadId,
+            resId: resId,
+            leadName: (lead && lead.name) || ('Lead ' + leadId),
+            typeId: types.length ? types[0].id : null,   // default = "Por hacer" (primer match de la whitelist)
+            summary: '',
+            note: '',
+            deadline: addDaysISO(1),   // default = mañana (min hoy, max hoy+30, validado por el <input>)
+            submitting: false,
+            error: null
+        } });
+    }
+
+    // [A] Submit del modal: valida, crea en Odoo, optimistic add, toast. Revert/error si falla.
+    function handleActivitySubmit() {
+        var m = state.activityModal;
+        if (!m || m.submitting) return;
+        if (!m.summary || !m.summary.trim()) { m.error = 'El resumen es obligatorio.'; rerenderContent(); return; }
+        if (!m.typeId) { m.error = 'Elegí un tipo de actividad.'; rerenderContent(); return; }
+        if (!m.deadline) { m.error = 'Elegí una fecha límite.'; rerenderContent(); return; }
+        m.submitting = true; m.error = null; rerenderContent();
+        createOdooActivity({
+            resId: m.resId,
+            activityTypeId: m.typeId,
+            summary: m.summary.trim(),
+            note: m.note || '',
+            deadline: m.deadline
+        }).then(function (newId) {
+            optimisticAddActivity(m, newId);
+            state.activityModal = null;
+            rerenderContent();
+            showToast('Actividad creada');
+        }).catch(function (err) {
+            // El create falló (incluye deadline rechazada por Odoo): NO se hizo optimistic add.
+            if (!state.activityModal) return;
+            state.activityModal.submitting = false;
+            state.activityModal.error = odooErrMsg(err);
+            rerenderContent();
+            showToast('No se pudo crear la actividad.', 'error');
+        });
+    }
+
+    // Inserta la actividad recién creada en los surfaces visibles (detalle + tab dashboard) con
+    //   flag _pending, para feedback inmediato. El recompute (cron 30 min) reconcilia el dato real.
+    function optimisticAddActivity(m, newId) {
+        var typeLabel = '';
+        var types = resolvedActivityTypes();
+        for (var i = 0; i < types.length; i++) { if (types[i].id === m.typeId) { typeLabel = types[i].label; break; } }
+        var cache = state.leadDetailCache && state.leadDetailCache[m.leadId];
+        if (cache && cache.activities) {
+            cache.activities.push({
+                id: isRealActivityId(newId) ? newId : ('pending-' + m.resId),
+                type: typeLabel,
+                summary: m.summary.trim(),
+                note: m.note || '',
+                deadline: m.deadline,
+                state: activityStateFromDeadline(m.deadline),
+                responsable: '', assignee: '', done: false,
+                _pending: true
+            });
+        }
+        if (state.dashView === 'activities' && Array.isArray(state.dashRows)) {
+            state.dashRows.unshift({
+                id: isRealActivityId(newId) ? newId : ('pending-' + m.resId),
+                leadId: m.resId,
+                leadName: 'L' + m.resId + ' ' + (m.leadName || ''),
+                typeLabel: typeLabel,
+                summary: m.summary.trim(),
+                note: m.note || '',
+                deadlineDate: m.deadline,
+                state: activityStateFromDeadline(m.deadline),
+                assigneeId: _odooUid || null,
+                assigneeName: '',
+                createDate: todayISO(),
+                _pending: true
+            });
+        }
+    }
+
+    // [B] Abre el confirm previo a action_feedback (acción irreversible -> confirm obligatorio).
+    function openActivityConfirm(activityId, source, leadId) {
+        if (!state.odooWriteEnabled) return;
+        if (!isRealActivityId(activityId)) { showToast('Esta actividad no se puede cerrar todavía.', 'error'); return; }
+        setState({ activityConfirm: {
+            activityId: activityId,
+            source: source || 'dash',
+            leadId: leadId,
+            summary: findActivitySummary(activityId, leadId),
+            submitting: false
+        } });
+    }
+
+    function findActivitySummary(activityId, leadId) {
+        if (Array.isArray(state.dashRows)) {
+            for (var i = 0; i < state.dashRows.length; i++) {
+                if (state.dashRows[i] && String(state.dashRows[i].id) === String(activityId)) return state.dashRows[i].summary || '';
+            }
+        }
+        var cache = state.leadDetailCache && state.leadDetailCache[leadId];
+        if (cache && Array.isArray(cache.activities)) {
+            for (var j = 0; j < cache.activities.length; j++) {
+                if (cache.activities[j] && String(cache.activities[j].id) === String(activityId)) return cache.activities[j].summary || '';
+            }
+        }
+        return '';
+    }
+
+    // [B] Confirma el cierre: optimistic remove + action_feedback. Revert + error si falla.
+    function handleActivityComplete() {
+        var c = state.activityConfirm;
+        if (!c || c.submitting) return;
+        // Optimistic remove de los surfaces y cierre del confirm (UX inmediata).
+        var reverts = removeActivityFromState(c.activityId, c.leadId);
+        state.activityConfirm = null;
+        rerenderContent();
+        completeOdooActivity(c.activityId).then(function () {
+            showToast('Actividad cerrada');
+        }).catch(function (err) {
+            revertActivityRemoval(reverts);   // volver a insertar la fila donde estaba
+            rerenderContent();
+            showToast('No se pudo cerrar: ' + odooErrMsg(err), 'error');
+        });
+    }
+
+    // Quita la activity de dashRows (id) y del cache del detalle (id). Devuelve los
+    //   reverts ({ arr, index, item }) para re-insertar en la misma posición si la llamada falla.
+    function removeActivityFromState(activityId, leadId) {
+        var reverts = [];
+        function rm(arr, key) {
+            if (!Array.isArray(arr)) return;
+            for (var i = 0; i < arr.length; i++) {
+                if (arr[i] && String(arr[i][key]) === String(activityId)) {
+                    var item = arr[i];
+                    arr.splice(i, 1);
+                    reverts.push({ arr: arr, index: i, item: item });
+                    return;
+                }
+            }
+        }
+        rm(state.dashRows, 'id');
+        var cache = state.leadDetailCache && state.leadDetailCache[leadId];
+        if (cache && cache.activities) rm(cache.activities, 'id');
+        return reverts;
+    }
+
+    function revertActivityRemoval(reverts) {
+        for (var i = 0; i < reverts.length; i++) {
+            var r = reverts[i];
+            r.arr.splice(Math.min(r.index, r.arr.length), 0, r.item);
+        }
     }
 
     // v1.10: runAssistantSearch y handleSetSort ELIMINADAS junto con sus consumidores
@@ -8109,6 +8588,23 @@
             state.scheduleNote = node.value;
         } else if (input === 'schedule-mark-pause') {
             state.scheduleMarkPause = !!node.checked;
+        } else if (input === 'activity-type') {
+            // v1.44: select de tipo. Store sin rerender (el DOM nativo mantiene la selección).
+            if (state.activityModal) state.activityModal.typeId = parseInt(node.value, 10) || null;
+        } else if (input === 'activity-summary') {
+            // Texto: NO rerender (perdería foco). Store + togglear el botón Crear inline.
+            if (state.activityModal) {
+                state.activityModal.summary = node.value;
+                var subBtn = document.querySelector('.qida-activity-submit');
+                if (subBtn) {
+                    if (node.value.trim()) subBtn.removeAttribute('disabled');
+                    else subBtn.setAttribute('disabled', '');
+                }
+            }
+        } else if (input === 'activity-note') {
+            if (state.activityModal) state.activityModal.note = node.value;
+        } else if (input === 'activity-deadline') {
+            if (state.activityModal) state.activityModal.deadline = node.value || null;
         } else if (input === 'wa-draft') {
             // v1.6: textarea de WhatsApp. Sin rerender completo: solo togglear send + auto-resize.
             state.draftMessage = node.value;
@@ -8536,6 +9032,9 @@
         var isEsc = (e.key === 'Escape' || e.keyCode === 27);
 
         if (isEsc) {
+            // v1.44: el confirm de cerrar actividad y el modal de nueva actividad tienen prioridad.
+            if (state.activityConfirm) { setState({ activityConfirm: null }); return; }
+            if (state.activityModal) { setState({ activityModal: null }); return; }
             if (state.showScheduleModal) { closeScheduleModal(); return; }
             // v1.17: si el dropdown de temperatura está abierto, Esc lo cierra (no cierra el modal).
             if (state.view === 'detail' && state.tempEditorOpen) { setState({ tempEditorOpen: false }); return; }
@@ -8589,6 +9088,9 @@
         state.scheduleLeadIdOverride = null;
         state.__pendingSuggestionDoneId = null;
         state.__pendingActivityDoneId = null;
+        // v1.44: cerrar el modal y el confirm de actividades al cerrar el widget.
+        state.activityModal = null;
+        state.activityConfirm = null;
         // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
         //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
         state.agentBuilderConfirmDiscard = false;
@@ -8676,10 +9178,22 @@
                 odooSession().then(function (sess) {
                     _baseContext = (sess && sess.user_context) || {};
                     _currentUserEmail = (sess && sess.username) || null;
-                    _odooUid = (sess && sess.uid) || null;  // v1.47: uid para fetchOdooActivities (AF viendo lo suyo)
                     _isLeader = !!(_currentUserEmail && LEADER_EMAILS[_currentUserEmail]);
+                    _odooUid = (sess && sess.uid) || (_baseContext && _baseContext.uid) || null;  // uid para actividades y probe de escritura
                     log('Odoo session ready', { uid: sess && sess.uid, lang: _baseContext.lang, isLeader: _isLeader });
                     if (_isLeader) activateLeaderUi();
+                    // v1.44: probe de escritura same-origin + precarga de tipos. NO bloquea el init
+                    //   ni el resto del detalle. Si el probe falla, odooWriteEnabled queda false y
+                    //   los botones de crear/cerrar actividad NO se muestran (degradado con gracia).
+                    verifyOdooWriteCapability().then(function (ok) {
+                        state.odooWriteEnabled = !!ok;
+                        log('Odoo write capability', ok);
+                        if (ok) loadActivityTypes();
+                        if (document.getElementById('qida-content')) rerenderContent();
+                    }).catch(function (capErr) {
+                        state.odooWriteEnabled = false;
+                        log('Odoo write capability probe failed', capErr && capErr.message);
+                    });
                     syncAfSwitcher();  // v1.19: el estado admin depende del email recién hidratado
                     console.info('[QidaAssistant] Leader mode:', _isLeader, _currentUserEmail);
                     console.info('[QidaAssistant] Admin mode:', isAdminUser(), _currentUserEmail);
@@ -8699,6 +9213,11 @@
                 // Modo dev local: habilitamos panel de lideres para demo / iteracion.
                 _isLeader = true;
                 _currentUserEmail = 'dev@local';
+                // v1.44: en dev local (index.html, sin Odoo) habilitamos los botones de crear/cerrar
+                //   actividad para poder iterar la UI. Las llamadas JSON-RPC reales no existen fuera de
+                //   erp.qida.es, pero el modal/confirm se pueden ver y testear (fetch mockeado). En Odoo
+                //   real este flag NUNCA se enciende acá: lo decide el probe verifyOdooWriteCapability.
+                state.odooWriteEnabled = true;
                 activateLeaderUi();
                 syncAfSwitcher();  // v1.19: dev local = admin (para testear el switcher)
                 console.info('[QidaAssistant] Leader mode:', true, '(dev local)');
