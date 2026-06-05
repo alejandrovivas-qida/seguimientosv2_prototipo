@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.48.5
+ * QIDA ASSISTANT v1.48.6
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,12 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.48.6 (2026-06-05 — estilos consistentes en acciones de fila de actividad):
+ *   - Reagendar ahora matchea visualmente a Hecho (mismo chrome: shape/padding/height/font-weight/
+ *     border-radius) con paleta naranja Qida (#F59E0B) en borde/texto + hover ámbar claro (#fffbeb).
+ *   - Removido botón "Ir al lead" de las filas (la fila completa ya navega al hacer click vía el
+ *     data-action="select-lead" del div; los botones Hecho/Reagendar lo shadowean por findActionTarget).
  *
  * Cambios v1.48.5 (2026-06-05 — reagendar actividad desde el widget):
  *   - Botón "📅 Reagendar" en cada fila del tab Actividades (junto a "✓ Hecho"). Cambia el
@@ -1557,7 +1563,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.5';
+    var VERSION = '1.48.6';
     var CONFIG = null;
 
     // ============================================================
@@ -3801,6 +3807,10 @@
             '.qida-actv-done{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#0F6E56;border:0.5px solid #0F6E56;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
             '.qida-actv-done:hover{background:#ecfdf5;}',
             '.qida-actv-done[disabled]{opacity:.5;cursor:default;}',
+            /* v1.48.6: Reagendar = MISMO chrome que Hecho (shape/padding/height/weight/radius), paleta naranja Qida (#F59E0B). */
+            '.qida-actv-reschedule{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#F59E0B;border:0.5px solid #F59E0B;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
+            '.qida-actv-reschedule:hover{background:#fffbeb;}',
+            '.qida-actv-reschedule[disabled]{opacity:.5;cursor:default;}',
             '.qida-act-new-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
             '.qida-act-new-btn:hover{background:#0c5a46;}',
             '.qida-act-done-mini{margin-left:auto;display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#fff;color:#0F6E56;border:0.5px solid #0F6E56;border-radius:7px;font-size:10.5px;font-weight:600;cursor:pointer;font-family:inherit;flex:0 0 auto;}',
@@ -4464,7 +4474,7 @@
                     ? '<button class="qida-actv-done" data-action="activity-complete" data-id="' + esc(act.id) + '" data-source="dash" data-lead="' + esc(act.leadId != null ? act.leadId : '') + '" title="Cerrar esta actividad en Odoo">' + icon('check', 11) + ' Hecho</button>'
                         + '<button class="qida-actv-reschedule" data-action="activity-reschedule" data-id="' + esc(act.id) + '" data-lead="' + esc(act.leadId != null ? act.leadId : '') + '" data-current-date="' + esc(act.deadlineDate || '') + '" title="Cambiar la fecha límite en Odoo">📅 Reagendar</button>'
                     : '')
-                + '<button class="qida-actv-goto" data-action="select-lead" data-source="activities" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
+                // v1.48.6: "Ir al lead" removido — el click en la fila (data-action="select-lead" del div) ya navega.
             + '</div>'
         + '</div>';
     }
