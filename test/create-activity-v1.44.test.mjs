@@ -7,8 +7,9 @@
  *   node test/create-activity-v1.44.test.mjs
  *
  * Cubre:
- *   - createOdooActivity: arma el call_kw correcto (model mail.activity, method create,
- *     res_model crm.lead, res_id, activity_type_id, summary, note, date_deadline) y devuelve el id.
+ *   - createOdooActivity: resuelve res_model_id via ir.model y arma el call_kw correcto
+ *     (model mail.activity, method create, res_model crm.lead, res_id, activity_type_id,
+ *     summary, note, date_deadline) y devuelve el id.
  *   - completeOdooActivity: action_feedback con [[id]] + feedback:''.
  *   - verifyOdooWriteCapability: true con [{id,login}], false sin login, rechaza ante error Odoo.
  *   - loadActivityTypes + resolvedActivityTypes: resuelve la whitelist -> ids por nombre + cachea.
@@ -50,6 +51,7 @@ const mod = new Function(
     'var _baseContext = {};\n' +
     'var _odooUid = null;\n' +
     'var _odooActivityTypes = null;\n' +
+    'var _crmLeadModelId = null;\n' +
     'function log(){}\n' +
     extractVar(SRC, 'ACTIVITY_TYPE_WHITELIST') + '\n' +
     extractFn(SRC, 'odooCall') + '\n' +
@@ -57,16 +59,17 @@ const mod = new Function(
     extractFn(SRC, '_capOk') + '\n' +
     extractFn(SRC, 'loadActivityTypes') + '\n' +
     extractFn(SRC, 'resolvedActivityTypes') + '\n' +
+    extractFn(SRC, 'getCrmLeadModelId') + '\n' +
     extractFn(SRC, 'createOdooActivity') + '\n' +
     extractFn(SRC, 'completeOdooActivity') + '\n' +
     extractFn(SRC, 'odooErrMsg') + '\n' +
     extractFn(SRC, 'isRealActivityId') + '\n' +
     'return {\n' +
-    '  verifyOdooWriteCapability, loadActivityTypes, resolvedActivityTypes,\n' +
+    '  verifyOdooWriteCapability, loadActivityTypes, resolvedActivityTypes, getCrmLeadModelId,\n' +
     '  createOdooActivity, completeOdooActivity, odooErrMsg, isRealActivityId,\n' +
     '  ACTIVITY_TYPE_WHITELIST,\n' +
     '  __calls: () => __calls,\n' +
-    '  __reset: () => { __calls.length = 0; },\n' +
+    '  __reset: () => { __calls.length = 0; _crmLeadModelId = null; },\n' +
     '  __setFetch: (f) => { __fetchImpl = f; },\n' +
     '  __setUid: (u) => { _odooUid = u; },\n' +
     '  __setBaseContext: (c) => { _baseContext = c; },\n' +
@@ -92,6 +95,11 @@ function routedFetch(routes) {
         }
         return jsonResponse({ result: null });
     };
+}
+function withCrmLeadModel(routes, id = 77) {
+    return Object.assign({
+        'ir.model/search_read': () => jsonResponse({ result: [{ id, model: 'crm.lead' }] })
+    }, routes);
 }
 const TYPES = [
     { id: 4, name: 'Por hacer' },
@@ -136,15 +144,17 @@ section('v1.44 — createOdooActivity ([A])');
 test('createOdooActivity: arma el call_kw correcto y devuelve el id (result numérico)', async () => {
     mod.__reset();
     mod.__setBaseContext({ lang: 'es_ES', tz: 'Europe/Madrid', uid: 818 });
-    mod.__setFetch(routedFetch({ 'mail.activity/create': () => jsonResponse({ result: 992858 }) }));
+    mod.__setFetch(routedFetch(withCrmLeadModel({ 'mail.activity/create': () => jsonResponse({ result: 992858 }) }, 123)));
     const id = await mod.createOdooActivity({ resId: 125040, activityTypeId: 4, summary: 'Llamar', note: 'nota', deadline: '2026-06-10' });
     assert.equal(id, 992858);
-    const call = mod.__calls()[0];
+    assert.match(mod.__calls()[0].url, /\/web\/dataset\/call_kw\/ir\.model\/search_read$/);
+    const call = mod.__calls()[1];
     assert.match(call.url, /\/web\/dataset\/call_kw\/mail\.activity\/create$/);
     assert.equal(call.body.params.model, 'mail.activity');
     assert.equal(call.body.params.method, 'create');
     const vals = call.body.params.args[0];
     assert.equal(vals.res_model, 'crm.lead');
+    assert.equal(vals.res_model_id, 123);
     assert.equal(vals.res_id, 125040);
     assert.equal(vals.activity_type_id, 4);
     assert.equal(vals.summary, 'Llamar');
@@ -154,23 +164,23 @@ test('createOdooActivity: arma el call_kw correcto y devuelve el id (result num�
 
 test('createOdooActivity: result como [id] (algunas versiones) -> devuelve el primer id', async () => {
     mod.__reset();
-    mod.__setFetch(routedFetch({ 'mail.activity/create': () => jsonResponse({ result: [777] }) }));
+    mod.__setFetch(routedFetch(withCrmLeadModel({ 'mail.activity/create': () => jsonResponse({ result: [777] }) })));
     const id = await mod.createOdooActivity({ resId: 1, activityTypeId: 2, summary: 's', note: '', deadline: '2026-06-10' });
     assert.equal(id, 777);
 });
 
 test('createOdooActivity: nota vacía -> manda note:"" (no undefined)', async () => {
     mod.__reset();
-    mod.__setFetch(routedFetch({ 'mail.activity/create': () => jsonResponse({ result: 1 }) }));
+    mod.__setFetch(routedFetch(withCrmLeadModel({ 'mail.activity/create': () => jsonResponse({ result: 1 }) })));
     await mod.createOdooActivity({ resId: 1, activityTypeId: 2, summary: 's', note: '', deadline: '2026-06-10' });
-    assert.equal(mod.__calls()[0].body.params.args[0].note, '');
+    assert.equal(mod.__calls()[1].body.params.args[0].note, '');
 });
 
 test('createOdooActivity: error de Odoo (HTTP 200 + data.error) -> rechaza (dispara revert del caller)', async () => {
     mod.__reset();
-    mod.__setFetch(routedFetch({
+    mod.__setFetch(routedFetch(withCrmLeadModel({
         'mail.activity/create': () => jsonResponse({ error: { data: { name: 'odoo.exceptions.ValidationError', message: 'Fecha inválida' } } })
-    }));
+    })));
     await assert.rejects(
         mod.createOdooActivity({ resId: 1, activityTypeId: 2, summary: 's', note: '', deadline: 'bad' }),
         (err) => { assert.match(err.message, /Fecha inválida/); return true; }

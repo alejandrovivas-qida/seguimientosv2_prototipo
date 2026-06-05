@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.48.0
+ * QIDA ASSISTANT v1.48.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,11 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.48.1 (2026-06-05 - fixes Actividades):
+ *   - Filas del tab Actividades clicables: click en la fila abre el detalle del lead.
+ *   - Entrar al detalle desde Actividades no dispara POST /read ni muestra el toast de "marcar leido".
+ *   - Crear actividad incluye res_model_id de crm.lead resuelto via ir.model; Odoo no lo deriva desde res_model.
  *
  * Cambios v1.48.0 (2026-06-04 - crear/cerrar actividades de Odoo desde el widget; rebase sobre v1.47):
  *   - Boton "+ Nueva actividad" en el detalle del lead: modal con tipo, resumen, nota y fecha limite;
@@ -1533,7 +1538,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.0';
+    var VERSION = '1.48.1';
     var CONFIG = null;
 
     // ============================================================
@@ -1562,6 +1567,7 @@
     //   alimenta el modal "Nueva actividad". null hasta hidratar / si falla.
     var _odooUid = null;
     var _odooActivityTypes = null;
+    var _crmLeadModelId = null;
     // v1.12: whitelist de emails con acceso al panel de lideres. _isLeader se setea en
     //   init() comparando sess.username (modo Odoo) contra LEADER_EMAILS. En modo dev
     //   local (!IS_ODOO_MODE desde el inicio) se setea true automatico para iterar la UI.
@@ -2573,17 +2579,33 @@
         return out;
     }
 
+    function getCrmLeadModelId() {
+        if (_crmLeadModelId) return Promise.resolve(_crmLeadModelId);
+        return odooCall('ir.model', 'search_read', [[['model', '=', 'crm.lead']]], {
+            fields: ['id', 'model'],
+            limit: 1
+        }).then(function (rows) {
+            var id = rows && rows[0] && rows[0].id;
+            if (!id) throw new Error('No pude resolver res_model_id de crm.lead');
+            _crmLeadModelId = id;
+            return _crmLeadModelId;
+        });
+    }
+
     // CREATE de mail.activity. params: { resId, activityTypeId, summary, note, deadline }.
-    //   Devuelve el id (int) de la activity creada. res_model:'crm.lead' (Odoo deriva res_model_id).
+    //   Devuelve el id (int) de la activity creada. En este Odoo res_model_id es obligatorio.
     function createOdooActivity(params) {
-        return odooCall('mail.activity', 'create', [{
-            res_model: 'crm.lead',
-            res_id: params.resId,
-            activity_type_id: params.activityTypeId,
-            summary: params.summary,
-            note: params.note || '',
-            date_deadline: params.deadline
-        }], {}).then(function (result) {
+        return getCrmLeadModelId().then(function (resModelId) {
+            return odooCall('mail.activity', 'create', [{
+                res_model: 'crm.lead',
+                res_model_id: resModelId,
+                res_id: params.resId,
+                activity_type_id: params.activityTypeId,
+                summary: params.summary,
+                note: params.note || '',
+                date_deadline: params.deadline
+            }], {});
+        }).then(function (result) {
             if (typeof result === 'number') return result;
             if (result && result.length) return result[0];
             return result;
@@ -3610,7 +3632,7 @@
                Eliminada TIPO; sumadas TEMP + SIN CONTACTO (cruce /api/me/leads) + ESTADO semáforo. */
             '.qida-actv-header,.qida-actv-row{display:grid;grid-template-columns:minmax(150px,1.9fr) minmax(150px,2.1fr) 104px 84px 96px 84px 184px;gap:14px;align-items:center;}',
             '.qida-actv-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
-            '.qida-actv-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);}',
+            '.qida-actv-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);cursor:pointer;}',
             /* v1.47: zebra sutil + hover (hover DEBE ir después de la zebra para ganar a igual especificidad). */
             '.qida-actv-row:nth-child(even){background:#FAFAFA;}',
             '.qida-actv-row:hover{background:#F3F4F6;}',
@@ -4296,7 +4318,7 @@
 
         var deadlineCls = (act.state === 'overdue') ? ' qida-actv-deadline-overdue' : '';
 
-        return '<div class="qida-actv-row">'
+        return '<div class="qida-actv-row" data-action="select-lead" data-source="activities" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">'
             + '<div class="qida-dash-cell qida-actv-contacto qida-cell-familia">'
                 + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(contactName) + '</span>' + refHtml + '</div>'
                 + line2
@@ -4310,7 +4332,7 @@
                 + ((state.odooWriteEnabled && isRealActivityId(act.id))
                     ? '<button class="qida-actv-done" data-action="activity-complete" data-id="' + esc(act.id) + '" data-source="dash" data-lead="' + esc(act.leadId != null ? act.leadId : '') + '" title="Cerrar esta actividad en Odoo">' + icon('check', 11) + ' Hecho</button>'
                     : '')
-                + '<button class="qida-actv-goto" data-action="select-lead" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
+                + '<button class="qida-actv-goto" data-action="select-lead" data-source="activities" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
             + '</div>'
         + '</div>';
     }
@@ -7811,6 +7833,7 @@
         if (!target) return;
         var action = target.getAttribute('data-action');
         var id = target.getAttribute('data-id');
+        var source = target.getAttribute('data-source') || '';
 
         switch (action) {
             case 'open-modal':       openModal(); return;
@@ -7915,7 +7938,8 @@
                 // v1.42 (FIX 1+2): marcar leído ANTES del setState. Optimistic clear del badge
                 //   "Mensaje nuevo" en state.dashRows + POST /read fire-and-forget (solo real).
                 //   Usamos `id` (data-id del DOM = row.id = display_id), no leadIdNum.
-                markLeadRead(id);
+                if (source !== 'activities') markLeadRead(id);
+                if (!id) return;
                 // v1.6: inicializamos draftMessage='' y attachmentsExpanded=false. NO tocar aiChatHistory.
                 state.__waNeedsScroll = true;
                 state.__aiNeedsScroll = true;  // v1.9.1: scroll inicial al fondo del chat IA si hay historial.
