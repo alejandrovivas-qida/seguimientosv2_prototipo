@@ -10,6 +10,17 @@
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
  *
+ * Cambios v1.48.4 (2026-06-05 — switcher "Ver como": Eva viewer + lista base de admins garantizada):
+ *   - eva.fernandez.arratia@qida.es sumada a ADMIN_EMAILS_DEFAULT (viewer del switcher, igual que
+ *     Marina y Alba). Impersona Ana Pinilla / Paloma Gálvez (ya en IMPERSONATABLE_AFS, sin cambios).
+ *   - FIX (root cause de "Marina/Alba ven el modal pero NO la barra Ver como"): los loaders de prod
+ *     (GTM / Tampermonkey) pasan adminEmails:'alejandro.vivas@qida.es' (UN solo email), que en
+ *     getAdminEmails() SOBREESCRIBÍA ADMIN_EMAILS_DEFAULT -> solo Alejandro quedaba como admin.
+ *     Ahora getAdminEmails() UNE el adminEmails del loader con ADMIN_EMAILS_DEFAULT (dedupe), así la
+ *     lista base de viewers (Alejandro/Marina/Alba/Eva) queda garantizada pase lo que pase en el
+ *     loader — NO hace falta editar el tag de GTM. Gating solo de UI; el backend sigue enforce vía
+ *     X-AF-Email (no se tocó backend, ACTIVE_AFS_JSON ni AF_WHITELIST).
+ *
  * Cambios v1.48.1 (2026-06-05 - fixes Actividades):
  *   - Filas del tab Actividades clicables: click en la fila abre el detalle del lead.
  *   - Entrar al detalle desde Actividades no dispara POST /read ni muestra el toast de "marcar leido".
@@ -1538,7 +1549,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.3';
+    var VERSION = '1.48.4';
     var CONFIG = null;
 
     // ============================================================
@@ -1953,11 +1964,14 @@
     // Lista de admins. Sin Next.js (widget vanilla en Blob) no hay NEXT_PUBLIC_*: se configura
     //   via CONFIG.adminEmails en QidaAssistant.init(...) (string CSV o array), con fallback.
     // v1.43.1: Marina y Alba sumadas como VIEWERS (ven el switcher e impersonan a Paloma/Ana para
-    //   QA/training/support). NO son AFs activas: su email NO está en ACTIVE_AFS_JSON, así que sin
-    //   impersonar el backend les responde 403 (igual que a Alejandro). Este gate es solo de UI
-    //   (isAdminUser -> visibilidad del switcher); el enforcement real de datos sigue server-side
-    //   vía X-AF-Email. No se tocó ACTIVE_AFS_JSON ni IMPERSONATABLE_AFS.
-    var ADMIN_EMAILS_DEFAULT = ['alejandro.vivas@qida.es', 'marina.costa@qida.es', 'alba.alvarez@qida.es'];
+    //   QA/training/support). v1.48.4: + Eva (eva.fernandez.arratia). NO son AFs activas: su email
+    //   NO está en ACTIVE_AFS_JSON, así que sin impersonar el backend les responde 403 (igual que a
+    //   Alejandro). Este gate es solo de UI (isAdminUser -> visibilidad del switcher); el enforcement
+    //   real de datos sigue server-side vía X-AF-Email. No se tocó ACTIVE_AFS_JSON ni IMPERSONATABLE_AFS.
+    // v1.48.4: getAdminEmails() UNE esta lista con el CONFIG.adminEmails del loader (no la deja
+    //   sobreescribir), así estos viewers quedan garantizados aunque GTM/Tampermonkey pasen su propio
+    //   adminEmails. Para sumar un viewer nuevo: agregar su email acá (no hace falta tocar el loader).
+    var ADMIN_EMAILS_DEFAULT = ['alejandro.vivas@qida.es', 'marina.costa@qida.es', 'alba.alvarez@qida.es', 'eva.fernandez.arratia@qida.es'];
     // AFs impersonables (hardcode v1). TODO[afs]: reemplazar por fetch a GET /api/admin/afs.
     // v1.47: odoo_user_id (res.users.id) sumado por AF para fetchOdooActivities en modo admin
     //   (cuando un admin "Ve como" una AF, se consulta mail.activity con ESE user_id). Hardcode v1;
@@ -5631,11 +5645,17 @@
     function getAdminEmails() {
         var raw = CONFIG && CONFIG.adminEmails;
         if (typeof raw === 'string') raw = raw.split(',');
-        if (!raw || !raw.length) raw = ADMIN_EMAILS_DEFAULT;
-        var out = [];
-        for (var i = 0; i < raw.length; i++) {
-            var e = String(raw[i] || '').trim().toLowerCase();
-            if (e) out.push(e);
+        if (!Array.isArray(raw)) raw = [];
+        // v1.48.4: UNIR el adminEmails del loader con ADMIN_EMAILS_DEFAULT en vez de dejar que lo
+        //   sobreescriba. GTM/Tampermonkey pasan adminEmails:'alejandro.vivas@qida.es' (un solo
+        //   email), lo que antes dejaba a Marina/Alba/Eva fuera (veían el modal pero NO la barra
+        //   "Ver como"). Con la unión, la lista base de viewers queda garantizada pase lo que pase
+        //   en el loader. Dedupe case-insensitive (preserva el orden: primero loader, luego base).
+        var merged = raw.concat(ADMIN_EMAILS_DEFAULT);
+        var out = [], seen = {};
+        for (var i = 0; i < merged.length; i++) {
+            var e = String(merged[i] || '').trim().toLowerCase();
+            if (e && !seen[e]) { seen[e] = true; out.push(e); }
         }
         return out;
     }
