@@ -1538,7 +1538,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.1';
+    var VERSION = '1.48.2';
     var CONFIG = null;
 
     // ============================================================
@@ -2244,6 +2244,96 @@
         id = (id != null ? id : state.currentLeadId);
         var c = LeadDetailService.getFromCache(id);
         return (c && c.lead) || getLead(id);
+    }
+
+    function sameLeadId(a, b) {
+        if (a == null || b == null) return false;
+        var an = toNumericLeadId(a);
+        var bn = toNumericLeadId(b);
+        if (an != null && bn != null) return String(an) === String(bn);
+        return String(a) === String(b);
+    }
+
+    function leadDashboardDataFor(leadId) {
+        var out = null;
+        var numericId = toNumericLeadId(leadId);
+        if (numericId != null && state.leadById && state.leadById[numericId]) {
+            out = state.leadById[numericId];
+        }
+        if (!out) {
+            var rows = state.dashRows || [];
+            for (var i = 0; i < rows.length; i++) {
+                var r = rows[i];
+                if (r && r.temperature !== undefined && sameLeadId(r.id, leadId)) {
+                    out = r;
+                    break;
+                }
+            }
+        }
+        if (!out) {
+            var cached = LeadDetailService.getFromCache(leadId)
+                || (numericId != null ? LeadDetailService.getFromCache(numericId) : null);
+            if (cached && cached.lead) out = cached.lead;
+        }
+        if (!out) out = currentLead(leadId);
+
+        var ed = EDITS.temperatures[leadId]
+            || (numericId != null ? EDITS.temperatures[numericId] : null);
+        if (ed) {
+            var merged = {};
+            if (out) {
+                for (var k in out) {
+                    if (Object.prototype.hasOwnProperty.call(out, k)) merged[k] = out[k];
+                }
+            }
+            merged.id = (out && out.id != null) ? out.id : leadId;
+            merged.temperature = ed.temperature;
+            merged.temperatureSource = ed.source;
+            return merged;
+        }
+        return out;
+    }
+
+    function applyLocalTemperature(leadId, temperature, source) {
+        source = source || 'AF';
+        var numericId = toNumericLeadId(leadId);
+        EDITS.temperatures[leadId] = { temperature: temperature, source: source };
+        if (numericId != null) EDITS.temperatures[numericId] = { temperature: temperature, source: source };
+
+        if (numericId != null && state.leadById && state.leadById[numericId]) {
+            state.leadById[numericId].temperature = temperature;
+            state.leadById[numericId].temperatureSource = source;
+            state.leadById[numericId].temperature_source = source;
+        }
+
+        var rows = state.dashRows || [];
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i] && rows[i].temperature !== undefined && sameLeadId(rows[i].id, leadId)) {
+                rows[i].temperature = temperature;
+                rows[i].temperatureSource = source;
+                rows[i].temperature_source = source;
+            }
+        }
+
+        var keys = [leadId];
+        if (numericId != null && String(numericId) !== String(leadId)) keys.push(numericId);
+        for (var j = 0; j < keys.length; j++) {
+            var cached = LeadDetailService.getFromCache(keys[j]);
+            if (cached && cached.lead) {
+                cached.lead.temperature = temperature;
+                cached.lead.temperatureSource = source;
+                cached.lead.temperature_source = source;
+            }
+        }
+    }
+
+    function persistLeadTemperature(leadId, temperature) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return Promise.reject(makeApiError('Lead invalido para guardar temperatura.', 'INVALID_LEAD_ID', 0));
+        return apiFetchJson('PATCH', '/api/leads/' + numericId + '/temperature', {
+            body: { temperature: temperature },
+            noun: 'la temperatura'
+        });
     }
 
     function getLeadTemperature(lead) {
@@ -6228,6 +6318,7 @@
             serviceType: api.service_type || '',
             reason: api.porque_snippet || api.short_description || 'Sin actividad reciente',  // v1.39: porque_snippet (cache del modal) || short_description del analyzer (/api/me/leads, leads sin cache) || genérico
             temperature: api.temperature || '',
+            temperatureSource: api.temperature_source || api.temperatureSource || '',
             daysWithoutTouch: (api.days_since_last_contact != null ? api.days_since_last_contact : 0),
             lastTouchDate: lastDate,
             // v1.42 (FIX 3): la fuente del badge "Mensaje nuevo" pasa de has_new_inbound a has_unread.
@@ -7630,16 +7721,16 @@
             var lead = currentLead();  // v1.29: cache Odoo + fallback mock (antes getLead -> null en leads reales)
             var titleHtml = '';
             if (lead) {
-                var days = lead.daysWithoutTouch;
+                var dashData = leadDashboardDataFor(state.currentLeadId) || lead;
+                var days = (dashData && dashData.daysWithoutTouch != null) ? dashData.daysWithoutTouch : lead.daysWithoutTouch;
                 var lvl = daysWithoutTouchLevel(days);
                 var daysLabel = (days === 0) ? 'Hoy' : ('Sin contacto: ' + days + (days === 1 ? ' día' : ' días'));
-                // v1.17: pill de temperatura editable (lee el override de sesión EDITS.temperatures).
-                // v1.31 (FIX B): cached.lead (Odoo) NO trae la temperatura computada; la fila del
-                //   dashboard (/api/me/leads) sí. Orden: override sesión (EDITS) -> dashRow -> lead.
-                var dashTemp = '';
+                // v1.48.2: helper canonico para que el detalle conserve temperatura aunque venga
+                //   desde Actividades (state.dashRows son tareas, no filas de leads).
+                var dashTemp = (dashData && dashData.temperature) || '';
                 var _drows = state.dashRows || [];
                 for (var _dri = 0; _dri < _drows.length; _dri++) {
-                    if (_drows[_dri].id === state.currentLeadId) { dashTemp = _drows[_dri].temperature; break; }
+                    if (_drows[_dri].temperature !== undefined && sameLeadId(_drows[_dri].id, state.currentLeadId)) { dashTemp = _drows[_dri].temperature; break; }
                 }
                 var tempKey = normalizeTemp(getLeadTemperature(lead) || dashTemp);
                 var tMeta = TEMP_META[tempKey] || { label: '—', cls: '' };
@@ -8242,12 +8333,24 @@
                 return;
             case 'set-temp':
                 if (id) {
-                    // TODO[odoo]: PUT /api/leads/{lead_id}/temperature { temperature: id }. Por ahora
-                    //   solo override local en sesión (EDITS.temperatures, que getLeadTemperature lee).
-                    EDITS.temperatures[state.currentLeadId] = { temperature: id, source: 'AF' };
+                    // v1.48.2: optimistic local update + PATCH persistente al BFF.
+                    var tempLeadId = state.currentLeadId;
+                    applyLocalTemperature(tempLeadId, id, 'AF');
                     state.tempEditorOpen = false;
                     rerenderContent();
-                    showToast('Temperatura actualizada');
+                    if (!useRealApi()) {
+                        showToast('Temperatura actualizada');
+                        return;
+                    }
+                    persistLeadTemperature(tempLeadId, id).then(function (res) {
+                        if (res && res.temperature) {
+                            applyLocalTemperature(tempLeadId, res.temperature, res.temperature_source || res.temperatureSource || 'AF');
+                            rerenderContent();
+                        }
+                        showToast('Temperatura actualizada');
+                    }).catch(function (err) {
+                        showToast((err && err.userMessage) || 'No se pudo guardar la temperatura. Reintentá.');
+                    });
                 }
                 return;
 
