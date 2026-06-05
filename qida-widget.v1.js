@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.48.1
+ * QIDA ASSISTANT v1.48.5
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,14 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.48.5 (2026-06-05 — reagendar actividad desde el widget):
+ *   - Botón "📅 Reagendar" en cada fila del tab Actividades (junto a "✓ Hecho"). Cambia el
+ *     date_deadline de la mail.activity en Odoo vía JSON-RPC same-origin (mail.activity/write).
+ *   - Mini-modal con <input type="date"> (min hoy, max hoy+90); optimistic update del deadline +
+ *     state (overdue/today/planned) y re-sort del feed, con revert + toast de error si el write falla.
+ *   - No implementa onchange (feedback de UI no requerido para el write). No toca el shape del fetch
+ *     de Actividades ni el "Marcar hecho" de seguimiento a nivel lead.
  *
  * Cambios v1.48.4 (2026-06-05 — switcher "Ver como": Eva viewer + lista base de admins garantizada):
  *   - eva.fernandez.arratia@qida.es sumada a ADMIN_EMAILS_DEFAULT (viewer del switcher, igual que
@@ -1549,7 +1557,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.4';
+    var VERSION = '1.48.5';
     var CONFIG = null;
 
     // ============================================================
@@ -2202,9 +2210,12 @@
         //     submitting, error }  -> modal "Nueva actividad".
         //   activityConfirm: null | { activityId, source('dash'|'detail'), leadId, summary,
         //     submitting } -> confirm previo a action_feedback ("¿Cerrar esta actividad?").
+        //   rescheduleModal: null | { activityId, leadId, date('YYYY-MM-DD'), submitting } ->
+        //     mini-modal "Reagendar actividad" (mail.activity/write de date_deadline). v1.48.5.
         odooWriteEnabled: false,
         activityModal: null,
         activityConfirm: null,
+        rescheduleModal: null,
 
         // Toast
         toast: null,                    // { msg, ts }
@@ -2721,6 +2732,20 @@
     //   NO es reversible -> el caller exige un confirm previo. feedback:'' (sin comentario).
     function completeOdooActivity(activityId) {
         return odooCall('mail.activity', 'action_feedback', [[activityId]], { feedback: '' });
+    }
+
+    // v1.48.5: WRITE de date_deadline de una mail.activity existente (reagendar). NO borra ni cierra
+    //   la activity; solo cambia su fecha límite. newDeadlineISO: string 'YYYY-MM-DD' (NO timestamp,
+    //   NO datetime). args[0] es lista aunque sea un id; args[1] el dict de campos; odooCall arma el
+    //   context desde la sesión (kwargs {}).
+    function rescheduleOdooActivity(activityId, newDeadlineISO) {
+        if (!activityId || !newDeadlineISO) {
+            return Promise.reject(new Error('activityId y newDeadlineISO requeridos'));
+        }
+        return odooCall('mail.activity', 'write', [
+            [activityId],
+            { date_deadline: newDeadlineISO }   // formato YYYY-MM-DD
+        ], {});
     }
 
     // Mensaje legible desde un error de odooCall (que ya extrajo data.error.data.message).
@@ -4437,6 +4462,7 @@
             + '<div class="qida-actv-row-actions">'
                 + ((state.odooWriteEnabled && isRealActivityId(act.id))
                     ? '<button class="qida-actv-done" data-action="activity-complete" data-id="' + esc(act.id) + '" data-source="dash" data-lead="' + esc(act.leadId != null ? act.leadId : '') + '" title="Cerrar esta actividad en Odoo">' + icon('check', 11) + ' Hecho</button>'
+                        + '<button class="qida-actv-reschedule" data-action="activity-reschedule" data-id="' + esc(act.id) + '" data-lead="' + esc(act.leadId != null ? act.leadId : '') + '" data-current-date="' + esc(act.deadlineDate || '') + '" title="Cambiar la fecha límite en Odoo">📅 Reagendar</button>'
                     : '')
                 + '<button class="qida-actv-goto" data-action="select-lead" data-source="activities" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">' + icon('arrowRight', 12) + ' Ir al lead</button>'
             + '</div>'
@@ -7145,6 +7171,36 @@
         + '</div>';
     }
 
+    // v1.48.5: mini-modal "Reagendar actividad". Reusa el chrome del modal de "Nueva actividad"
+    //   (qida-schedule-bg / qida-schedule / qida-activity-modal). Un solo input type="date".
+    function renderRescheduleModal() {
+        var m = state.rescheduleModal;
+        if (!m) return '';
+        var saveDisabled = (m.submitting || !m.date) ? ' disabled' : '';
+        var saveLabel = m.submitting ? 'Guardando…' : 'Guardar';
+        return '<div class="qida-schedule-bg" data-action="reschedule-bg">'
+            + '<div class="qida-schedule qida-activity-modal">'
+                + '<div class="qida-schedule-head">'
+                    + '<h3 class="qida-schedule-title">Reagendar actividad</h3>'
+                    + '<p class="qida-schedule-sub">Cambia la <strong>fecha límite</strong> de esta tarea en Odoo. <strong>No es un mensaje al lead</strong>, es una tarea interna tuya.</p>'
+                + '</div>'
+                + '<div class="qida-schedule-body">'
+                    + '<div class="qida-sb-section">'
+                        + '<div class="qida-sb-label">Nueva fecha límite</div>'
+                        + '<input type="date" class="qida-actv-input" data-input="reschedule-date" value="' + esc(m.date || '') + '" min="' + esc(todayISO()) + '" max="' + esc(addDaysISO(90)) + '" />'
+                    + '</div>'
+                    + (m.date ? '<div class="qida-sb-section qida-actv-meta"><span>' + icon('clock', 11) + ' ' + esc(formatDateEs(m.date)) + '</span></div>' : '')
+                + '</div>'
+                + '<div class="qida-schedule-foot">'
+                    + '<div class="qida-sb-actions">'
+                        + '<button class="qida-sb-cancel" data-action="reschedule-cancel">Cancelar</button>'
+                        + '<button class="qida-btn-primary qida-reschedule-save" data-action="reschedule-save"' + saveDisabled + '>' + icon('check', 13) + ' ' + esc(saveLabel) + '</button>'
+                    + '</div>'
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
     function renderActivityConfirm() {
         var c = state.activityConfirm;
         if (!c) return '';
@@ -7889,6 +7945,15 @@
             divc.innerHTML = renderActivityConfirm();
             shell.appendChild(divc);
         }
+        // v1.48.5: mini-modal de reagendar (mismo shell que arriba).
+        var existingR = document.getElementById('qida-reschedule-root');
+        if (existingR) existingR.parentNode.removeChild(existingR);
+        if (state.rescheduleModal) {
+            var divr = document.createElement('div');
+            divr.id = 'qida-reschedule-root';
+            divr.innerHTML = renderRescheduleModal();
+            shell.appendChild(divr);
+        }
     }
 
     function syncToast() {
@@ -8433,6 +8498,22 @@
             case 'activity-confirm-yes':
                 handleActivityComplete();
                 return;
+            case 'activity-reschedule':
+                openRescheduleModal(
+                    parseInt(id, 10),
+                    target.getAttribute('data-lead') || state.currentLeadId,
+                    target.getAttribute('data-current-date')
+                );
+                return;
+            case 'reschedule-cancel':
+                setState({ rescheduleModal: null });
+                return;
+            case 'reschedule-bg':
+                if (e.target === target) setState({ rescheduleModal: null });
+                return;
+            case 'reschedule-save':
+                handleRescheduleSave();
+                return;
         }
     }
 
@@ -8667,6 +8748,68 @@
         }
     }
 
+    // [C] v1.48.5: Reagendar. Abre el mini-modal con la fecha límite actual (o hoy si no tiene).
+    function openRescheduleModal(activityId, leadId, currentDate) {
+        if (!state.odooWriteEnabled) return;
+        if (!isRealActivityId(activityId)) { showToast('Esta actividad no se puede reagendar todavía.', 'error'); return; }
+        setState({ rescheduleModal: {
+            activityId: activityId,
+            leadId: leadId,
+            date: currentDate || todayISO(),
+            submitting: false
+        } });
+    }
+
+    // [C] Guarda la nueva fecha: optimistic update (deadline + state recomputado) + write a Odoo.
+    //   Revert + error si la escritura falla. El cierre del modal es inmediato (UX).
+    function handleRescheduleSave() {
+        var m = state.rescheduleModal;
+        if (!m || m.submitting || !m.date) return;
+        var newDate = m.date;
+        var reverts = rescheduleActivityInState(m.activityId, m.leadId, newDate);
+        state.rescheduleModal = null;
+        rerenderContent();   // re-sortea el feed con el nuevo deadline/state
+        rescheduleOdooActivity(m.activityId, newDate).then(function () {
+            showToast('Actividad reagendada al ' + newDate);
+        }).catch(function (err) {
+            revertReschedule(reverts);
+            rerenderContent();
+            showToast('No se pudo reagendar: ' + odooErrMsg(err), 'error');
+        });
+    }
+
+    // Optimistic: setea deadline + state de la activity en dashRows (campo `deadlineDate`) y en el
+    //   cache del detalle (campo `deadline`). Devuelve reverts ({ obj, field, oldDate, oldState })
+    //   para restaurar exactamente ambos surfaces si la escritura falla.
+    function rescheduleActivityInState(activityId, leadId, newDate) {
+        var reverts = [];
+        var newState = activityStateFromDeadline(newDate);
+        function upd(arr, field) {
+            if (!Array.isArray(arr)) return;
+            for (var i = 0; i < arr.length; i++) {
+                var a = arr[i];
+                if (a && String(a.id) === String(activityId)) {
+                    reverts.push({ obj: a, field: field, oldDate: a[field], oldState: a.state });
+                    a[field] = newDate;
+                    a.state = newState;
+                    return;
+                }
+            }
+        }
+        upd(state.dashRows, 'deadlineDate');
+        var cache = state.leadDetailCache && state.leadDetailCache[leadId];
+        if (cache && cache.activities) upd(cache.activities, 'deadline');
+        return reverts;
+    }
+
+    function revertReschedule(reverts) {
+        for (var i = 0; i < reverts.length; i++) {
+            var r = reverts[i];
+            r.obj[r.field] = r.oldDate;
+            r.obj.state = r.oldState;
+        }
+    }
+
     // v1.10: runAssistantSearch y handleSetSort ELIMINADAS junto con sus consumidores
     //   (asistente del dashboard y headers sorteables de la tabla unificada).
 
@@ -8754,6 +8897,9 @@
             if (state.activityModal) state.activityModal.note = node.value;
         } else if (input === 'activity-deadline') {
             if (state.activityModal) state.activityModal.deadline = node.value || null;
+        } else if (input === 'reschedule-date') {
+            // v1.48.5: store sin rerender (el date picker nativo mantiene su valor); el submit lee state.
+            if (state.rescheduleModal) state.rescheduleModal.date = node.value || null;
         } else if (input === 'wa-draft') {
             // v1.6: textarea de WhatsApp. Sin rerender completo: solo togglear send + auto-resize.
             state.draftMessage = node.value;
@@ -9184,6 +9330,7 @@
             // v1.44: el confirm de cerrar actividad y el modal de nueva actividad tienen prioridad.
             if (state.activityConfirm) { setState({ activityConfirm: null }); return; }
             if (state.activityModal) { setState({ activityModal: null }); return; }
+            if (state.rescheduleModal) { setState({ rescheduleModal: null }); return; }
             if (state.showScheduleModal) { closeScheduleModal(); return; }
             // v1.17: si el dropdown de temperatura está abierto, Esc lo cierra (no cierra el modal).
             if (state.view === 'detail' && state.tempEditorOpen) { setState({ tempEditorOpen: false }); return; }
@@ -9240,6 +9387,7 @@
         // v1.44: cerrar el modal y el confirm de actividades al cerrar el widget.
         state.activityModal = null;
         state.activityConfirm = null;
+        state.rescheduleModal = null;   // v1.48.5
         // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
         //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
         state.agentBuilderConfirmDiscard = false;
