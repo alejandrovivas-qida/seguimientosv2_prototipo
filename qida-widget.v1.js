@@ -1538,7 +1538,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.2';
+    var VERSION = '1.48.3';
     var CONFIG = null;
 
     // ============================================================
@@ -1888,7 +1888,8 @@
         if (_l.service_type === undefined)  _l.service_type = _l.serviceType || null;
     }
 
-    // Tope visual del dashboard. v1.13: 5 -> 10 (mas altura disponible con cards + toolbar).
+    // Tope visual de Sugerencias. Leads muestra la cartera completa cargada.
+    // v1.13: 5 -> 10 (mas altura disponible con cards + toolbar).
     var MAX_VISIBLE = 10;
 
     // ============================================================
@@ -4106,8 +4107,8 @@
         return n;
     }
 
-    // Filtros client-side (segmento AND pill WhatsApp) + agrupado "mensajes nuevos al tope"
-    //   (sort por urgencia desc + dias desc) + resto en orden del endpoint + slice MAX_VISIBLE.
+    // Filtros client-side (segmento AND pill WhatsApp) + agrupado "mensajes nuevos al tope".
+    //   Sugerencias mantiene slice MAX_VISIBLE; Leads muestra todos los matches cargados.
     function buildDashFeed(base) {
         // v1.47: buscador del tab Leads (client-side, sobre la lista ya cargada). Sugerencias NO
         //   tiene buscador -> solo aplica cuando la vista activa es 'leads'.
@@ -4129,7 +4130,8 @@
             if (pr !== 0) return pr;
             return b.daysWithoutTouch - a.daysWithoutTouch;
         });
-        return news.concat(rest).slice(0, MAX_VISIBLE);
+        var ordered = news.concat(rest);
+        return state.dashView === 'leads' ? ordered : ordered.slice(0, MAX_VISIBLE);
     }
 
     // Cambio de vista (chip) o Refrescar. resetFilters=true solo en cambio de vista.
@@ -4210,7 +4212,7 @@
         }
 
         var base = liveDashRows();          // vista activa menos completados en sesion
-        var ordered = buildDashFeed(base);  // filtros + nuevos al tope + sort + slice
+        var ordered = buildDashFeed(base);  // filtros + nuevos al tope + sort; slice solo en Sugerencias
 
         var listHtml;
         if (state.dashError) {
