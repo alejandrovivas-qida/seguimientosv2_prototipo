@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.48.6
+ * QIDA ASSISTANT v1.48.7
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,14 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.48.7 (2026-06-08 — badge "Urgente" en tab Actividades):
+ *   - Si el lead asociado a la actividad es urgente, se muestra el badge "Urgente" debajo del estado
+ *     (Atrasada/Hoy/Próxima), apilado vertical. Reusa las clases CSS de Sugerencias
+ *     (.qida-dash-badge-urgent + .qida-dash-badge-dot) para consistencia visual — sin clases nuevas.
+ *   - Dato del cruce ya existente: leadData.urgency (de /api/me/leads, en state.leadById). Cero backend.
+ *     .qida-actv-estado pasa a flex-direction:column (patrón de .qida-cell-estado) para apilar; el
+ *     align-items:flex-start preserva la alineación izquierda del badge de estado ya existente.
  *
  * Cambios v1.48.6 (2026-06-05 — estilos consistentes en acciones de fila de actividad):
  *   - Reagendar ahora matchea visualmente a Hecho (mismo chrome: shape/padding/height/font-weight/
@@ -1563,7 +1571,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.6';
+    var VERSION = '1.48.7';
     var CONFIG = null;
 
     // ============================================================
@@ -3791,7 +3799,7 @@
             '.qida-actv-ref{font-size:11px;color:var(--s500);font-variant-numeric:tabular-nums;}',
             '.qida-actv-task-empty{color:var(--s400);font-style:italic;}',
             '.qida-actv-dash{color:var(--s400);}',
-            '.qida-actv-estado{display:flex;align-items:center;}',
+            '.qida-actv-estado{display:flex;flex-direction:column;gap:4px;align-items:flex-start;}',
             '.qida-actv-deadline-overdue{color:#991B1B;font-weight:600;}',
             /* v1.47: ESTADO semáforo (mismo patrón .qida-dash-badge): rojo atrasada / ámbar hoy / neutro próxima. */
             '.qida-dash-badge-estado-overdue{background:#FEF2F2;color:#991B1B;border:0.5px solid #FECACA;}',
@@ -4401,10 +4409,17 @@
         today:   { label: 'Hoy',      cls: 'today' },
         planned: { label: 'Próxima',  cls: 'planned' }
     };
-    function renderActivityEstadoBadge(stateVal) {
+    // v1.48.7: 2º arg leadData (del cruce /api/me/leads ya en state.leadById). Si el lead es urgente
+    //   (urgency 'alta'), apila el badge "Urgente" DEBAJO del estado, reusando las clases de Sugerencias.
+    //   Independiente de la temperatura: un lead frío puede ser urgente y uno caliente no.
+    function renderActivityEstadoBadge(stateVal, leadData) {
         var meta = ACTV_ESTADO_META[stateVal] || ACTV_ESTADO_META.planned;
+        var urgentBadge = (leadData && normalizeUrgency(leadData.urgency) === 'alta')
+            ? '<span class="qida-dash-badge qida-dash-badge-urgent"><span class="qida-dash-badge-dot"></span>Urgente</span>'
+            : '';
         return '<div class="qida-dash-cell qida-actv-estado">'
             + '<span class="qida-dash-badge qida-dash-badge-estado-' + meta.cls + '">' + esc(meta.label) + '</span>'
+            + urgentBadge
         + '</div>';
     }
     // Celda "—" gris (TEMP / SIN CONTACTO sin leadData del cruce).
@@ -4467,7 +4482,7 @@
             + '<div class="qida-dash-cell qida-actv-task">' + taskHtml + '</div>'
             + tempCell
             + diasCell
-            + renderActivityEstadoBadge(act.state)
+            + renderActivityEstadoBadge(act.state, leadData)
             + '<div class="qida-dash-cell qida-actv-deadline' + deadlineCls + '">' + esc(formatShortDate(act.deadlineDate)) + '</div>'
             + '<div class="qida-actv-row-actions">'
                 + ((state.odooWriteEnabled && isRealActivityId(act.id))
