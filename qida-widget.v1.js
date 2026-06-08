@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.0
+ * QIDA ASSISTANT v1.49.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,26 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.1 (2026-06-08 — Deep-link al detalle del lead desde Odoo):
+ *   - Si la AF abre el widget mientras Odoo muestra un lead concreto (hash con model=crm.lead +
+ *     view_type=form + id=NNN), el modal SALTA el dashboard y abre directo el detalle de ese lead.
+ *     Cualquier otra URL (listado, otro modelo, sin id, vista distinta) -> dashboard normal (sin cambios).
+ *   - Same-origin: el widget se inyecta como <script> en la página de Odoo, así que window.location ES
+ *     la de Odoo (mismo check de host que IS_ODOO_MODE). parseOdooLeadDeepLink() parsea el hash router
+ *     (regex tolerante al ORDEN de los params; el id se ancla a separador para NO confundir menu_id /
+ *     action_id con id). No usa URLSearchParams (ES5 + el hash no siempre es query-string limpio).
+ *   - Pertenencia OBLIGATORIA: el detalle se abre SOLO si el lead está en la cartera de la AF efectiva
+ *     (state.leadById, de /api/me/leads, ya filtrada por X-AF-Email -> respeta impersonation). Lead
+ *     ajeno -> dashboard silencioso (decisión PO: opción a, sin toast). Validación local si la cartera
+ *     ya está en memoria; si no, se trae (fetchLeadsForCrossRef) mostrando el skeleton del detalle.
+ *   - Re-evaluado en CADA openModal (no en init): si la AF navega a otro lead en Odoo y reabre el
+ *     widget, se reevalúa contra el lead actual del hash (decisión PO: reabrir el detalle si sigue en
+ *     el mismo lead). Cerrar el detalle vuelve al dashboard con el botón "Volver" ya existente.
+ *   - Defaults que tomé: NO se marca el lead como leído al entrar por deep-link (decisión PO: mirar
+ *     != accionar; markLeadRead sigue SOLO en select-lead). La validación de pertenencia usa la MISMA
+ *     fuente que el resto del widget (fetchLeadsForCrossRef); con CONFIG.useRealAPI=false esa fuente es
+ *     mock -> los IDs reales no validan y cae a dashboard (fallback seguro). Sin endpoint nuevo en backend.
  *
  * Cambios v1.49.0 (2026-06-08 — nuevo tab "Hoy" [AI-860], EXPERIMENTAL):
  *   - Tab "Hoy" a la izquierda de Sugerencias (orden: Hoy · Sugerencias · Actividades · Leads). Combina
@@ -1608,7 +1628,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.0';
+    var VERSION = '1.49.1';
     var CONFIG = null;
 
     // ============================================================
@@ -2149,6 +2169,11 @@
     var state = {
         view: 'dashboard',              // 'dashboard' | 'detail'
         currentLeadId: null,
+        // v1.49.1: lead candidato de deep-link (Odoo form view) cuya pertenencia se está validando.
+        //   Number mientras esperamos la cartera (state.leadById); null cuando se resolvió (a detalle
+        //   o a dashboard). Doble función: race-guard del fetch async + trigger del skeleton en
+        //   renderDetail durante la validación. Se limpia en closeModal y en back-to-dashboard.
+        deepLinkLeadId: null,
 
         // v1.10: dashboard "lista de leads enfriandose".
         //   completedTodayIds: Set<leadId>. Filas que la AF marco como hechas en esta sesion.
@@ -6174,6 +6199,30 @@
     function toNumericLeadId(leadId) {
         return String(leadId == null ? '' : leadId).replace(/\D/g, '');
     }
+    // v1.49.1: parsea el hash router de Odoo para detectar un deep-link al detalle de un lead.
+    //   Ejemplo: https://erp.qida.es/web#id=125460&cids=1%2C2%2C3&menu_id=139&action=194&model=crm.lead&view_type=form
+    //   Devuelve el lead_id (Number > 0) SOLO si las 3 condiciones se cumplen sobre el hash:
+    //     model=crm.lead  +  view_type=form  +  id=(\d+)
+    //   Tolerante al ORDEN de los params (cada token se busca por separado). El id se ancla a inicio
+    //   o separador (?, &, #, /) para NO confundir 'menu_id=139' / 'action_id=...' con 'id='. Devuelve
+    //   null si falta cualquier condición o si window.location no es accesible. NO usa URLSearchParams
+    //   (ES5 + el hash no siempre es un query-string limpio).
+    function parseOdooLeadDeepLink() {
+        var hash;
+        try {
+            hash = (window.location && window.location.hash) || '';
+        } catch (e) {
+            return null;  // window.location inaccesible (cross-origin defensivo) -> sin deep-link
+        }
+        if (!hash) return null;
+        var s = hash.charAt(0) === '#' ? hash.slice(1) : hash;
+        if (!/(?:^|[?&#\/])model=crm\.lead(?:[?&#\/]|$)/.test(s)) return null;
+        if (!/(?:^|[?&#\/])view_type=form(?:[?&#\/]|$)/.test(s)) return null;
+        var m = s.match(/(?:^|[?&#\/])id=(\d+)(?:[?&#\/]|$)/);
+        if (!m) return null;
+        var id = parseInt(m[1], 10);
+        return (id > 0) ? id : null;
+    }
     // Error tipado para la UI: .userMessage (texto claro), .code, .status.
     function makeApiError(userMessage, code, status) {
         var e = new Error(code || userMessage || 'API_ERROR');
@@ -7407,6 +7456,12 @@
             if (cached && cached._loading) {
                 return renderDetailLoading();
             }
+            // v1.49.1: deep-link en validación de pertenencia. Todavía no disparamos fetchAll
+            //   (no sabemos si el lead es de la AF), así que no hay cache _loading; mostramos el
+            //   skeleton igual en vez de rebotar al dashboard (evita el flash dashboard->detalle).
+            if (state.deepLinkLeadId === leadId) {
+                return renderDetailLoading();
+            }
             // v1.11: error global - el primer fetch (crm.lead.read) fallo. Volvemos al
             //   dashboard. El toast con el mensaje ya lo disparo fetchAll en su .catch.
             return renderDashboard();
@@ -8561,8 +8616,10 @@
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
+                // v1.49.1: deepLinkLeadId:null aborta cualquier validación de deep-link en vuelo (si la
+                //   AF toca "Volver" durante el skeleton, el .then de fetchLeadsForCrossRef no reabre).
                 resetWaVoiceState(true);
-                setState({ view: 'dashboard', currentLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'dashboard', currentLeadId: null, deepLinkLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.43.3: NO re-fetch al volver (revierte FIX B de v1.43.2). El re-fetch traía
                 //   has_unread fresco y, por el orden "nuevos al tope" + slice MAX_VISIBLE de
                 //   buildDashFeed, el lead recién leído caía fuera de la lista (DESAPARECÍA). El badge
@@ -9781,6 +9838,10 @@
         var overlay = document.querySelector('.qida-overlay');
         if (overlay) overlay.className = 'qida-overlay active';
         log('openModal()');
+        // v1.49.1: deep-link al detalle si Odoo está mostrando un lead concreto (form view).
+        //   Se evalúa en CADA apertura (lee el hash vivo): así reabrir el widget tras navegar a
+        //   otro lead en Odoo reevalúa contra el lead actual.
+        maybeDeepLinkToDetail();
     }
 
     function closeModal() {
@@ -9790,6 +9851,7 @@
         // Reset transient state.
         state.view = 'dashboard';
         state.currentLeadId = null;
+        state.deepLinkLeadId = null;   // v1.49.1: cancela cualquier deep-link en validación
         state.editingIaSummary = false;
         state.addingNote = false;
         state.showScheduleModal = false;
@@ -9846,6 +9908,71 @@
         state.detailLayoutSwapped = true;
         rerenderContent();
         log('closeModal()');
+    }
+
+    // v1.49.1: DEEP-LINK al detalle del lead desde Odoo.
+    //   Punto de entrada (llamado desde openModal). Si el hash de Odoo apunta a un lead en form view
+    //   y ese lead pertenece a la AF efectiva, abrimos directo el detalle saltando el dashboard.
+    //   Cualquier caso negativo (no es URL de lead, lead ajeno, fallo de carga) cae a dashboard.
+    function maybeDeepLinkToDetail() {
+        var leadId = parseOdooLeadDeepLink();
+        if (leadId == null) {
+            log('deep-link: hash no apunta a un lead en form view -> dashboard');
+            return;
+        }
+        // Cartera ya en memoria -> validación local inmediata (1 lookup), sin fetch ni skeleton.
+        if (state.leadById) {
+            applyDeepLinkDecision(leadId);
+            return;
+        }
+        // Cartera aún no cargada (leadById se puebla async). Mostramos el skeleton del detalle y
+        //   validamos pertenencia en paralelo trayendo /api/me/leads (la MISMA fuente que el cruce
+        //   del dashboard, ya filtrada por X-AF-Email -> respeta impersonation).
+        log('deep-link: candidato lead ' + leadId + ' (validando pertenencia)');
+        state.deepLinkLeadId = leadId;
+        setState({ view: 'detail', currentLeadId: leadId });  // renderDetail -> skeleton (guard deepLinkLeadId)
+        fetchLeadsForCrossRef().then(function (rows) {
+            if (state.deepLinkLeadId !== leadId) return;  // race: la AF cerró el modal o tocó "Volver"
+            state.leadById = indexLeadsById(rows);
+            applyDeepLinkDecision(leadId);
+        }).catch(function (err) {
+            if (state.deepLinkLeadId !== leadId) return;
+            log('deep-link: no se pudo validar pertenencia -> dashboard', err && (err.userMessage || err.message));
+            state.deepLinkLeadId = null;
+            setState({ view: 'dashboard', currentLeadId: null });
+        });
+    }
+
+    // v1.49.1: decide a dónde ir una vez que la cartera (state.leadById) está disponible.
+    //   Pertenece -> detalle; no pertenece -> dashboard silencioso (decisión PO: opción a, sin toast).
+    function applyDeepLinkDecision(leadId) {
+        state.deepLinkLeadId = null;
+        var owned = !!(state.leadById && state.leadById[toNumericLeadId(leadId)]);
+        if (owned) {
+            log('deep-link: lead ' + leadId + ' es de la AF -> abriendo detalle');
+            openLeadDetail(leadId);
+        } else {
+            log('deep-link: lead ' + leadId + ' NO es de la AF -> dashboard silencioso');
+            if (state.view === 'detail') setState({ view: 'dashboard', currentLeadId: null });
+        }
+    }
+
+    // v1.49.1: abre el detalle de un lead programáticamente (deep-link). Replica los side effects de
+    //   'select-lead' EXCEPTO markLeadRead (decisión PO: entrar por deep-link NO marca el lead leído).
+    function openLeadDetail(leadIdNum) {
+        state.__waNeedsScroll = true;
+        state.__aiNeedsScroll = true;
+        resetWaVoiceState(true);
+        setState({ view: 'detail', currentLeadId: leadIdNum, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+        var existing = LeadDetailService.getFromCache(leadIdNum);
+        if (!existing || existing._error) {
+            LeadDetailService.fetchAll(leadIdNum);
+        }
+        if (useRealApi()) {
+            var cc = state.conversationCache[leadIdNum];
+            if (!cc || cc._error) loadConversation(leadIdNum);
+            loadRecommendation(leadIdNum);
+        }
     }
 
     // v1.12: helper que dispara la inyeccion del badge leader + lazy load de ApexCharts.
