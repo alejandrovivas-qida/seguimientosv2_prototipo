@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.48.7
+ * QIDA ASSISTANT v1.48.8
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,22 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.48.8 (2026-06-08 — Sugerencias sin duplicar):
+ *   - El tab "Sugerencias para hoy" ya NO muestra leads con una mail.activity pendiente cuyo
+ *     deadline cae en las próximas 48h, incluyendo vencidas activas (deadline pasado sin cerrar =
+ *     sigue en agenda). Aproximación por DÍA (date_deadline es DATE sin hora): ventana [hoy-30, hoy+2].
+ *     Cualquier tipo de actividad suprime (v1 no distingue activity_type_id).
+ *   - Filtro 100% en el widget (Opción C), contra la lista de actividades de Odoo. Cero cambios en
+ *     backend/endpoints. Al cargar Sugerencias se traen las actividades EN PARALELO (Promise.all en
+ *     DashboardService.fetchView) y se espera a ambas antes de renderizar -> sin flash de duplicados.
+ *     Cruce por lead_id numérico (reusa toNumericLeadId: display_id 'L#####' <-> res_id de Odoo).
+ *   - Degrade: si las actividades no cargan en 4s (Odoo lento/sin sesión) o fallan, se renderiza
+ *     Sugerencias SIN filtrar (mejor posibles duplicados que la tabla vacía). Se loguea el degrade.
+ *   - console.log temporal ([QidaAssistant] Filtering.../Suppressed...) para que el PO valide que las
+ *     AFs estén creando bien las actividades. Futuro: lo reemplaza el tab Seguimientos.
+ *   - Defaults que tomé: lookback de vencidas = 30 días (SUGGESTION_ACTIVITY_LOOKBACK_DAYS), timeout
+ *     de degrade = 4s (SUGGESTION_ACTIVITY_TIMEOUT_MS). Ajustables sin tocar la lógica.
  *
  * Cambios v1.48.7 (2026-06-08 — badge "Urgente" en tab Actividades):
  *   - Si el lead asociado a la actividad es urgente, se muestra el badge "Urgente" debajo del estado
@@ -1571,7 +1587,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.7';
+    var VERSION = '1.48.8';
     var CONFIG = null;
 
     // ============================================================
@@ -1925,6 +1941,15 @@
     // v1.13: 5 -> 10 (mas altura disponible con cards + toolbar).
     var MAX_VISIBLE = 10;
 
+    // v1.48.7: "Sugerencias sin duplicar". Ventana (por DÍA: date_deadline de mail.activity es DATE
+    //   sin hora) para suprimir del tab Sugerencias los leads con actividad pendiente:
+    //     [hoy - LOOKBACK ... hoy + LOOKAHEAD].
+    //   LOOKAHEAD=2 aproxima "próximas 48h"; LOOKBACK=30 incluye vencidas activas (deadline pasado sin
+    //   cerrar = sigue en agenda). TIMEOUT corta la espera de Odoo -> render sin filtrar (degrade).
+    var SUGGESTION_ACTIVITY_LOOKAHEAD_DAYS = 2;
+    var SUGGESTION_ACTIVITY_LOOKBACK_DAYS = 30;
+    var SUGGESTION_ACTIVITY_TIMEOUT_MS = 4000;
+
     // ============================================================
     // MOCKS v1.6 (chat IA del pane central del detalle)
     // ============================================================
@@ -2137,6 +2162,9 @@
         dashSearchQuery: '',
         dashDateRange: 'all',           // 'all' | 'today' | 'week' | 'month' (chips de Actividades)
         leadById: null,                 // { [lead_id numérico]: leadRow } o null (sin cruce todavía)
+        // v1.48.7: actividades de Odoo cargadas EN PARALELO al abrir Sugerencias, SOLO para el filtro
+        //   "sugerencias sin duplicar". null = sin cargar / degrade (no filtrar); array (incl. []) = filtrar.
+        dashActivitiesForFilter: null,
 
         // Detail state
         // v1.6: state.activePanel y state.editingTemp eliminados (no hay tabs ni temp editable
@@ -2518,10 +2546,20 @@
             //   useRealApi (ese flag gobierna solo /api/me/leads). YA NO usa GET /api/me/activities.
             if (view === 'activities') return fetchActivitiesView();
             // v1.22: 'suggestions'/'leads' -> GET /api/me/leads (flag on). flag off -> mock + latencia.
-            if (useRealApi()) {
-                if (DASH_VIEW_QUERY[view]) return fetchLeadsList(view);
+            var rowsP = (useRealApi() && DASH_VIEW_QUERY[view])
+                ? fetchLeadsList(view)
+                : simulateLatency(180, 360).then(function () { return self.fetchViewSync(view); });
+            // v1.48.7: "Sugerencias sin duplicar". Para el tab Sugerencias traemos las actividades de
+            //   Odoo EN PARALELO y esperamos AMBAS (Promise.all) antes de resolver, así el render ya
+            //   tiene la data para filtrar sin flash. state.dashActivitiesForFilter: array = filtrar
+            //   (incluso []), null = degrade -> render sin filtrar. Las otras vistas no se tocan.
+            if (view === 'suggestions') {
+                return Promise.all([rowsP, fetchActivitiesForFilter()]).then(function (res) {
+                    state.dashActivitiesForFilter = res[1];
+                    return res[0];
+                });
             }
-            return simulateLatency(180, 360).then(function () { return self.fetchViewSync(view); });
+            return rowsP;
         },
         // v1.22: metricas del top. flag on -> GET /api/me/dashboard (portfolio-wide);
         //   flag off -> null (renderDashCards deriva client-side de las filas, como antes).
@@ -4167,6 +4205,13 @@
     // Filtros client-side (segmento AND pill WhatsApp) + agrupado "mensajes nuevos al tope".
     //   Sugerencias mantiene slice MAX_VISIBLE; Leads muestra todos los matches cargados.
     function buildDashFeed(base) {
+        // v1.48.7: "Sugerencias sin duplicar". Antes de filtrar/ordenar/slice, en el tab Sugerencias
+        //   quitamos los leads que ya tienen una mail.activity pendiente en la ventana (ver
+        //   suppressSuggestionsWithActivity). El guard sobre dashActivitiesForFilter (falsy => no llama)
+        //   mantiene esta función aislada-testeable: el harness de tests no setea ese campo ni la helper.
+        if (state.dashView === 'suggestions' && state.dashActivitiesForFilter) {
+            base = suppressSuggestionsWithActivity(base);
+        }
         // v1.47: buscador del tab Leads (client-side, sobre la lista ya cargada). Sugerencias NO
         //   tiene buscador -> solo aplica cuando la vista activa es 'leads'.
         var q = (state.dashView === 'leads') ? (state.dashSearchQuery || '').trim().toLowerCase() : '';
@@ -4197,6 +4242,9 @@
     //   La logica de marcar como leido la maneja el backend al abrir el detalle del lead.
     function loadDashView(view, resetFilters) {
         state.dashView = view;
+        // v1.48.7: al (re)cargar Sugerencias invalidamos el filtro de actividades previo, para no
+        //   filtrar/loguear con data vieja durante el spinner. Se re-puebla cuando fetchView resuelve.
+        if (view === 'suggestions') state.dashActivitiesForFilter = null;
         if (resetFilters) {
             state.dashSegment = null;
             state.dashOnlyNew = false;
@@ -6366,6 +6414,75 @@
             state.leadById = indexLeadsById(res[1]);
             return res[0];
         });
+    }
+
+    // v1.48.7: actividades SOLO para el filtro "sugerencias sin duplicar". Reusa la MISMA carga que el
+    //   tab Actividades (Odoo real vía fetchOdooActivities | mock) + mapOdooActivity, pero SIN el
+    //   cross-ref de cartera (no toca state.leadById ni pega a /api/me/leads: la sugerencia YA es el
+    //   lead). NUNCA rechaza: timeout (SUGGESTION_ACTIVITY_TIMEOUT_MS) o error -> resuelve null =
+    //   "degrade, no filtrar" (preferible mostrar posibles duplicados que dejar Sugerencias vacío).
+    //   NO modifica fetchOdooActivities (solo lo invoca).
+    function fetchActivitiesForFilter() {
+        var actsP = IS_ODOO_MODE
+            ? fetchOdooActivities(resolveActivitiesOdooUserId()).then(function (recs) {
+                  var out = [];
+                  for (var i = 0; i < recs.length; i++) out.push(mapOdooActivity(recs[i]));
+                  return out;
+              })
+            : simulateLatency(180, 360).then(function () {
+                  return MOCK_ODOO_ACTIVITIES.map(mapOdooActivity);
+              });
+        var timeoutP = new Promise(function (resolve) {
+            setTimeout(function () { resolve('__timeout__'); }, SUGGESTION_ACTIVITY_TIMEOUT_MS);
+        });
+        return Promise.race([actsP, timeoutP]).then(function (acts) {
+            if (acts === '__timeout__') {
+                log('Suggestions activity filter timed out -> rendering suggestions UNFILTERED (degrade)');
+                return null;
+            }
+            return acts || [];
+        }).catch(function (err) {
+            log('Suggestions activity filter failed -> rendering suggestions UNFILTERED (degrade)', err && (err.userMessage || err.message || err.code));
+            return null;
+        });
+    }
+
+    // v1.48.7: "Sugerencias sin duplicar". Excluye del tab Sugerencias los leads que YA tienen una
+    //   mail.activity pendiente con deadline en [hoy-LOOKBACK, hoy+LOOKAHEAD] (vencidas activas
+    //   incluidas; cualquier tipo). Cruce por lead_id numérico: toNumericLeadId puentea el display_id
+    //   'L#####' de la sugerencia con el res_id numérico de la actividad. Solo se llama con
+    //   state.dashActivitiesForFilter truthy (array). console.log temporal para que el PO valide.
+    function suppressSuggestionsWithActivity(rows) {
+        var acts = state.dashActivitiesForFilter || [];
+        var windowStart = addDaysISO(-SUGGESTION_ACTIVITY_LOOKBACK_DAYS);
+        var windowEnd = addDaysISO(SUGGESTION_ACTIVITY_LOOKAHEAD_DAYS);
+        // lead_id numérico -> deadline de la primera actividad en ventana (para el log de auditoría).
+        var hitByLead = {};
+        for (var i = 0; i < acts.length; i++) {
+            var a = acts[i];
+            var dl = a && a.deadlineDate;
+            if (!dl) continue;  // sin deadline -> fuera de ventana (no suprime)
+            if (dl < windowStart || dl > windowEnd) continue;  // ISO date: comparación lexical = cronológica
+            var ak = toNumericLeadId(a.leadId);
+            if (ak && !hitByLead[ak]) hitByLead[ak] = dl;
+        }
+        log('Filtering suggestions by upcoming activities:', {
+            totalSuggestions: rows.length,
+            totalActivities: acts.length,
+            windowStart: windowStart,
+            windowEnd: windowEnd
+        });
+        var kept = [], suppressed = [];
+        for (var j = 0; j < rows.length; j++) {
+            var r = rows[j];
+            var rk = toNumericLeadId(r && r.id);
+            if (rk && hitByLead[rk]) suppressed.push({ leadId: r.id, activityDeadline: hitByLead[rk] });
+            else kept.push(r);
+        }
+        if (suppressed.length > 0) {
+            log('Suppressed ' + suppressed.length + ' suggestions with active activity:', suppressed);
+        }
+        return kept;
     }
 
     // Mapea una fila de GET /api/me/leads al shape que renderDashRow YA consume (render intacto).
