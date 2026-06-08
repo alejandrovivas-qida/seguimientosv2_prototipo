@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.48.8
+ * QIDA ASSISTANT v1.49.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,27 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.0 (2026-06-08 — nuevo tab "Hoy" [AI-860], EXPERIMENTAL):
+ *   - Tab "Hoy" a la izquierda de Sugerencias (orden: Hoy · Sugerencias · Actividades · Leads). Combina
+ *     en un único feed las Sugerencias + las Actividades del día, diferenciadas por una columna TIPO
+ *     (pill índigo "Sugerencia" / cian "Actividad"). Columnas: Contacto · Temp · Sin contacto · Estado
+ *     · Tipo · Fecha límite · Acciones.
+ *   - Acciones: "Hecho" SIEMPRE (sugerencia -> markFollowupDone/followup-actions; actividad ->
+ *     activity-complete/action_feedback, mismos handlers existentes, cero nuevos). "Reagendar" SOLO en
+ *     actividades. Los botones de actividad quedan gated por odooWriteEnabled (igual que el tab Actividades).
+ *   - Sort: por fecha límite ascendente (atrasadas/hoy primero); empate -> Sugerencia antes que Actividad
+ *     (la actividad ya está programada). Las sugerencias no tienen deadline en su shape -> se tratan como
+ *     "vencen hoy". El tab muestra SOLO actividades que vencen hoy o atrasadas activas (no futuras).
+ *   - EXPERIMENTAL / fácil de remover: todo vive en el bloque "AI-860 TAB HOY" + 4 hooks marcados
+ *     "AI-860" (chip, fetchView/fetchViewSync casos 'today', branch en renderDashboard) + bloque CSS
+ *     .qida-today-*. NO toca la lógica de los otros tabs ni reusa suppressSuggestionsWithActivity (acá
+ *     se MUESTRAN ambos, no se suprime). Carga: sugerencias (fuente del tab Sugerencias) + actividades
+ *     vía fetchActivitiesView (puebla state.leadById -> TEMP/SIN CONTACTO de las actividades); degrade
+ *     a "solo sugerencias" si Odoo tarda > SUGGESTION_ACTIVITY_TIMEOUT_MS o falla.
+ *   - Defaults que tomé: "Hoy" NO es el tab default (sigue 'activities'); buscador SÍ presente (reusa
+ *     renderDashSearch + state.dashSearchQuery); pill TIPO en índigo/cian (no verde/azul) para no
+ *     colisionar con los colores de temperatura/estado ya existentes.
  *
  * Cambios v1.48.8 (2026-06-08 — Sugerencias sin duplicar):
  *   - El tab "Sugerencias para hoy" ya NO muestra leads con una mail.activity pendiente cuyo
@@ -1587,7 +1608,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.48.8';
+    var VERSION = '1.49.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2531,6 +2552,13 @@
     };
     var DashboardService = {
         fetchViewSync: function (view) {
+            // AI-860: 'today' primer-paint sincrono (mock) = sugerencias + actividades mock, mergeadas
+            //   y tagueadas (_kind). leadById desde la cartera mock para que las actividades traigan
+            //   TEMP/SIN CONTACTO (mismo patrón que 'activities' debajo).
+            if (view === 'today') {
+                state.leadById = indexLeadsById(MOCK_LEADS_RESPONSE);
+                return buildTodayRows(MOCK_SUGGESTIONS_RESPONSE.slice(), MOCK_ODOO_ACTIVITIES.map(mapOdooActivity));
+            }
             // v1.47: 'activities' primer-paint sincrono (mock) -> shape Odoo mapeado + leadById
             //   construido sync desde la cartera mock (asi TEMP/SIN CONTACTO salen ya enriquecidas).
             if (view === 'activities') {
@@ -2544,6 +2572,7 @@
             // v1.47: 'activities' ahora lee DIRECTO de Odoo (mail.activity) + cruza /api/me/leads.
             //   fetchActivitiesView maneja real (IS_ODOO_MODE) y mock internamente -> NO depende de
             //   useRealApi (ese flag gobierna solo /api/me/leads). YA NO usa GET /api/me/activities.
+            if (view === 'today') return fetchTodayView();  // AI-860: feed unificado (sugerencias + actividades del día).
             if (view === 'activities') return fetchActivitiesView();
             // v1.22: 'suggestions'/'leads' -> GET /api/me/leads (flag on). flag off -> mock + latencia.
             var rowsP = (useRealApi() && DASH_VIEW_QUERY[view])
@@ -3857,6 +3886,23 @@
             '.qida-actv-reschedule{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;background:#fff;color:#F59E0B;border:0.5px solid #F59E0B;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
             '.qida-actv-reschedule:hover{background:#fffbeb;}',
             '.qida-actv-reschedule[disabled]{opacity:.5;cursor:default;}',
+            /* ===== AI-860 TAB HOY (experimental) ===== */
+            /* 7 cols: Contacto · Temp · Sin contacto · Estado · Tipo · Fecha · Acciones. grid-template
+               IDÉNTICO en header y fila (la última col es fija, no auto, para que no se desalineen). */
+            '.qida-today-header,.qida-today-row{display:grid;grid-template-columns:minmax(160px,2fr) 104px 84px 116px 104px 92px 184px;gap:14px;align-items:center;}',
+            '.qida-today-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
+            '.qida-today-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);cursor:pointer;}',
+            '.qida-today-row:nth-child(even){background:#FAFAFA;}',
+            '.qida-today-row:hover{background:#F3F4F6;}',
+            '.qida-today-row:last-child{border-bottom:0;}',
+            '.qida-today-hoy{color:var(--s500);font-variant-numeric:tabular-nums;}',
+            '.qida-today-tipo{min-width:0;}',
+            '.qida-tipo-pill{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;font-size:10.5px;font-weight:600;white-space:nowrap;}',
+            '.qida-tipo-sugerencia{background:#EEF2FF;color:#4338CA;border:0.5px solid #C7D2FE;}',  /* índigo */
+            '.qida-tipo-actividad{background:#ECFEFF;color:#0E7490;border:0.5px solid #A5F3FC;}',   /* cian */
+            /* En angosto ocultamos TEMP (col 2) y SIN CONTACTO (col 3) -> 5 cols (igual que .qida-actv-*). */
+            '@media (max-width:1100px){.qida-today-header,.qida-today-row{grid-template-columns:minmax(140px,1.8fr) 116px 104px 92px 184px;}.qida-today-header > div:nth-child(2),.qida-today-header > div:nth-child(3){display:none;}.qida-today-row .qida-cell-temp,.qida-today-row .qida-cell-dias{display:none;}}',
+            /* ===== fin AI-860 TAB HOY ===== */
             '.qida-act-new-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
             '.qida-act-new-btn:hover{background:#0c5a46;}',
             '.qida-act-done-mini{margin-left:auto;display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:#fff;color:#0F6E56;border:0.5px solid #0F6E56;border-radius:7px;font-size:10.5px;font-weight:600;cursor:pointer;font-family:inherit;flex:0 0 auto;}',
@@ -4310,6 +4356,10 @@
             }
         }
 
+        // AI-860: 'today' es un feed mixto (sugerencias + actividades del día) -> render dedicado.
+        if (state.dashView === 'today') {
+            return renderTodayView();
+        }
         // v1.24: la vista "Actividades" es activity-centric (otra shape, otras columnas) -> render
         //   dedicado. Las vistas lead-centric (suggestions/leads) siguen el render de abajo.
         if (state.dashView === 'activities') {
@@ -4605,6 +4655,229 @@
         return hay.join(' ').toLowerCase().indexOf(q) > -1;
     }
 
+    // ============================================================
+    // ===== AI-860 TAB HOY (experimental) =====
+    // ============================================================
+    // Feed unificado de Sugerencias + Actividades del día, diferenciadas por la columna TIPO.
+    //   Es EXPERIMENTAL (el PO lo quita si las AFs no lo usan): vive en este bloque + 4 hooks marcados
+    //   con "AI-860" (chip en renderViewChips, casos 'today' en fetchView/fetchViewSync, branch en
+    //   renderDashboard) + el bloque CSS .qida-today-*. NO toca la lógica de los otros tabs.
+    //   NO reusa suppressSuggestionsWithActivity: acá queremos MOSTRAR ambos (sugerencia + actividad),
+    //   distinguidos por TIPO, no suprimir.
+
+    // Shallow-copy + tag _kind (no muta los objetos mock compartidos al cambiar de tab / re-fetch).
+    function todayTag(row, kind) {
+        var c = {};
+        for (var k in row) { if (Object.prototype.hasOwnProperty.call(row, k)) c[k] = row[k]; }
+        c._kind = kind;
+        return c;
+    }
+
+    // Merge sugerencias (_kind 'suggestion') + actividades (_kind 'activity') en un array plano.
+    //   Lo usan el primer-paint sync (fetchViewSync) y el async (fetchTodayView). El filtro a
+    //   "hoy + atrasadas" y el sort viven en buildTodayFeed (render-time), igual que buildActivitiesFeed.
+    function buildTodayRows(suggestions, activities) {
+        var out = [], i;
+        suggestions = suggestions || [];
+        activities = activities || [];
+        for (i = 0; i < suggestions.length; i++) out.push(todayTag(suggestions[i], 'suggestion'));
+        for (i = 0; i < activities.length; i++) out.push(todayTag(activities[i], 'activity'));
+        return out;
+    }
+
+    // Carga async del tab "Hoy". Sugerencias = misma fuente que el tab Sugerencias (lead-centric,
+    //   TEMP/SIN CONTACTO inline). Actividades = fetchActivitiesView (puebla state.leadById -> las
+    //   actividades cruzan TEMP/SIN CONTACTO de la cartera; fetchActivitiesForFilter NO haría ese
+    //   cruce). Degrade: si Odoo tarda > timeout o falla, mostramos SOLO sugerencias (no rompe el tab).
+    function fetchTodayView() {
+        var sugP = (useRealApi() && DASH_VIEW_QUERY['suggestions'])
+            ? fetchLeadsList('suggestions')
+            : simulateLatency(180, 360).then(function () { return DashboardService.fetchViewSync('suggestions'); });
+        var actTimeoutP = new Promise(function (resolve) {
+            setTimeout(function () { resolve('__timeout__'); }, SUGGESTION_ACTIVITY_TIMEOUT_MS);
+        });
+        var actP = Promise.race([fetchActivitiesView(), actTimeoutP]).then(function (acts) {
+            if (acts === '__timeout__') { log('Today tab: activities timed out -> suggestions only (degrade)'); return []; }
+            return acts || [];
+        }, function (err) {
+            log('Today tab: activities failed -> suggestions only (degrade)', err && (err.userMessage || err.message || err.code));
+            return [];
+        });
+        return Promise.all([sugP, actP]).then(function (res) {
+            return buildTodayRows(res[0], res[1]);
+        });
+    }
+
+    // ¿La actividad "vence hoy o está atrasada activa"? (decisión PO: el tab "Hoy" NO muestra futuras).
+    //   Sin deadline -> fuera (no "vence hoy"). daysBetween: <0 atrasada, 0 hoy, >0 futura.
+    function isTodayOrOverdueActivity(a) {
+        if (!a || !a.deadlineDate) return false;
+        if (a.state === 'overdue' || a.state === 'today') return true;
+        return daysBetween(a.deadlineDate) <= 0;
+    }
+
+    // Fecha límite EFECTIVA para el sort. Sugerencia: no tiene deadline -> "hoy" (es "para hoy").
+    //   Actividad: su deadlineDate. ISO YYYY-MM-DD (comparación lexical = cronológica).
+    function todayEffectiveDeadline(row) {
+        if (row && row._kind === 'activity') return row.deadlineDate || '9999-12-31';
+        return todayISO();
+    }
+
+    // Pipeline del tab "Hoy" (render-time). (1) actividades: solo hoy/atrasadas; (2) buscador
+    //   (reusa los matchers de cada tipo); (3) sort por fecha límite asc; empate -> sugerencia
+    //   primero (la actividad ya está programada). `rows` viene de liveDashRows (sin completadas).
+    function buildTodayFeed(rows) {
+        rows = rows || [];
+        var q = (state.dashSearchQuery || '').trim().toLowerCase();
+        var feed = [], i, r;
+        for (i = 0; i < rows.length; i++) {
+            r = rows[i];
+            if (r._kind === 'activity') {
+                if (!isTodayOrOverdueActivity(r)) continue;
+                if (q && !activityMatchesSearch(r, q)) continue;
+            } else {
+                if (q && !leadMatchesSearch(r, q)) continue;
+            }
+            feed.push(r);
+        }
+        feed.sort(function (a, b) {
+            var da = todayEffectiveDeadline(a), db = todayEffectiveDeadline(b);
+            if (da !== db) return da < db ? -1 : 1;
+            var ka = a._kind === 'suggestion' ? 0 : 1;
+            var kb = b._kind === 'suggestion' ? 0 : 1;
+            return ka - kb;
+        });
+        return feed;
+    }
+
+    function renderTodayView() {
+        var base = liveDashRows();           // quita completadas en sesión (Hecho de sugerencias) + apaga badge leído
+        var ordered = buildTodayFeed(base);
+        var listHtml;
+        if (state.dashError) {
+            listHtml = renderDashError(state.dashError);
+        } else if (state.dashRows === null && state.dashLoading) {
+            listHtml = renderDashLoadingState();
+        } else if (!ordered.length) {
+            var hasQuery = !!(state.dashSearchQuery || '').trim();
+            listHtml = '<div class="qida-empty-state">'
+                + (hasQuery ? 'No hay nada que coincida con la búsqueda.' : 'Estás al día. No hay nada para hoy.')
+                + '</div>';
+        } else {
+            listHtml = '';
+            for (var i = 0; i < ordered.length; i++) listHtml += renderTodayRow(ordered[i]);
+        }
+        var countLabel = ordered.length + (ordered.length === 1 ? ' ítem' : ' ítems');
+        var cardCls = 'qida-dash-table-card' + (state.dashLoading ? ' qida-dash-loading' : '');
+        return '<div class="qida-dash-dashboard">'
+            + renderDashCards(MOCK_LEADS_RESPONSE)
+            // Toolbar: sin chips temporales (el tab YA es "Hoy" por definición); buscador + chips de vista.
+            + '<div class="qida-dash-toolbar">'
+                + '<div class="qida-dash-toolbar-left"></div>'
+                + '<div class="qida-dash-toolbar-center">' + renderDashSearch() + '</div>'
+                + '<div class="qida-dash-toolbar-right">' + renderViewChips() + '</div>'
+            + '</div>'
+            + '<div class="' + cardCls + '">'
+                + '<div class="qida-dash-table-bar">'
+                    + '<span class="qida-dash-table-title">Hoy</span>'
+                    + '<span class="qida-dash-table-count">' + countLabel + '</span>'
+                + '</div>'
+                + renderTodayHeader()
+                + '<div class="qida-dash-list">' + listHtml + '</div>'
+            + '</div>'
+            + '<div class="qida-dash-actions">'
+                + '<button class="qida-refresh-btn" data-action="dash-refresh">' + icon('refresh-cw', 14) + ' Refrescar</button>'
+            + '</div>'
+            + renderUndoToast()   // el "Hecho" de sugerencias usa el toast Deshacer (igual que el tab Sugerencias/Leads)
+        + '</div>';
+    }
+
+    // 7 columnas: Contacto · Temp · Sin contacto · Estado · Tipo · Fecha límite · Acciones.
+    function renderTodayHeader() {
+        return '<div class="qida-today-header">'
+            + '<div>Contacto</div>'
+            + '<div>Temp</div>'
+            + '<div>Sin contacto</div>'
+            + '<div>Estado</div>'
+            + '<div>Tipo</div>'
+            + '<div>Fecha límite</div>'
+            + '<div></div>'
+        + '</div>';
+    }
+
+    // Columna TIPO: pill que distingue el origen de la fila. Índigo (Sugerencia) / Cian (Actividad)
+    //   para NO colisionar con los colores ya usados (verde=caliente/"Mensaje nuevo", azul=frío, etc.).
+    function renderTipoPill(kind) {
+        return (kind === 'activity')
+            ? '<div class="qida-dash-cell qida-today-tipo"><span class="qida-tipo-pill qida-tipo-actividad">Actividad</span></div>'
+            : '<div class="qida-dash-cell qida-today-tipo"><span class="qida-tipo-pill qida-tipo-sugerencia">Sugerencia</span></div>';
+    }
+
+    function renderTodayRow(row) {
+        return (row._kind === 'activity') ? renderTodayActivityRow(row) : renderTodaySuggestionRow(row);
+    }
+
+    // Fila de Sugerencia. Reusa las celdas del tab Sugerencias (Temp/Días/Estado). Fecha límite = "Hoy".
+    //   Acción: "Hecho" (mark-done -> markFollowupDone, mismo handler que Sugerencias/Leads). Sin Reagendar.
+    function renderTodaySuggestionRow(row) {
+        var name = row.familyName || ('Lead ' + row.id);
+        var parentesco = row.parentesco || (!row._real && row.caregiverInfo && row.caregiverInfo.relation) || '';
+        var line2 = parentesco
+            ? '<div class="qida-cell-line2">cuida a su ' + esc(String(parentesco).toLowerCase()) + '</div>'
+            : '';
+        return '<div class="qida-today-row" data-action="select-lead" data-id="' + esc(row.id) + '">'
+            + '<div class="qida-dash-cell qida-cell-familia">'
+                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(name) + '</span></div>'
+                + line2
+            + '</div>'
+            + renderTempCell(row.temperature)
+            + renderDiasCell(row)
+            + renderEstadoCell(row)
+            + renderTipoPill('suggestion')
+            + '<div class="qida-dash-cell qida-actv-deadline qida-today-hoy">Hoy</div>'
+            + '<div class="qida-actv-row-actions">'
+                + '<button class="qida-actv-done" data-action="mark-done" data-id="' + esc(row.id) + '" data-stop title="Marcar seguimiento hecho hoy">' + icon('check', 11) + ' Hecho</button>'
+            + '</div>'
+        + '</div>';
+    }
+
+    // Fila de Actividad. Reusa el render del tab Actividades (Contacto unificado, cruce TEMP/SIN
+    //   CONTACTO, estado semáforo + badge Urgente). Acciones: "Hecho" + "Reagendar" (mismos handlers
+    //   activity-complete / activity-reschedule, gated por odooWriteEnabled como en el tab Actividades).
+    function renderTodayActivityRow(act) {
+        var leadData = leadDataForActivity(act);
+        var parsed = parseLeadName(act.leadName);
+        var contactName = parsed.name || ('Lead ' + (act.leadId != null ? act.leadId : ''));
+        var refHtml = parsed.ref ? '<span class="qida-actv-ref">' + esc(parsed.ref) + '</span>' : '';
+        var parentesco = leadData ? (leadData.parentesco || (leadData.caregiverInfo && leadData.caregiverInfo.relation) || '') : '';
+        var line2 = parentesco
+            ? '<div class="qida-cell-line2">cuida a su ' + esc(String(parentesco).toLowerCase()) + '</div>'
+            : '';
+        var tempCell = leadData ? renderTempCell(leadData.temperature) : emptyDashCell('qida-cell-temp');
+        var diasCell = (leadData && leadData.daysWithoutTouch != null) ? renderDiasCell(leadData) : emptyDashCell('qida-cell-dias');
+        var deadlineCls = (act.state === 'overdue') ? ' qida-actv-deadline-overdue' : '';
+        return '<div class="qida-today-row" data-action="select-lead" data-source="activities" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">'
+            + '<div class="qida-dash-cell qida-actv-contacto qida-cell-familia">'
+                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(contactName) + '</span>' + refHtml + '</div>'
+                + line2
+            + '</div>'
+            + tempCell
+            + diasCell
+            + renderActivityEstadoBadge(act.state, leadData)
+            + renderTipoPill('activity')
+            + '<div class="qida-dash-cell qida-actv-deadline' + deadlineCls + '">' + esc(formatShortDate(act.deadlineDate)) + '</div>'
+            + '<div class="qida-actv-row-actions">'
+                + ((state.odooWriteEnabled && isRealActivityId(act.id))
+                    ? '<button class="qida-actv-done" data-action="activity-complete" data-id="' + esc(act.id) + '" data-source="dash" data-lead="' + esc(act.leadId != null ? act.leadId : '') + '" title="Cerrar esta actividad en Odoo">' + icon('check', 11) + ' Hecho</button>'
+                        + '<button class="qida-actv-reschedule" data-action="activity-reschedule" data-id="' + esc(act.id) + '" data-lead="' + esc(act.leadId != null ? act.leadId : '') + '" data-current-date="' + esc(act.deadlineDate || '') + '" title="Cambiar la fecha límite en Odoo">📅 Reagendar</button>'
+                    : '')
+            + '</div>'
+        + '</div>';
+    }
+    // ============================================================
+    // ===== fin AI-860 TAB HOY =====
+    // ============================================================
+
     // Banda superior: 2 grupos con label (estética .qida-leader-kpi del Panel de Líderes).
     //   "TU IMPACTO" = Convertidos (display-only, no filtra). "CARTERA ACTIVA" = En cartera
     //   (v1.22, display-only) + 3 cards de temperatura clicables (escriben state.dashSegment).
@@ -4713,6 +4986,7 @@
     // 3 chips de vista. Al cambiar = fetch al endpoint correspondiente (no re-filtro client-side).
     function renderViewChips() {
         var views = [
+            { id: 'today',       label: 'Hoy' },          // AI-860: tab "Hoy" (feed unificado), a la izquierda de Sugerencias.
             { id: 'suggestions', label: 'Sugerencias' },
             { id: 'activities',  label: 'Actividades' },
             { id: 'leads',       label: 'Leads' }
