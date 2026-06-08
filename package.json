@@ -7,7 +7,7 @@
   "scripts": {
     "publish:widget": "node publish.mjs",
     "publish:watch": "node publish.mjs --watch",
-    "test": "node test/agent-builder-save.test.mjs && node test/ux-trust-v1.41.test.mjs && node test/whatsapp-audio.test.mjs && node test/activities-odoo.test.mjs && node test/safe-content-swap.test.mjs && node test/create-activity-v1.44.test.mjs && node test/dashboard-feed.test.mjs && node test/reschedule-activity.test.mjs"
+    "test": "node test/agent-builder-save.test.mjs && node test/ux-trust-v1.41.test.mjs && node test/whatsapp-audio.test.mjs && node test/activities-odoo.test.mjs && node test/safe-content-swap.test.mjs && node test/create-activity-v1.44.test.mjs && node test/dashboard-feed.test.mjs && node test/reschedule-activity.test.mjs && node test/today-feed.test.mjs"
   },
   "devDependencies": {
     "@vercel/blob": "^2.3.3",
