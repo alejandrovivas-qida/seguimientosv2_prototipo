@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.1
+ * QIDA ASSISTANT v1.49.2
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,20 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.2 (2026-06-08 — tab "Hoy": dedupe AI-861 + display_id en filas Sugerencia):
+ *   - El tab "Hoy" ya NO muestra como tipo Sugerencia un lead que YA tiene una actividad pendiente en
+ *     la ventana (próximas 48h, vencidas activas incluidas): reusa suppressSuggestionsWithActivity (el
+ *     mismo dedupe AI-861 del tab Sugerencias) ANTES de mergear, en buildTodayRows. La actividad del
+ *     lead sigue entrando como tipo Actividad -> el lead aparece UNA sola vez (sin la fila duplicada).
+ *     Corrige la decisión de v1.49.0 ("mostrar ambos"): un lead ya agendado no necesita la sugerencia.
+ *   - Las filas tipo Sugerencia ahora muestran el display_id 'L#####' junto al nombre del lead (misma
+ *     clase .qida-actv-ref que las filas tipo Actividad, ej. "Esther Lazaro L124599") -> la AF
+ *     identifica el lead de forma consistente entre tipos. Se omite el ref si el nombre ya es el
+ *     fallback "Lead <id>" (no se duplica el id).
+ *   - Reuso, sin lógica nueva: suppressSuggestionsWithActivity pasa a aceptar las actividades como 2º
+ *     argumento opcional (el tab Sugerencias las sigue leyendo de state.dashActivitiesForFilter por
+ *     defecto). El resto del bloque AI-860 (sort, degrade, columna TIPO, handlers) queda intacto.
  *
  * Cambios v1.49.1 (2026-06-08 — Deep-link al detalle del lead desde Odoo):
  *   - Si la AF abre el widget mientras Odoo muestra un lead concreto (hash con model=crm.lead +
@@ -1628,7 +1642,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.1';
+    var VERSION = '1.49.2';
     var CONFIG = null;
 
     // ============================================================
@@ -4687,8 +4701,8 @@
     //   Es EXPERIMENTAL (el PO lo quita si las AFs no lo usan): vive en este bloque + 4 hooks marcados
     //   con "AI-860" (chip en renderViewChips, casos 'today' en fetchView/fetchViewSync, branch en
     //   renderDashboard) + el bloque CSS .qida-today-*. NO toca la lógica de los otros tabs.
-    //   NO reusa suppressSuggestionsWithActivity: acá queremos MOSTRAR ambos (sugerencia + actividad),
-    //   distinguidos por TIPO, no suprimir.
+    //   v1.49.2 (AI-861): SÍ reusa suppressSuggestionsWithActivity para NO mostrar como Sugerencia un
+    //   lead que ya tiene actividad pendiente en ventana; su actividad sigue entrando como tipo Actividad.
 
     // Shallow-copy + tag _kind (no muta los objetos mock compartidos al cambiar de tab / re-fetch).
     function todayTag(row, kind) {
@@ -4705,6 +4719,10 @@
         var out = [], i;
         suggestions = suggestions || [];
         activities = activities || [];
+        // v1.49.2 (AI-861): no mostrar como Sugerencia un lead que YA tiene actividad pendiente en la
+        //   ventana (próximas 48h + vencidas activas). Reusa el dedupe del tab Sugerencias, pasándole
+        //   las actividades del día explícitas. La actividad del lead sigue entrando abajo como Actividad.
+        suggestions = suppressSuggestionsWithActivity(suggestions, activities);
         for (i = 0; i < suggestions.length; i++) out.push(todayTag(suggestions[i], 'suggestion'));
         for (i = 0; i < activities.length; i++) out.push(todayTag(activities[i], 'activity'));
         return out;
@@ -4846,13 +4864,19 @@
     //   Acción: "Hecho" (mark-done -> markFollowupDone, mismo handler que Sugerencias/Leads). Sin Reagendar.
     function renderTodaySuggestionRow(row) {
         var name = row.familyName || ('Lead ' + row.id);
+        // v1.49.2: display_id 'L#####' junto al nombre (misma .qida-actv-ref que las filas tipo
+        //   Actividad) -> identificación consistente del lead entre tipos. Se omite si el nombre YA es
+        //   el fallback "Lead <id>" (evita duplicar el id, ej. "Lead L124599 L124599").
+        var refHtml = (row.id && name !== ('Lead ' + row.id))
+            ? '<span class="qida-actv-ref">' + esc(row.id) + '</span>'
+            : '';
         var parentesco = row.parentesco || (!row._real && row.caregiverInfo && row.caregiverInfo.relation) || '';
         var line2 = parentesco
             ? '<div class="qida-cell-line2">cuida a su ' + esc(String(parentesco).toLowerCase()) + '</div>'
             : '';
         return '<div class="qida-today-row" data-action="select-lead" data-id="' + esc(row.id) + '">'
             + '<div class="qida-dash-cell qida-cell-familia">'
-                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(name) + '</span></div>'
+                + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(name) + '</span>' + refHtml + '</div>'
                 + line2
             + '</div>'
             + renderTempCell(row.temperature)
@@ -6770,13 +6794,15 @@
         });
     }
 
-    // v1.48.7: "Sugerencias sin duplicar". Excluye del tab Sugerencias los leads que YA tienen una
-    //   mail.activity pendiente con deadline en [hoy-LOOKBACK, hoy+LOOKAHEAD] (vencidas activas
-    //   incluidas; cualquier tipo). Cruce por lead_id numérico: toNumericLeadId puentea el display_id
-    //   'L#####' de la sugerencia con el res_id numérico de la actividad. Solo se llama con
-    //   state.dashActivitiesForFilter truthy (array). console.log temporal para que el PO valide.
-    function suppressSuggestionsWithActivity(rows) {
-        var acts = state.dashActivitiesForFilter || [];
+    // v1.48.7: "Sugerencias sin duplicar". Excluye los leads que YA tienen una mail.activity pendiente
+    //   con deadline en [hoy-LOOKBACK, hoy+LOOKAHEAD] (vencidas activas incluidas; cualquier tipo).
+    //   Cruce por lead_id numérico: toNumericLeadId puentea el display_id 'L#####' de la sugerencia con
+    //   el res_id numérico de la actividad. console.log temporal para que el PO valide.
+    //   v1.49.2 (AI-861): `acts` es opcional. El tab Sugerencias NO lo pasa -> usa
+    //   state.dashActivitiesForFilter (solo se llama con ese campo truthy). El tab "Hoy" pasa sus
+    //   actividades del día explícitas (array, incluso vacío en degrade -> no suprime nada).
+    function suppressSuggestionsWithActivity(rows, acts) {
+        acts = acts || state.dashActivitiesForFilter || [];
         var windowStart = addDaysISO(-SUGGESTION_ACTIVITY_LOOKBACK_DAYS);
         var windowEnd = addDaysISO(SUGGESTION_ACTIVITY_LOOKAHEAD_DAYS);
         // lead_id numérico -> deadline de la primera actividad en ventana (para el log de auditoría).
