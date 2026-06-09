@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.7
+ * QIDA ASSISTANT v1.49.8
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,38 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.8 (2026-06-09 — "Dar por perdido" un lead desde el detalle):
+ *   - Botón "Dar por perdido" en el header del detalle del lead, entre el pill de días sin contacto
+ *     y el pill de temperatura. Acción escribe en Odoo via crm.lead/action_set_lost con un
+ *     lost_reason_id OBLIGATORIO (modelo crm.lost.reason). 12 motivos cargados dinámicamente vía
+ *     loadLostReasons() (clon de loadActivityTypes; cache en memoria _odooLostReasons, idempotente).
+ *     NO hardcodeamos la lista — un cambio en Odoo se refleja sin redeploy.
+ *   - Gate triple: state.odooWriteEnabled (probe same-origin OK) + isRealActivityId(toNumericLeadId)
+ *     (lead numérico real, no placeholder) + !isImpersonating() (en modo viewing-as, odooCall escribe
+ *     con la cookie del admin -> el set_lost quedaría atribuido al admin, no a la AF; ocultar el botón
+ *     evita el cross-write incorrecto). Si cualquiera falla, el botón NO aparece (string vacío en la
+ *     concatenación del header — mismo criterio que .qida-dsh-newact).
+ *   - Confirm modal renderLostConfirm() (clon de renderActivityConfirm, mismo chrome qida-actv-confirm):
+ *     título "¿Dar por perdido este lead?", subtítulo de advertencia + recordatorio de irreversibilidad,
+ *     dropdown <select data-input="lost-reason"> con las 12 opciones de _odooLostReasons (placeholder
+ *     "Seleccionar motivo…" si todavía no llegó la lista), botones "Cancelar" / "Sí, dar por perdido".
+ *     Submit deshabilitado hasta que la AF elija un motivo (lostReasonId truthy). 1 click — NO hay que
+ *     tipear el nombre del lead (la doble fricción del dropdown obligatorio ya da seguridad suficiente
+ *     contra el click accidental).
+ *   - Optimistic + revert (mismo patrón que markFollowupDone): al confirmar, agregamos el leadId
+ *     numérico a state.lostLeadIds (Set propio, NO reusamos completedTodayIds — "hecho hoy" es
+ *     reversible en sesión vía Deshacer; "perdido" NO lo es desde el widget, conceptualmente distintos).
+ *     Volvemos al dashboard + toast "Lead dado por perdido". Si setLeadLost rechaza, sacamos del Set,
+ *     re-render del dashboard (el lead reaparece) y toast de error con odooErrMsg(err).
+ *   - Filtro del dashboard: liveDashRows ahora salta filas cuyo id matchea state.lostLeadIds (Set de
+ *     ids numéricos) — same-shape que el filtro de completedTodayIds, aplicado encima.
+ *   - NO reversible desde el widget. Reactivar va por Odoo nativo (action_set_won o cambio de stage
+ *     manual desde la form view de crm.lead). El Set lostLeadIds persiste durante la sesión del page
+ *     load — un reload trae el estado real desde el backend (igual que completedTodayIds).
+ *   - Icono nuevo en la lib: 'x-circle' (lucide XCircle — círculo con X dentro), para el botón
+ *     "Dar por perdido". Variante visual .qida-dsh-lost con acento rojo neutro (--red600 hover/border,
+ *     bg blanco), mismo radio/padding/font-size que .qida-dsh-markdone para coherencia del header.
  *
  * Cambios v1.49.7 (2026-06-09 — Header del detalle: "+ Crear actividad" + emoji 📞 si hay llamada pendiente):
  *   - Botón "+ Crear actividad" en el header del detalle del lead, entre el meta del lead
@@ -1727,7 +1759,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.7';
+    var VERSION = '1.49.8';
     var CONFIG = null;
 
     // ============================================================
@@ -1756,6 +1788,10 @@
     //   alimenta el modal "Nueva actividad". null hasta hidratar / si falla.
     var _odooUid = null;
     var _odooActivityTypes = null;
+    // v1.49.8: cache de crm.lost.reason (motivos de "Dar por perdido"). Mismo patrón que
+    //   _odooActivityTypes: null hasta que loadLostReasons() resuelve; array (incl. []) tras la
+    //   primera carga. Las opciones del dropdown del confirm de "Dar por perdido" salen de acá.
+    var _odooLostReasons = null;
     var _crmLeadModelId = null;
     // v1.12: whitelist de emails con acceso al panel de lideres. _isLeader se setea en
     //   init() comparando sess.username (modo Odoo) contra LEADER_EMAILS. En modo dev
@@ -2403,6 +2439,15 @@
         activityModal: null,
         activityConfirm: null,
         rescheduleModal: null,
+        // v1.49.8: "Dar por perdido" un lead desde el detalle.
+        //   lostConfirm: null | { leadId, leadName, resId, lostReasonId, submitting } -> modal de confirm
+        //     con dropdown obligatorio de motivos. El submit (lost-confirm-yes) llama setLeadLost.
+        //   lostLeadIds: Set<id numérico>. Leads marcados como perdidos en esta sesión (optimistic remove
+        //     del dashboard via liveDashRows). Persiste durante toda la sesión del page load; un reload
+        //     trae el estado real desde el backend. NO reusamos completedTodayIds porque "hecho hoy" es
+        //     reversible (Deshacer) y "perdido" NO lo es desde el widget -> conceptos distintos.
+        lostConfirm: null,
+        lostLeadIds: new Set(),
 
         // Toast
         toast: null,                    // { msg, ts }
@@ -2915,6 +2960,17 @@
             .catch(function (err) { log('loadActivityTypes failed', err && err.message); return []; });
     }
 
+    // v1.49.8: search_read de crm.lost.reason -> cache en memoria (_odooLostReasons). Idempotente.
+    //   Alimenta el dropdown obligatorio del modal "Dar por perdido". Mismo shape que
+    //   loadActivityTypes (catch silencioso -> [] para no romper la apertura del modal). El submit
+    //   del confirm queda gated por la elección del motivo, así que [] = botón perpetuamente disabled.
+    function loadLostReasons() {
+        if (_odooLostReasons) return Promise.resolve(_odooLostReasons);
+        return odooCall('crm.lost.reason', 'search_read', [[], ['id', 'name']], {})
+            .then(function (rows) { _odooLostReasons = rows || []; return _odooLostReasons; })
+            .catch(function (err) { log('loadLostReasons failed', err && err.message); return []; });
+    }
+
     // Resuelve la whitelist -> [{ id, label, key }] usando los tipos cacheados (solo los que matchean).
     function resolvedActivityTypes() {
         var types = _odooActivityTypes || [];
@@ -2970,6 +3026,17 @@
     //   NO es reversible -> el caller exige un confirm previo. feedback:'' (sin comentario).
     function completeOdooActivity(activityId) {
         return odooCall('mail.activity', 'action_feedback', [[activityId]], { feedback: '' });
+    }
+
+    // v1.49.8: action_set_lost de crm.lead. Mueve el lead al stage "Perdido" y graba el motivo
+    //   (lost_reason_id es OBLIGATORIO según el contrato confirmado con el PO via Network tab).
+    //   NO es reversible desde el widget -> el caller exige confirm + dropdown de motivo. odooId debe
+    //   ser un entero (res_id Odoo); lostReasonId también entero (id de crm.lost.reason).
+    function setLeadLost(odooId, lostReasonId) {
+        if (!odooId || !lostReasonId) {
+            return Promise.reject(new Error('odooId y lostReasonId requeridos'));
+        }
+        return odooCall('crm.lead', 'action_set_lost', [[odooId]], { lost_reason_id: lostReasonId });
     }
 
     // v1.48.5: WRITE de date_deadline de una mail.activity existente (reagendar). NO borra ni cierra
@@ -3556,7 +3623,9 @@
         'bar-chart-2':'<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
         // v1.12: lucide Search (alias del existente; agrego download/external para boton exportar).
         'download':'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
-        'filter':'<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>'
+        'filter':'<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+        // v1.49.8: lucide XCircle - icono del botón "Dar por perdido" en el header del detalle.
+        'x-circle':'<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -4141,6 +4210,13 @@
             '.qida-dsh-markdone{margin-left:auto;background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:#0F6E56;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
             '.qida-dsh-markdone:hover{border-color:#0F6E56;background:#F7FAF8;}',
             '.qida-dsh-markdone.is-done{background:#ECFDF5;border-color:#A7F3D0;color:#047857;cursor:pointer;}',
+            /* v1.49.8: botón "Dar por perdido" en el header del detalle (entre días-sin-contacto y
+               el pill de temperatura). Acento rojo neutro: texto en var(--red600), borde y bg suaves
+               para no competir visualmente con "Marcar hecho" (acción positiva, verde). Mismo radio/
+               padding/font-size que .qida-dsh-markdone para coherencia del header. */
+            '.qida-dsh-lost{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--red600);cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
+            '.qida-dsh-lost:hover{border-color:var(--red600);background:var(--red50);}',
+            '.qida-dsh-lost:focus-visible{outline:2px solid var(--red600);outline-offset:2px;}',
             /* v1.49.7: "+ Crear actividad" en el header del detalle. Mismo verde Qida (#0F6E56)
                que el botón al fondo del panel "Próximas actividades" (.qida-act-new-btn), con el
                padding/font-size del resto del header (.qida-dsh-markdone) para coherencia. */
@@ -4388,6 +4464,17 @@
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i];
             if (state.completedTodayIds && state.completedTodayIds.has(r.id)) continue;
+            // v1.49.8: leads marcados como perdidos en esta sesión desaparecen del dashboard
+            //   (mismo patrón que completedTodayIds). El Set guarda ids en múltiples formatos
+            //   (display 'L#####', numérico string, numérico int) -> chequeamos por r.id directo y
+            //   también por su versión numérica para cubrir filas cuyo id no es el display id.
+            if (state.lostLeadIds && state.lostLeadIds.size) {
+                if (state.lostLeadIds.has(r.id)) continue;
+                var rNum = toNumericLeadId(r.id);
+                if (rNum && state.lostLeadIds.has(rNum)) continue;
+                var rInt = parseInt(rNum, 10);
+                if (rInt && state.lostLeadIds.has(rInt)) continue;
+            }
             // v1.43.3 (FIX): si la AF ya abrió este lead en la sesión, marcamos SOLO _leidoEnSesion
             //   para apagar el badge "Mensaje nuevo" en el render. NO tocamos hasNewMessage: lo usan
             //   los filtros/orden "nuevos primero"/slice de buildDashFeed; mutarlo a false sacaba el
@@ -8047,6 +8134,53 @@
         + '</div>';
     }
 
+    // v1.49.8: confirm de "Dar por perdido". Clon de renderActivityConfirm con dropdown OBLIGATORIO de
+    //   motivos (crm.lost.reason). El submit (lost-confirm-yes) queda disabled hasta que lostReasonId
+    //   esté seteado. Si _odooLostReasons todavía no llegó, mostramos un placeholder "Cargando motivos…"
+    //   (el dropdown sigue disabled efectivamente porque no hay opciones válidas que elegir). NO pedimos
+    //   typing del nombre del lead — la doble fricción del dropdown obligatorio ya es suficiente contra
+    //   el click accidental, y mantener el modal a 1-click es lo que pidió el PO.
+    function renderLostConfirm() {
+        var c = state.lostConfirm;
+        if (!c) return '';
+        var reasons = _odooLostReasons || [];
+        var reasonOpts;
+        if (!reasons.length) {
+            reasonOpts = '<option value="">(cargando motivos…)</option>';
+        } else {
+            reasonOpts = '<option value="">Seleccionar motivo…</option>';
+            for (var i = 0; i < reasons.length; i++) {
+                var sel = (c.lostReasonId && reasons[i].id === c.lostReasonId) ? ' selected' : '';
+                reasonOpts += '<option value="' + esc(reasons[i].id) + '"' + sel + '>' + esc(reasons[i].name) + '</option>';
+            }
+        }
+        var yesLabel = c.submitting ? 'Marcando…' : 'Sí, dar por perdido';
+        // Disabled si: submitting, lista aún no cargada, motivo no elegido.
+        var yesDisabled = (c.submitting || !reasons.length || !c.lostReasonId) ? ' disabled' : '';
+        var preview = c.leadName ? '<p class="qida-actv-confirm-preview">&ldquo;' + esc(c.leadName) + '&rdquo;</p>' : '';
+        return '<div class="qida-schedule-bg" data-action="lost-confirm-bg">'
+            + '<div class="qida-schedule qida-actv-confirm">'
+                + '<div class="qida-schedule-head">'
+                    + '<h3 class="qida-schedule-title">¿Dar por perdido este lead?</h3>'
+                    + '<p class="qida-schedule-sub">Se marca como Perdido en Odoo con el motivo elegido (queda en el historial). <strong>No se puede deshacer desde el widget.</strong></p>'
+                + '</div>'
+                + '<div class="qida-schedule-body">'
+                    + preview
+                    + '<div class="qida-sb-section">'
+                        + '<div class="qida-sb-label">Motivo *</div>'
+                        + '<select class="qida-leader-select qida-actv-input" data-input="lost-reason">' + reasonOpts + '</select>'
+                    + '</div>'
+                + '</div>'
+                + '<div class="qida-schedule-foot">'
+                    + '<div class="qida-sb-actions">'
+                        + '<button class="qida-sb-cancel" data-action="lost-confirm-cancel">Cancelar</button>'
+                        + '<button class="qida-btn-primary" data-action="lost-confirm-yes"' + yesDisabled + '>' + icon('x-circle', 13) + ' ' + esc(yesLabel) + '</button>'
+                    + '</div>'
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
     // ============================================================
     // RENDER: PANEL DE LIDERES (v1.12)
     // ============================================================
@@ -8669,11 +8803,25 @@
                 var headerNewActBtn = (state.odooWriteEnabled && isRealActivityId(toNumericLeadId(state.currentLeadId)))
                     ? '<button class="qida-dsh-newact" data-action="activity-new" title="Crear actividad para este lead">' + icon('plus', 12) + ' Crear actividad</button>'
                     : '';
+                // v1.49.8: "Dar por perdido". Gate triple: write enabled + lead numérico real + !impersonando.
+                //   Justificación del !isImpersonating(): odooCall escribe con la cookie del browser real
+                //   (no con el odoo_user_id impersonado) -> el set_lost quedaría atribuido al admin, no a
+                //   la AF. Ocultar el botón en modo viewing-as evita el cross-write incorrecto. La reactivación
+                //   NO es posible desde el widget (va por Odoo nativo, action_set_won o cambio de stage).
+                var headerLostBtn = (state.odooWriteEnabled
+                    && isRealActivityId(toNumericLeadId(state.currentLeadId))
+                    && !isImpersonating())
+                    ? '<button class="qida-dsh-lost" data-action="lead-lost-open" title="Dar por perdido este lead (irreversible)">' + icon('x-circle', 12) + ' Dar por perdido</button>'
+                    : '';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
                     + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
                     + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
                     + '<span class="qida-dsh-days ' + lvl + '">' + icon('clock', 11) + ' ' + esc(daysLabel) + '</span>'
+                    // v1.49.8: botón "Dar por perdido" entre días-sin-contacto y el separador antes del pill
+                    //   de temperatura (ubicación acordada con el PO). Si el gate falla -> string vacío
+                    //   (sin separador colgante porque el separador siguiente sigue presente para tempPill).
+                    + headerLostBtn
                     + '<span class="qida-dsh-sep">&middot;</span>'
                     // v1.17: pill de temperatura como hijo directo del head (NO dentro de .qida-dsh-meta,
                     //   que tiene overflow:hidden y cliparía el dropdown). Queda alineado con las referencias.
@@ -8795,6 +8943,15 @@
             divr.id = 'qida-reschedule-root';
             divr.innerHTML = renderRescheduleModal();
             shell.appendChild(divr);
+        }
+        // v1.49.8: confirm de "Dar por perdido". Mismo patrón que activityConfirm (espejo total).
+        var existingL = document.getElementById('qida-lost-confirm-root');
+        if (existingL) existingL.parentNode.removeChild(existingL);
+        if (state.lostConfirm) {
+            var divl = document.createElement('div');
+            divl.id = 'qida-lost-confirm-root';
+            divl.innerHTML = renderLostConfirm();
+            shell.appendChild(divl);
         }
     }
 
@@ -9358,6 +9515,20 @@
             case 'reschedule-save':
                 handleRescheduleSave();
                 return;
+
+            // --- v1.49.8: "Dar por perdido" un lead desde el detalle ---
+            case 'lead-lost-open':
+                openLostConfirm();
+                return;
+            case 'lost-confirm-cancel':
+                setState({ lostConfirm: null });
+                return;
+            case 'lost-confirm-bg':
+                if (e.target === target) setState({ lostConfirm: null });
+                return;
+            case 'lost-confirm-yes':
+                handleLeadLost();
+                return;
         }
     }
 
@@ -9592,6 +9763,75 @@
         }
     }
 
+    // v1.49.8: abre el confirm de "Dar por perdido" para el lead del detalle actual. Gate triple
+    //   (write enabled + lead numérico real + !impersonando). En modo impersonación NO debería ser
+    //   alcanzable (el botón no se pinta), pero el guard defensivo asegura que un click directo del
+    //   data-action vía consola tampoco escriba con la cookie incorrecta.
+    function openLostConfirm() {
+        if (!state.odooWriteEnabled) { showToast('Función no disponible en este modo.', 'error'); return; }
+        if (isImpersonating()) { showToast('No disponible en modo "ver como AF".', 'error'); return; }
+        var leadId = state.currentLeadId;
+        var resId = parseInt(toNumericLeadId(leadId), 10);
+        if (!resId || isNaN(resId)) { showToast('No pude identificar el lead.', 'error'); return; }
+        var lead = currentLead(leadId);
+        // Disparo el fetch de motivos si todavía no llegaron; cuando resuelve, re-renderizamos el
+        //   modal para reemplazar "(cargando motivos…)" por la lista real. NO bloqueo la apertura
+        //   del confirm — el dropdown muestra el placeholder y el submit queda disabled hasta elegir.
+        if (!_odooLostReasons) { loadLostReasons().then(function () { if (state.lostConfirm) rerenderContent(); }); }
+        setState({ lostConfirm: {
+            leadId: leadId,
+            resId: resId,
+            leadName: (lead && lead.name) || ('Lead ' + leadId),
+            lostReasonId: null,
+            submitting: false
+        } });
+    }
+
+    // v1.49.8: confirma "Dar por perdido". Optimistic: agregar a lostLeadIds (saca del dashboard), cerrar
+    //   modal, volver al dashboard + toast. Después llamar setLeadLost; si falla, revert (sacar del Set),
+    //   re-render del dashboard (el lead reaparece) + toast de error con odooErrMsg.
+    function handleLeadLost() {
+        var c = state.lostConfirm;
+        if (!c || c.submitting) return;
+        if (!c.lostReasonId) { showToast('Elegí un motivo para continuar.', 'error'); return; }
+        if (!c.resId) { showToast('No pude identificar el lead.', 'error'); return; }
+        // Snapshot para revert. Usamos el id ORIGINAL del lead (puede ser 'L#####' o numérico) para
+        //   matchear el filtro de liveDashRows; igual lo agregamos también como numérico por las dudas
+        //   (algunas filas del dashboard llegan con id numérico crudo).
+        var addedKeys = [];
+        if (state.lostLeadIds) {
+            if (c.leadId != null && !state.lostLeadIds.has(c.leadId)) {
+                state.lostLeadIds.add(c.leadId);
+                addedKeys.push(c.leadId);
+            }
+            var numericId = toNumericLeadId(c.leadId);
+            if (numericId && !state.lostLeadIds.has(numericId)) {
+                state.lostLeadIds.add(numericId);
+                addedKeys.push(numericId);
+            }
+            // El resId numérico (entero) también, por simetría con otros surfaces.
+            if (c.resId && !state.lostLeadIds.has(c.resId)) {
+                state.lostLeadIds.add(c.resId);
+                addedKeys.push(c.resId);
+            }
+        }
+        // Cerrar modal + volver al dashboard (el lead desaparece de la tabla por el filtro de liveDashRows).
+        state.lostConfirm = null;
+        state.view = 'dashboard';
+        state.currentLeadId = null;
+        rerenderContent();
+        setLeadLost(c.resId, c.lostReasonId).then(function () {
+            showToast('Lead dado por perdido');
+        }).catch(function (err) {
+            // Revert: sacar todas las keys que agregamos (no las que ya estaban antes).
+            if (state.lostLeadIds) {
+                for (var i = 0; i < addedKeys.length; i++) state.lostLeadIds["delete"](addedKeys[i]);
+            }
+            rerenderContent();
+            showToast('No se pudo dar por perdido: ' + odooErrMsg(err), 'error');
+        });
+    }
+
     // [C] v1.48.5: Reagendar. Abre el mini-modal con la fecha límite actual (o hoy si no tiene).
     function openRescheduleModal(activityId, leadId, currentDate) {
         if (!state.odooWriteEnabled) return;
@@ -9744,6 +9984,17 @@
         } else if (input === 'reschedule-date') {
             // v1.48.5: store sin rerender (el date picker nativo mantiene su valor); el submit lee state.
             if (state.rescheduleModal) state.rescheduleModal.date = node.value || null;
+        } else if (input === 'lost-reason') {
+            // v1.49.8: select de motivo. Store sin rerender (el DOM nativo mantiene la selección).
+            //   Re-toggle inline del botón "Sí, dar por perdido": habilita cuando hay motivo válido.
+            if (state.lostConfirm) {
+                state.lostConfirm.lostReasonId = parseInt(node.value, 10) || null;
+                var yesBtn = document.querySelector('[data-action="lost-confirm-yes"]');
+                if (yesBtn) {
+                    if (state.lostConfirm.lostReasonId) yesBtn.removeAttribute('disabled');
+                    else yesBtn.setAttribute('disabled', '');
+                }
+            }
         } else if (input === 'wa-draft') {
             // v1.6: textarea de WhatsApp. Sin rerender completo: solo togglear send + auto-resize.
             state.draftMessage = node.value;
@@ -10190,6 +10441,9 @@
 
         if (isEsc) {
             // v1.44: el confirm de cerrar actividad y el modal de nueva actividad tienen prioridad.
+            // v1.49.8: el confirm de "Dar por perdido" sigue la misma política (Esc cierra el modal,
+            //   no el widget). NO usa setState para preservar la posible carga async de motivos.
+            if (state.lostConfirm) { setState({ lostConfirm: null }); return; }
             if (state.activityConfirm) { setState({ activityConfirm: null }); return; }
             if (state.activityModal) { setState({ activityModal: null }); return; }
             if (state.rescheduleModal) { setState({ rescheduleModal: null }); return; }
@@ -10255,6 +10509,10 @@
         state.activityModal = null;
         state.activityConfirm = null;
         state.rescheduleModal = null;   // v1.48.5
+        // v1.49.8: cerrar el confirm de "Dar por perdido". lostLeadIds PERSISTE durante la sesión
+        //   del page load (igual política que completedTodayIds): los leads marcados perdidos no
+        //   reaparecen al cerrar/reabrir el modal; sólo al hacer reload (que trae estado real del backend).
+        state.lostConfirm = null;
         // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
         //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
         state.agentBuilderConfirmDiscard = false;
