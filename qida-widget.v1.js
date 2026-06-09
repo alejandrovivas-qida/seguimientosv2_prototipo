@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.3
+ * QIDA ASSISTANT v1.49.4
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,20 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.4 (2026-06-09 — "Convertidos este mes" lee real desde Odoo):
+ *   - La card "Convertidos" del dashboard mostraba siempre 0 porque el backend devuelve
+ *     convertidos_este_mes=0 hardcoded (lead_followup_state aún no tiene columnas outcome/closed_at).
+ *   - Override desde el widget: fetchConvertidosCount() hace search_count a crm.lead via JSON-RPC
+ *     same-origin (mismo patrón que fetchOdooActivities). Filtra por stage_id=16 (Aceptado=Convertido),
+ *     type=opportunity, user_id=<AF efectiva> y date_closed dentro del mes calendario actual.
+ *   - loadDashMetrics ahora hace Promise.all([backend, odoo]) y mergea: si Odoo responde con número,
+ *     pisa convertidos_este_mes; si el uid no aplica (viewer) o Odoo falla, conserva el value del
+ *     backend (0) -> degrade silencioso. El resto de cards (calientes/templados/frios/en_cartera/
+ *     leads_con_mensaje_nuevo) NO se tocan: siguen viniendo de Postgres como antes.
+ *   - Fix temporal: el contador correcto va a vivir en el backend cuando exista la migración
+ *     outcome/closed_at en lead_followup_state. Mientras tanto, esta lectura same-origin es la
+ *     única fuente de verdad en tiempo real.
  *
  * Cambios v1.49.3 (2026-06-08 — "Análisis IA" carga con el resto del detalle, no más skeleton "Analizando…"):
  *   - El panel "Análisis IA" ahora sale del nuevo GET /api/leads/{id}/detail (lead_analysis_long
@@ -1654,7 +1668,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.3';
+    var VERSION = '1.49.4';
     var CONFIG = null;
 
     // ============================================================
@@ -4381,9 +4395,21 @@
 
     // v1.22: carga las metricas portfolio-wide (flag on). Independiente de la tabla: si falla,
     //   NO bloquea (dashMetrics queda null -> renderDashCards deriva client-side como fallback).
+    // v1.49.4: para "Convertidos este mes" hacemos override desde Odoo (search_count en crm.lead)
+    //   porque el backend lo devuelve hardcoded a 0. Promise.all corre en paralelo; si el override
+    //   falla o no aplica (uid null), se conserva el value del backend.
     function loadDashMetrics() {
         if (!useRealApi()) { state.dashMetrics = null; return; }
-        DashboardService.fetchMetrics().then(function (m) {
+        var odooUid = resolveActivitiesOdooUserId();
+        Promise.all([
+            DashboardService.fetchMetrics(),
+            fetchConvertidosCount(odooUid)
+        ]).then(function (results) {
+            var m = results[0];
+            var convertidos = results[1];
+            if (m && convertidos !== null) {
+                m.convertidos_este_mes = convertidos;
+            }
             state.dashMetrics = m;
             rerenderContent();
         }).catch(function (err) {
@@ -6698,6 +6724,39 @@
     //   { calientes, templados, frios, en_cartera, convertidos_este_mes, leads_con_mensaje_nuevo }.
     function fetchDashboardMetrics() {
         return apiFetchJson('GET', '/api/me/dashboard', { noun: 'tus métricas de cartera' });
+    }
+
+    // v1.49.4: el backend devuelve convertidos_este_mes=0 hardcoded (lead_followup_state no
+    //   tiene columnas outcome/closed_at todavía). Mientras tanto traemos el count REAL pegando
+    //   a Odoo same-origin (mismo patrón que fetchOdooActivities): crm.lead.search_count con
+    //   stage_id=16 ("Aceptado"=Convertido), type=opportunity, user_id=<AF efectiva> y
+    //   date_closed dentro del mes calendario actual (horario local). NUNCA rechaza: si el
+    //   uid no existe (viewer) o Odoo falla, devuelve null -> loadDashMetrics deja el valor
+    //   del backend (0) y la tarjeta queda en "0" -> degrade silencioso, mismo criterio que
+    //   actividades cruzadas.
+    function fetchConvertidosCount(odooUserId) {
+        if (!odooUserId) return Promise.resolve(null);
+        var now = new Date();
+        var firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+        var lastOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        function pad(n) { return n < 10 ? '0' + n : '' + n; }
+        function fmt(d) {
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+                + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+        }
+        var domain = [
+            ['stage_id', '=', 16],
+            ['type', '=', 'opportunity'],
+            ['user_id', '=', odooUserId],
+            ['date_closed', '>=', fmt(firstOfMonth)],
+            ['date_closed', '<=', fmt(lastOfMonth)]
+        ];
+        return odooCall('crm.lead', 'search_count', [domain], {}).then(function (count) {
+            return typeof count === 'number' ? count : null;
+        }).catch(function (err) {
+            log('fetchConvertidosCount failed', err && (err.code || err.message));
+            return null;
+        });
     }
 
     // GET /api/me/leads?<query segun vista> -> array de leads, adaptados al shape del widget.
