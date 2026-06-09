@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.10
+ * QIDA ASSISTANT v1.50.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,62 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.50.0 (2026-06-09 — Chat Agent Sprint 2: 4 tipos de mensaje + lazy generation):
+ *   - Reemplazo del bloque "ASISTENTE IA" del detalle. Antes: chips genéricos "Material marketing",
+ *     "Sugerir mensaje", "Reactivar sin presionar" -> handler único pegaba a /recommendation y
+ *     devolvía drafts. Ahora: 4 tipos de mensaje explícitos (Operativa / Seguimiento / Presentación
+ *     / Reactivar) + Material marketing como chip aparte. El tipo sugerido por la IA viene del
+ *     planner backend y se pinta en NARANJA QIDA (#F59E0B) con ✨, los otros 3 en estilo neutro.
+ *   - Lazy generation (dos endpoints separados, costos distintos):
+ *       * Al ABRIR el detalle: loadRecommendationPlan(leadId) -> POST /api/leads/{id}/recommendation/plan
+ *         (planner rápido ~1-2s). Devuelve {tipo_mensaje, rationale, available_types,
+ *         should_followup_today, gate_reason}. NO genera draft.
+ *       * Al CLICKEAR un tipo: handleAiTypeClick(type) -> POST /api/leads/{id}/recommendation/draft
+ *         con {type:<tipo>}. Devuelve {draft_text, signature_format_used, rationale,
+ *         lead_analysis_long}. Mientras genera (3-10s), spinner en la burbuja IA.
+ *   - Fallback transparente al endpoint viejo: si /plan o /draft devuelven 404 (backend Sprint 2
+ *     aún no desplegado), apiFetchJsonOrNull captura status=404 y fetchRecommendationPlan cae a
+ *     fetchRecommendation() existente, derivando un "plan" sintético (tipo_mensaje='seguimiento'
+ *     por default, rationale del lead_analysis_long si existe). Permite mergear el widget antes
+ *     que el backend sin romper a la AF.
+ *   - State nuevo: state.recommendationPlan = { [leadId]: {tipo_mensaje, rationale, available_types,
+ *     should_followup_today, gate_reason, _loading, _error} }; state.recommendationDraft =
+ *     { [leadId]: { [type]: {draft_text, rationale, _loading, _error} } }. Ambos se mantienen
+ *     en sesión (igual política que recommendationCache/aiChatHistory). Se vacían en closeModal
+ *     para liberar memoria entre sesiones.
+ *   - Tooltip nativo `title=` sobre el botón sugerido con el rationale del planner (no-JS, sin
+ *     dependencias). Mobile: el primer tap dispara la generación directamente (UX consistente con
+ *     el resto de los chips/CTAs del widget; el tooltip queda solo como hint para desktop).
+ *   - Iconos nuevos en la lib I[]: 'handshake' (lucide Handshake, para Seguimiento), 'file-text'
+ *     (lucide FileText, para Presentación). 'phone' (Operativa), 'refresh-cw' (Reactivar), 'book'
+ *     (Material marketing) y 'sparkles' (badge IA) ya existían.
+ *   - CSS nuevo: .qida-aichat-typebtn (estilo neutro, gris/blanco con borde gris claro) + variante
+ *     .qida-aichat-typebtn.suggested (fondo amarillo Qida #FEF3C7 con borde naranja #F59E0B,
+ *     texto naranja oscuro #B45309, peso 600). .qida-aichat-typebtn.busy (deshabilitado durante
+ *     generación). Layout: flex wrap, gap 6px. Material marketing como chip separado para
+ *     diferenciar (es la "biblioteca" de la AF, no un tipo de mensaje IA).
+ *   - Event handler nuevo: 'ai-type-btn' (delegado desde el root). Recibe data-type, valida que
+ *     no esté ya en vuelo, marca _loading en state.recommendationDraft, fetch al /draft, al
+ *     resolver empuja una burbuja IA al historial con kind:'variants' (1 sola variante) reusando
+ *     el flujo "Esta me gusta más" -> Copiar al WhatsApp (cero cambios al resto del flow). Error
+ *     -> burbuja con kind:'error' + retry (mismo patrón que startSuggestFlow).
+ *   - SIN regresión en Material marketing (chip aparte conserva su handler existente
+ *     handleAiChip('material-marketing') -> mock items con cards "Compartir"). Tampoco se tocan:
+ *     ai-chat-send (chat libre con el asistente), ai-pick-variant, ai-share-material, ai-retry-*,
+ *     ni el resto del detalle (WhatsApp pane / activities / análisis IA).
+ *
+ *   Defaults que tomé (no estaban explícitos en el brief):
+ *   - El sugerido por la IA NO se pre-genera al abrir (lazy puro): el botón aparece destacado en
+ *     naranja Qida, pero el draft solo se pide cuando la AF clickea. Esto ahorra costo de tokens
+ *     y matchea el principio "la AF decide qué generar".
+ *   - Si should_followup_today=false o gate_reason!=null: igual mostramos los 4 botones (la AF
+ *     puede generar manualmente si quiere) pero NINGUNO se marca como sugerido. El rationale se
+ *     muestra como banner gris arriba de la fila explicando por qué la IA no recomienda hoy.
+ *   - 1 sola fila si el ancho lo permite (modal detalle es ~96vw), 2 filas si flex-wrap baja.
+ *     Material marketing en su propia fila debajo (chip plano, sin destacado).
+ *   - Si el backend devuelve un tipo_mensaje fuera de los 4 conocidos (defensive), fallback a
+ *     'seguimiento' (más neutro entre los 4).
  *
  * Cambios v1.49.10 (2026-06-09 — tab Hoy reordenado):
  *   - Tab Hoy reordenado: actividades atrasadas → actividades de hoy → sugerencias.
@@ -1794,7 +1850,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.10';
+    var VERSION = '1.50.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2431,6 +2487,22 @@
         agentBuilderError: null,
         agentBuilderSaving: false,
         recommendationCache: {},
+
+        // v1.50.0: chat agent sprint 2 — planner + draft separados (lazy generation).
+        //   recommendationPlan[leadId] = { tipo_mensaje, rationale, available_types,
+        //     should_followup_today, gate_reason, _loading, _error }. Se setea al abrir el
+        //     detalle (loadRecommendationPlan). El _loading inicial pinta los 4 botones en
+        //     estado neutro mientras llega el sugerido.
+        //   recommendationDraft[leadId][type] = { draft_text, rationale, lead_analysis_long,
+        //     signature_format_used, _loading, _error }. Se popula on-demand cuando la AF
+        //     clickea un botón de tipo. Multiple types simultáneos por lead (cada uno con su
+        //     estado independiente) para que la AF pueda regenerar/probar sin perder lo
+        //     anterior. _loading bloquea doble-click sobre el mismo tipo.
+        //   Política de reset: al cerrar el modal vaciamos ambos (memoria + frescura por
+        //   sesión — la temperatura y el contexto del lead pueden haber cambiado entre
+        //   sesiones del page load, no queremos servir un plan stale).
+        recommendationPlan: {},
+        recommendationDraft: {},
 
         // v1.21: cache de la conversación WhatsApp por lead (solo con useRealAPI). Shape:
         //   { [leadId]: { _loading, _error, messages:[...normalizadas]|null } }. Con flag off
@@ -3671,7 +3743,11 @@
         'download':'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
         'filter':'<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
         // v1.49.8: lucide XCircle - icono del botón "Dar por perdido" en el header del detalle.
-        'x-circle':'<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>'
+        'x-circle':'<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+        // v1.50.0: lucide Handshake - tipo "Seguimiento" en el panel ASISTENTE IA.
+        'handshake':'<path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/>',
+        // v1.50.0: lucide FileText - tipo "Presentación" en el panel ASISTENTE IA.
+        'file-text':'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -4000,9 +4076,30 @@
             '.qida-aichat-send:hover:not(:disabled){background:var(--qgH);}',
             '.qida-aichat-send:disabled{background:var(--s300);cursor:not-allowed;}',
             /* v1.8: chips siempre visibles, en fila estilo Gemini */
-            '.qida-aichat-chips{display:flex;flex-direction:row;flex-wrap:wrap;gap:6px;margin-top:4px;}',
+            '.qida-aichat-chips{display:flex;flex-direction:row;flex-wrap:wrap;gap:6px;margin-top:6px;}',
             '.qida-aichat-chip{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;padding:5px 10px;background:#dbe9d5;border:0.5px solid var(--s300);border-radius:8px;color:var(--s800);font-size:11px;font-weight:400;cursor:pointer;font-family:inherit;transition:border-color .12s,background .12s;}',
             '.qida-aichat-chip:hover{border-color:#0F6E56;background:#F7FAF8;}',
+            /* v1.50.0: grid de 4 botones de tipo de mensaje del chat agent sprint 2.
+               flex-wrap soporta 1 fila (modal ancho) o 2 (estrecho) sin tocar el JS. */
+            '.qida-aichat-typegrid{display:flex;flex-direction:row;flex-wrap:wrap;gap:6px;margin-top:4px;}',
+            '.qida-aichat-typebtn{flex:1 1 auto;min-width:120px;display:inline-flex;align-items:center;justify-content:flex-start;gap:6px;padding:7px 12px;background:#fff;border:0.5px solid var(--s300);border-radius:8px;color:var(--s800);font-size:11.5px;font-weight:500;cursor:pointer;font-family:inherit;transition:border-color .12s,background .12s,box-shadow .12s;text-align:left;}',
+            '.qida-aichat-typebtn:hover:not(:disabled){border-color:#0F6E56;background:#F7FAF8;}',
+            '.qida-aichat-typebtn .qa-icon{flex:0 0 auto;}',
+            '.qida-aichat-typebtn-label{flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            /* sugerido por la IA: naranja Qida (#F59E0B), fondo amarillo claro, texto naranja oscuro */
+            '.qida-aichat-typebtn.suggested{background:#FEF3C7;border-color:#F59E0B;color:#B45309;font-weight:600;box-shadow:0 0 0 1px rgba(245,158,11,.15);}',
+            '.qida-aichat-typebtn.suggested:hover:not(:disabled){background:#FDE68A;border-color:#D97706;}',
+            '.qida-aichat-typebtn-spark{display:inline-flex;align-items:center;color:#F59E0B;margin-left:auto;}',
+            '.qida-aichat-typebtn.suggested .qida-aichat-typebtn-spark{color:#D97706;}',
+            '.qida-aichat-typebtn.busy{cursor:wait;opacity:.7;}',
+            '.qida-aichat-typebtn:disabled{cursor:not-allowed;}',
+            '.qida-aichat-typebtn-spinner{flex:0 0 auto;}',
+            /* v1.50.0: estados del planner (gate / loading / error) sobre la fila de tipos */
+            '.qida-aichat-plan-gate{display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--s50);border:0.5px solid var(--s200);border-radius:6px;color:var(--s600);font-size:11px;line-height:1.4;margin-bottom:4px;}',
+            '.qida-aichat-plan-loading{display:flex;align-items:center;gap:8px;padding:5px 10px;color:var(--s500);font-size:11px;margin-bottom:4px;}',
+            '.qida-aichat-plan-error{display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--red50);border:0.5px solid #fecaca;border-radius:6px;color:#7f1d1d;font-size:11px;line-height:1.4;margin-bottom:4px;}',
+            '.qida-aichat-plan-retry{background:transparent;border:0.5px solid #fecaca;border-radius:6px;color:#7f1d1d;padding:2px 8px;font-size:11px;cursor:pointer;font-family:inherit;margin-left:auto;}',
+            '.qida-aichat-plan-retry:hover{background:#fff;}',
 
             /* Schedule modal */
             '.qida-schedule-bg{position:absolute;inset:0;z-index:5;background:rgba(28,25,23,.45);display:flex;align-items:center;justify-content:center;padding:16px;}',
@@ -6748,6 +6845,142 @@
         });
     }
 
+    // v1.50.0: tipos de mensaje del Sprint 2 — el planner devuelve uno de estos en tipo_mensaje,
+    //   y el draft endpoint los acepta en su body. Si el backend devuelve algo fuera de esta lista
+    //   (defensive), fallback a 'seguimiento' (más neutro). Orden de visualización en el panel:
+    //   operativa (cuestiones logísticas) -> seguimiento (estado) -> presentacion (intro a Qida) ->
+    //   reactivar (lead dormido). Material marketing NO es un tipo aquí (chip aparte, mock local).
+    var AI_MESSAGE_TYPES = ['operativa', 'seguimiento', 'presentacion', 'reactivar'];
+    var AI_TYPE_META = {
+        operativa:    { label: 'Operativa',    icon: 'phone' },
+        seguimiento:  { label: 'Seguimiento',  icon: 'handshake' },
+        presentacion: { label: 'Presentación', icon: 'file-text' },
+        reactivar:    { label: 'Reactivar',    icon: 'refresh-cw' }
+    };
+    function normalizeMessageType(t) {
+        if (t && AI_TYPE_META[t]) return t;
+        return 'seguimiento';
+    }
+
+    // v1.50.0: POST /api/leads/{lead_id}/recommendation/plan (chat agent sprint 2).
+    //   Devuelve { tipo_mensaje, rationale, available_types, should_followup_today, gate_reason }.
+    //   Si el endpoint no existe todavía (404), CAE al endpoint viejo /recommendation y deriva un
+    //   "plan" sintético usando lead_analysis_long como rationale + tipo_mensaje='seguimiento'
+    //   por default. Permite mergear el widget antes que el backend sin romper a la AF.
+    //   Errores no-404 (5xx, red, timeout) se propagan igual que fetchRecommendation -> burbuja
+    //   de error con retry.
+    function fetchRecommendationPlan(leadId) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) {
+            return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        }
+        var headers = afEmailHeaders();
+        headers['Content-Type'] = 'application/json';
+        if (!headers['X-AF-Email']) {
+            return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la petición.', 'NO_AF_EMAIL', 0));
+        }
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/recommendation/plan';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers, body: '{}' }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) {
+                    log('recommendation/plan ok', { lead: numericId, ms: Date.now() - t0, tipo: data && data.tipo_mensaje });
+                    return {
+                        tipo_mensaje: normalizeMessageType(data && data.tipo_mensaje),
+                        rationale: (data && data.rationale) || '',
+                        available_types: (data && data.available_types) || AI_MESSAGE_TYPES.slice(),
+                        should_followup_today: data ? data.should_followup_today !== false : true,
+                        gate_reason: (data && data.gate_reason) || null
+                    };
+                }
+                // 404 -> fallback transparente al endpoint viejo. Backend sprint 2 todavia no
+                //   desplegado: usamos fetchRecommendation (que sabemos que sigue vivo) y
+                //   derivamos un plan sintético. El widget puede mergearse antes que el backend.
+                if (res.status === 404) {
+                    log('recommendation/plan 404 -> fallback a /recommendation', { lead: numericId });
+                    return fetchRecommendation(leadId).then(function (rec) {
+                        return {
+                            tipo_mensaje: 'seguimiento',
+                            rationale: (rec && rec.lead_analysis_long) ? String(rec.lead_analysis_long).slice(0, 200) : '',
+                            available_types: AI_MESSAGE_TYPES.slice(),
+                            should_followup_today: rec ? rec.should_followup_today !== false : true,
+                            gate_reason: null,
+                            _fallback: true,
+                            _fallbackRec: rec
+                        };
+                    });
+                }
+                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || null;
+                log('recommendation/plan error', { lead: numericId, status: res.status, code: code, ms: Date.now() - t0 });
+                throw makeApiError(httpErrorCopy(res.status, serverMsg), code, res.status);
+            });
+        });
+    }
+
+    // v1.50.0: POST /api/leads/{lead_id}/recommendation/draft (chat agent sprint 2).
+    //   Body: { type: <uno de AI_MESSAGE_TYPES> }. Devuelve { type, draft_text,
+    //   signature_format_used, rationale, lead_analysis_long }. Si el endpoint no existe (404)
+    //   cae a /recommendation y devuelve el PRIMER draft de la respuesta como draft_text (con el
+    //   tipo solicitado). Errores no-404 se propagan.
+    function fetchRecommendationDraft(leadId, type) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) {
+            return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        }
+        var headers = afEmailHeaders();
+        headers['Content-Type'] = 'application/json';
+        if (!headers['X-AF-Email']) {
+            return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la petición.', 'NO_AF_EMAIL', 0));
+        }
+        var normType = normalizeMessageType(type);
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/recommendation/draft';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify({ type: normType }) }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) {
+                    log('recommendation/draft ok', { lead: numericId, type: normType, ms: Date.now() - t0 });
+                    return {
+                        type: normType,
+                        draft_text: (data && data.draft_text) || '',
+                        signature_format_used: (data && data.signature_format_used) || '',
+                        rationale: (data && data.rationale) || '',
+                        lead_analysis_long: (data && data.lead_analysis_long) || ''
+                    };
+                }
+                // 404 -> fallback al endpoint viejo. /recommendation devuelve drafts[]; tomamos el
+                //   primero (los 3 son variantes del mismo "seguimiento", no hay un draft por
+                //   tipo en el modelo viejo). Mejor que un error duro: la AF ve algo utilizable.
+                if (res.status === 404) {
+                    log('recommendation/draft 404 -> fallback a /recommendation', { lead: numericId, type: normType });
+                    return fetchRecommendation(leadId).then(function (rec) {
+                        var firstDraft = rec && rec.drafts && rec.drafts.length ? rec.drafts[0] : null;
+                        return {
+                            type: normType,
+                            draft_text: (firstDraft && firstDraft.text) || '',
+                            signature_format_used: '',
+                            rationale: (rec && rec.lead_analysis_long) ? String(rec.lead_analysis_long).slice(0, 200) : '',
+                            lead_analysis_long: (rec && rec.lead_analysis_long) || '',
+                            _fallback: true
+                        };
+                    });
+                }
+                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || null;
+                log('recommendation/draft error', { lead: numericId, status: res.status, code: code, ms: Date.now() - t0 });
+                throw makeApiError(httpErrorCopy(res.status, serverMsg), code, res.status);
+            });
+        });
+    }
+
     // ============================================================
     // v1.21: helper genérico de fetch JSON + copy de error (3 wires nuevos)
     // ============================================================
@@ -7550,6 +7783,81 @@
         return infoCard(title, '', collapse);
     }
 
+    // v1.50.0: render de los 4 botones de tipo de mensaje + chip Material marketing aparte.
+    //   El sugerido (state.recommendationPlan[leadId].tipo_mensaje) se pinta en NARANJA QIDA
+    //   con ✨ y el rationale como title= (tooltip nativo desktop). Los otros 3 en estilo
+    //   neutro gris/blanco. Si un draft está _loading, el botón correspondiente queda .busy
+    //   (cursor:wait + opacidad reducida) para feedback. Material marketing en su propia fila
+    //   (chip plano, sin destacado) — es la "biblioteca" de la AF, no un tipo de mensaje.
+    function renderAiTypeButtons(lead) {
+        var leadId = lead.id;
+        var plan = (state.recommendationPlan && state.recommendationPlan[leadId]) || null;
+        var drafts = (state.recommendationDraft && state.recommendationDraft[leadId]) || {};
+        var planLoading = !!(plan && plan._loading);
+        var planError = !!(plan && plan._error);
+        // Sólo destacamos un tipo si:
+        //   (a) llegó plan sin _loading/_error,
+        //   (b) should_followup_today === true,
+        //   (c) gate_reason es null.
+        var suggestedType = (plan && !planLoading && !planError && plan.should_followup_today !== false && !plan.gate_reason)
+            ? normalizeMessageType(plan.tipo_mensaje)
+            : null;
+        var rationale = (plan && plan.rationale) || '';
+
+        var html = '';
+        // Banner "no seguimiento hoy" si el planner gate dice no (gate_reason o
+        //   should_followup_today=false). NO bloquea los botones — la AF puede generar igual.
+        if (plan && !planLoading && !planError && (plan.should_followup_today === false || plan.gate_reason)) {
+            var gateMsg = plan.gate_reason
+                ? 'La IA no recomienda hoy: ' + plan.gate_reason
+                : 'La IA no recomienda hacer seguimiento hoy.';
+            html += '<div class="qida-aichat-plan-gate">' + icon('alert', 11) + ' ' + esc(gateMsg) + '</div>';
+        }
+        // Loading del planner: barra delgada arriba (no bloquea la UI, solo informa).
+        if (planLoading) {
+            html += '<div class="qida-aichat-plan-loading"><span class="qida-spinner" aria-hidden="true"></span> <span>Analizando contexto del lead…</span></div>';
+        }
+        // Error del planner: banner + retry. NO bloquea los botones.
+        if (planError) {
+            html += '<div class="qida-aichat-plan-error">' + icon('alert-triangle', 11) + ' ' + esc(plan._error) + ' '
+                + '<button class="qida-aichat-plan-retry" data-action="ai-retry-plan" data-id="' + esc(leadId) + '">Reintentar</button>'
+                + '</div>';
+        }
+
+        // Fila de 4 botones de tipo (flex-wrap si no entran).
+        html += '<div class="qida-aichat-typegrid">';
+        for (var i = 0; i < AI_MESSAGE_TYPES.length; i++) {
+            var t = AI_MESSAGE_TYPES[i];
+            var meta = AI_TYPE_META[t];
+            var draftState = drafts[t] || null;
+            var isLoading = !!(draftState && draftState._loading);
+            var isSuggested = (t === suggestedType);
+            var cls = 'qida-aichat-typebtn'
+                + (isSuggested ? ' suggested' : '')
+                + (isLoading ? ' busy' : '');
+            var titleAttr = (isSuggested && rationale) ? ' title="' + esc(rationale) + '"' : '';
+            var disabledAttr = isLoading ? ' disabled' : '';
+            var sparkles = isSuggested ? '<span class="qida-aichat-typebtn-spark" aria-hidden="true">' + icon('sparkles', 11) + '</span>' : '';
+            var spinner = isLoading ? '<span class="qida-spinner qida-aichat-typebtn-spinner" aria-hidden="true"></span>' : '';
+            html += '<button class="' + cls + '" data-action="ai-type-btn" data-type="' + esc(t) + '"' + titleAttr + disabledAttr + '>'
+                + (spinner || icon(meta.icon, 12))
+                + ' <span class="qida-aichat-typebtn-label">' + esc(meta.label) + '</span>'
+                + sparkles
+                + '</button>';
+        }
+        html += '</div>';
+
+        // Material marketing — chip separado en su propia fila, sin destacado. Sigue el handler
+        //   existente (handleAiChip('material-marketing')) — mock items con cards "Compartir".
+        html += '<div class="qida-aichat-chips">'
+            + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="material-marketing">'
+            + icon('book', 12) + ' Material marketing'
+            + '</button>'
+            + '</div>';
+
+        return html;
+    }
+
     // v1.7: Chat IA en columna dedicada (.qida-pane-ai).
     // v1.8: chips siempre visibles debajo del input (fila estilo Gemini). Avatars con icono
     //   propio (Tu = inicial "T", IA = sparkles). Contenido de las burbujas envuelto en
@@ -7589,12 +7897,14 @@
             bodyHtml = '<p class="qida-pane-ai-empty">Pregunta sobre este lead o usa uno de los atajos.</p>';
         }
 
-        // v1.8: chips SIEMPRE visibles (no se ocultan al haber conversacion).
-        var chipsHtml = '<div class="qida-aichat-chips">'
-            + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="material-marketing">' + icon('book', 12) + ' Material marketing</button>'
-            + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="sugerir-mensaje">' + icon('msg', 12) + ' Sugerir mensaje</button>'
-            + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="reactivar-sin-presionar">' + icon('refresh', 12) + ' Reactivar sin presionar</button>'
-        + '</div>';
+        // v1.50.0: 4 botones de tipo de mensaje (Sprint 2) + chip "Material marketing" aparte.
+        //   Reemplaza los chips genéricos "Sugerir mensaje" / "Reactivar sin presionar" de
+        //   v1.8-v1.49. El tipo sugerido por el planner se pinta en NARANJA QIDA + ✨.
+        //   Si todavía no llegó la respuesta del planner (_loading), los 4 botones quedan en
+        //   estado neutro (ninguno destacado) — la AF puede clickear el que quiera.
+        //   Si hay un draft en vuelo o ya generado para un type, el botón se marca .busy /
+        //   .has-draft para feedback visual (deshabilitar doble-click + ver historial reciente).
+        var chipsHtml = renderAiTypeButtons(lead);
 
         var placeholder = hasConversation ? 'Pregunta de seguimiento...' : 'Pregunta sobre este lead...';
         var sendDisabled = draft.trim() ? '' : ' disabled';
@@ -7807,6 +8117,48 @@
         }).catch(function (err) {
             log('loadRecommendation failed', err && (err.code || err.message));
             state.recommendationCache[leadId] = { _error: (err && err.userMessage) || 'No se pudo cargar el análisis.' };
+            if (state.currentLeadId !== leadId) return;
+            rerenderContent();
+        });
+    }
+
+    // v1.50.0: carga el "plan" (tipo de mensaje sugerido + rationale) al abrir el detalle.
+    //   Endpoint barato (~1-2s); NO genera draft. El draft se pide en handleAiTypeClick cuando la
+    //   AF clickea un botón de tipo. Idempotente por lead (no re-pide si ya cargado/cargando).
+    //   Race-guard idéntico al de loadConversation/loadRecommendation. Si el flag useRealApi
+    //   está off, igual seteamos un plan mock minimal para que la UI muestre los 4 botones (con
+    //   "seguimiento" como sugerido) — en modo dev local, la AF puede probar la UX sin backend.
+    function loadRecommendationPlan(leadId) {
+        var planCache = state.recommendationPlan || (state.recommendationPlan = {});
+        var cur = planCache[leadId];
+        if (cur && !cur._error) return;  // ya cargado o en vuelo
+        if (!useRealApi()) {
+            // Modo mock: plan sintético inmediato para mostrar los 4 botones con "seguimiento"
+            //   destacado. La AF puede clickear y caerá al fallback de fetchRecommendationDraft
+            //   (que también respeta el flag para usar DraftService.getRecommendationSync).
+            planCache[leadId] = {
+                tipo_mensaje: 'seguimiento',
+                rationale: 'Es momento de retomar el seguimiento con este lead.',
+                available_types: AI_MESSAGE_TYPES.slice(),
+                should_followup_today: true,
+                gate_reason: null,
+                _mock: true
+            };
+            // El caller (select-lead/openLeadDetail) ya hizo setState antes — pero el primer
+            //   render del detalle ocurrió SIN el plan en state. Rerender para que aparezca el
+            //   botón sugerido en naranja inmediatamente (mock mode).
+            rerenderContent();
+            return;
+        }
+        planCache[leadId] = { _loading: true };
+        rerenderContent();
+        fetchRecommendationPlan(leadId).then(function (plan) {
+            state.recommendationPlan[leadId] = plan;
+            if (state.currentLeadId !== leadId) return;
+            rerenderContent();
+        }).catch(function (err) {
+            log('loadRecommendationPlan failed', err && (err.code || err.message));
+            state.recommendationPlan[leadId] = { _error: (err && err.userMessage) || 'No se pudo cargar la sugerencia.' };
             if (state.currentLeadId !== leadId) return;
             rerenderContent();
         });
@@ -9299,6 +9651,8 @@
                     if (!cc || cc._error) loadConversation(leadIdNum);
                     loadRecommendation(leadIdNum);  // v1.31 (FIX A): pobla "Análisis IA" (lead_analysis_long)
                 }
+                // v1.50.0: planner (Sprint 2) — independiente del flag para poblar la UI en dev/mock.
+                loadRecommendationPlan(leadIdNum);
                 return;
             case 'back-to-dashboard':
                 // v1.6: limpiamos currentLeadId, draftMessage, attachmentsExpanded. NO tocar aiChatHistory.
@@ -9475,6 +9829,15 @@
             // v1.6: Chat IA al pie del pane central
             case 'ai-chip':
                 handleAiChip(id);
+                return;
+            // v1.50.0: chat agent sprint 2 — botón de tipo de mensaje (operativa / seguimiento /
+            //   presentacion / reactivar). Dispara la generación lazy del draft.
+            case 'ai-type-btn':
+                handleAiTypeClick(target.getAttribute('data-type'));
+                return;
+            // v1.50.0: retry del planner si /plan falla (no-blocking, sólo refresca la sugerencia).
+            case 'ai-retry-plan':
+                retryRecommendationPlan(id || state.currentLeadId);
                 return;
             case 'ai-chat-send':
                 var aiInp = document.getElementById('qida-aichat-input');
@@ -10329,6 +10692,95 @@
         if (lead) startSuggestFlow(lead);
     }
 
+    // v1.50.0: handler del botón de tipo de mensaje (operativa/seguimiento/presentacion/reactivar).
+    //   Genera lazy el draft para el tipo seleccionado. Si ya está en vuelo (recommendationDraft
+    //   marcado _loading) o ya generado (no _loading, no _error), permite re-clickear sólo si
+    //   queremos regenerar (UX: re-click = regenerar; explícito en la burbuja). Push:
+    //     1. user message con la label del tipo + "✨" si era el sugerido,
+    //     2. ai bubble kind:'loading' (spinner),
+    //     3. al resolver: ai bubble kind:'variants' con 1 sola variante (reusa el flujo de
+    //        pick-variant -> refine -> Copiar al WhatsApp), error -> kind:'error' + retry.
+    function handleAiTypeClick(type) {
+        var lead = currentLead();
+        if (!lead) return;
+        var normType = normalizeMessageType(type);
+        var meta = AI_TYPE_META[normType];
+        if (!meta) return;
+        var leadId = lead.id;
+        if (!state.recommendationDraft) state.recommendationDraft = {};
+        if (!state.recommendationDraft[leadId]) state.recommendationDraft[leadId] = {};
+        var slot = state.recommendationDraft[leadId][normType];
+        if (slot && slot._loading) return;  // ya en vuelo, ignorar doble-click
+
+        // ¿Era el tipo sugerido por el planner? -> agrega ✨ al user msg para feedback.
+        var plan = state.recommendationPlan && state.recommendationPlan[leadId];
+        var wasSuggested = !!(plan && plan.tipo_mensaje === normType
+            && plan.should_followup_today !== false && !plan.gate_reason);
+        var userLabel = meta.label + (wasSuggested ? ' ✨' : '');
+
+        // Push user msg + bubble loading. Reusa la pila de aiChatHistory existente.
+        pushAiChat(leadId, userLabel, { kind: 'loading', text: 'Generando ' + meta.label.toLowerCase() + '…' });
+        state.recommendationDraft[leadId][normType] = { _loading: true };
+        state.aiChatDraft = '';
+        var hist = state.aiChatHistory[leadId];
+        var bubble = hist[hist.length - 1];
+        state.__aiNeedsScroll = true;
+        rerenderContent();
+
+        fetchRecommendationDraft(leadId, normType).then(function (resp) {
+            if (state.recommendationDraft && state.recommendationDraft[leadId]) {
+                state.recommendationDraft[leadId][normType] = resp;
+            }
+            // Si la AF ya cambió de lead, no re-render sobre el nuevo (mantenemos el draft cacheado).
+            if (state.currentLeadId !== leadId) return;
+            bubble.payload = draftPayloadFromResp(resp, meta);
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        }).catch(function (err) {
+            log('fetchRecommendationDraft failed', err && (err.code || err.message));
+            if (state.recommendationDraft && state.recommendationDraft[leadId]) {
+                state.recommendationDraft[leadId][normType] = { _error: (err && err.userMessage) || 'No se pudo generar el mensaje.' };
+            }
+            if (state.currentLeadId !== leadId) return;
+            bubble.payload = { kind: 'error', text: suggestErrorCopy(err), retry: 'type', _type: normType };
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        });
+    }
+
+    // v1.50.0: convierte la respuesta de /draft a un payload kind:'variants' con una sola
+    //   variante. Aprovecha el render existente de variantes (renderAiPayload) y el botón
+    //   "Esta me gusta más" -> pick-variant -> refine -> Copiar al WhatsApp. Cero rewrite del
+    //   flujo de cómo se inserta el texto en el textarea de WhatsApp.
+    function draftPayloadFromResp(resp, meta) {
+        var text = (resp && resp.draft_text) || '';
+        if (!text) {
+            return { kind: 'free', text: 'No vino borrador del servicio. Probá otro tipo o redactá manualmente.' };
+        }
+        var intro = (resp && resp.rationale) ? resp.rationale : ('Propuesta para ' + meta.label.toLowerCase() + ':');
+        return {
+            kind: 'variants',
+            source: 'draft',
+            intro: intro,
+            variants: [{
+                name: resp.type || '',
+                label: meta.label,
+                text: text,
+                length: 'medium',
+                tone_style: ''
+            }]
+        };
+    }
+
+    // v1.50.0: retry del planner. Limpia el slot del lead y re-dispara loadRecommendationPlan.
+    function retryRecommendationPlan(leadId) {
+        if (!leadId) return;
+        if (state.recommendationPlan && state.recommendationPlan[leadId]) {
+            delete state.recommendationPlan[leadId];
+        }
+        loadRecommendationPlan(leadId);
+    }
+
     // v1.6/v1.21: envio de query libre al chat IA. Con useRealAPI -> POST /assistant/chat
     //   (loading -> respuesta+updated_drafts | error+retry). Sin flag -> mock (como antes).
     function handleAiChatSend(text) {
@@ -10685,6 +11137,10 @@
         state.agentBuilderSaving = false;
         // v1.21: sesiones del chat con el asistente: nuevas al reabrir el modal.
         state.assistantSessions = {};
+        // v1.50.0: planner + draft del chat agent sprint 2 — limpiar entre sesiones para no
+        //   servir un plan stale (el contexto del lead puede haber cambiado en Odoo).
+        state.recommendationPlan = {};
+        state.recommendationDraft = {};
         // v1.17: cierra el dropdown de temperatura. EDITS.temperatures (el override real) PERSISTE.
         state.tempEditorOpen = false;
         // v1.10: limpieza del dashboard de leads enfriandose.
@@ -10785,6 +11241,8 @@
             if (!cc || cc._error) loadConversation(leadIdNum);
             loadRecommendation(leadIdNum);
         }
+        // v1.50.0: planner del Sprint 2 — siempre (mock o real), mismo razonamiento que select-lead.
+        loadRecommendationPlan(leadIdNum);
     }
 
     // v1.12: helper que dispara la inyeccion del badge leader + lazy load de ApexCharts.
