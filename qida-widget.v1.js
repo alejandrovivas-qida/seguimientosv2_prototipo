@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.6
+ * QIDA ASSISTANT v1.49.7
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,25 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.7 (2026-06-09 — Header del detalle: "+ Crear actividad" + emoji 📞 si hay llamada pendiente):
+ *   - Botón "+ Crear actividad" en el header del detalle del lead, entre el meta del lead
+ *     (briefcase / serviceType) y el botón "Marcar hecho". Mismo handler que el botón existente
+ *     al fondo del panel "Próximas actividades": data-action="activity-new" -> abre el mismo
+ *     modal (openActivityModal). Cero lógica duplicada: idéntico gating
+ *     (state.odooWriteEnabled && isRealActivityId(toNumericLeadId(leadId))), mismo texto y
+ *     mismo data-action; solo cambia la clase visual (qida-dsh-newact) para alinear con los
+ *     otros botones del header (mismo radio/padding/font que .qida-dsh-markdone).
+ *   - Emoji 📞 en el header cuando el lead tiene 1+ actividad pendiente de tipo Llamada
+ *     (mismo criterio de tipo que ACTIVITY_TYPE_WHITELIST.call: keywords 'llamada' / 'call' /
+ *     'phonecall', insensible a mayúsculas/idioma). Helper nuevo leadHasPendingCallActivity(leadId):
+ *     lee del cache de Odoo (LeadDetailService.getFromCache(leadId).activities, shape mapActivity
+ *     con .type string) con fallback a MOCK_PLANNED_ACTIVITIES (mismo orden de fuentes que
+ *     renderActivities, coherente con el resto del detalle). Si el lead NO tiene llamada
+ *     pendiente -> no se pinta el ícono.
+ *   - Reactivo sin costo: syncShellHeader corre en cada render (setState dispara render +
+ *     sync*), así que cuando la AF marca la llamada como Hecha o la reagenda desde el detalle,
+ *     el header se repinta con el nuevo estado del cache. No hay hooks nuevos.
  *
  * Cambios v1.49.6 (2026-06-09 — tab Hoy/Actividades: columna "Tarea" + emoji llamada + orden llamadas-primero):
  *   - Tab Hoy: nueva columna "Tarea" entre Contacto y Temp. En filas tipo Actividad muestra el
@@ -1708,7 +1727,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.6';
+    var VERSION = '1.49.7';
     var CONFIG = null;
 
     // ============================================================
@@ -4122,6 +4141,23 @@
             '.qida-dsh-markdone{margin-left:auto;background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:#0F6E56;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
             '.qida-dsh-markdone:hover{border-color:#0F6E56;background:#F7FAF8;}',
             '.qida-dsh-markdone.is-done{background:#ECFDF5;border-color:#A7F3D0;color:#047857;cursor:pointer;}',
+            /* v1.49.7: "+ Crear actividad" en el header del detalle. Mismo verde Qida (#0F6E56)
+               que el botón al fondo del panel "Próximas actividades" (.qida-act-new-btn), con el
+               padding/font-size del resto del header (.qida-dsh-markdone) para coherencia. */
+            '.qida-dsh-newact{background:#0F6E56;color:#fff;border:0;border-radius:8px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
+            '.qida-dsh-newact:hover{background:#0c5a46;}',
+            '.qida-dsh-newact:focus-visible{outline:2px solid #0F6E56;outline-offset:2px;}',
+            /* v1.49.7: emoji 📞 en el header cuando hay 1+ actividad pendiente de tipo Llamada.
+               El "📞" se renderiza con la fuente del sistema (no es un icono SVG): tamaño chico
+               para no romper la fila del header. */
+            '.qida-dsh-call-indicator{font-size:14px;line-height:1;display:inline-flex;align-items:center;flex-shrink:0;cursor:default;}',
+            /* Posicionamiento: margin-left:auto SOLO sobre el primer elemento del bloque derecho
+               (call indicator / newact / markdone) para empujar el bloque entero a la derecha.
+               Después, separación fija de 8px entre elementos contiguos. */
+            '.qida-detail-shell-head > .qida-dsh-call-indicator{margin-left:auto;}',
+            '.qida-detail-shell-head > .qida-dsh-newact{margin-left:auto;}',
+            '.qida-dsh-call-indicator ~ .qida-dsh-newact{margin-left:8px;}',
+            '.qida-dsh-call-indicator ~ .qida-dsh-markdone,.qida-dsh-newact ~ .qida-dsh-markdone{margin-left:8px;}',
 
             /* Leyenda explícita debajo de la tabla */
             '.qida-dash-legend{display:flex;flex-wrap:wrap;align-items:center;gap:14px;padding:12px 12px 0;font-size:11.5px;color:var(--s600);}',
@@ -5303,6 +5339,47 @@
         var acts = MOCK_PLANNED_ACTIVITIES[row.id] || [];
         for (var i = 0; i < acts.length; i++) {
             if (acts[i] && !acts[i].done) return true;
+        }
+        return false;
+    }
+
+    // v1.49.7: ¿el lead tiene 1+ actividad pendiente de tipo Llamada? Alimenta el emoji 📞
+    //   del header del detalle (syncShellHeader). Orden de fuentes IDÉNTICO al panel "Próximas
+    //   actividades" (renderActivities): primero cached.activities (Odoo, shape mapActivity con
+    //   .type string ya resuelto desde activity_type_id) -> fallback a MOCK_PLANNED_ACTIVITIES
+    //   (shape mock con type string). Match de tipo reusa el mismo whitelist
+    //   ACTIVITY_TYPE_WHITELIST.call: keywords 'llamada' / 'call' / 'phonecall', insensible a
+    //   may/idioma. Devuelve false ante leadId vacío / cache inexistente / sin coincidencias.
+    function leadHasPendingCallActivity(leadId) {
+        if (leadId == null || leadId === '') return false;
+        // Match local: reusa exactamente las keywords del item 'call' de ACTIVITY_TYPE_WHITELIST
+        //   sin acoplar a la resolución de ids vs Odoo (acá ya tenemos el label resuelto).
+        var keywords = null;
+        for (var w = 0; w < ACTIVITY_TYPE_WHITELIST.length; w++) {
+            if (ACTIVITY_TYPE_WHITELIST[w].key === 'call') {
+                keywords = ACTIVITY_TYPE_WHITELIST[w].match;
+                break;
+            }
+        }
+        if (!keywords) return false;
+        function isCallType(label) {
+            if (!label) return false;
+            var lc = String(label).toLowerCase();
+            for (var k = 0; k < keywords.length; k++) {
+                if (lc.indexOf(keywords[k]) !== -1) return true;
+            }
+            return false;
+        }
+        // Fuente preferida: cache de Odoo poblada por LeadDetailService (fetchAll).
+        var cached = (typeof LeadDetailService !== 'undefined' && LeadDetailService.getFromCache)
+            ? LeadDetailService.getFromCache(leadId)
+            : null;
+        var acts = (cached && cached.activities) ? cached.activities : null;
+        if (!acts) acts = MOCK_PLANNED_ACTIVITIES[leadId] || [];
+        for (var i = 0; i < acts.length; i++) {
+            var a = acts[i];
+            if (!a || a.done) continue;
+            if (isCallType(a.type)) return true;
         }
         return false;
     }
@@ -8578,6 +8655,20 @@
                     ? '<span class="qida-dsh-meta-item">' + icon('users', 11) + ' ' + esc(_persona) + '</span>'
                         + '<span class="qida-dsh-sep">&middot;</span>'
                     : '';
+                // v1.49.7: emoji 📞 cuando el lead tiene 1+ actividad pendiente de tipo Llamada.
+                //   Si no hay, leadHasPendingCallActivity devuelve false -> string vacío (no se pinta).
+                var callIndicator = leadHasPendingCallActivity(state.currentLeadId)
+                    ? '<span class="qida-dsh-call-indicator" title="Llamada pendiente" aria-label="Llamada pendiente">📞</span>'
+                    : '';
+                // v1.49.7: "+ Crear actividad" en el header (entre el meta del lead y "Marcar hecho").
+                //   Mismo handler que el botón del panel "Próximas actividades": data-action="activity-new"
+                //   -> abre openActivityModal (mismo modal, cero lógica nueva). Mismo gating:
+                //   modo escritura habilitado + leadId numérico (res_id de Odoo). Si NO se cumple,
+                //   string vacío -> no aparece (mismo criterio que el botón del panel para no exponer
+                //   un botón que falla al submit).
+                var headerNewActBtn = (state.odooWriteEnabled && isRealActivityId(toNumericLeadId(state.currentLeadId)))
+                    ? '<button class="qida-dsh-newact" data-action="activity-new" title="Crear actividad para este lead">' + icon('plus', 12) + ' Crear actividad</button>'
+                    : '';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
                     + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
@@ -8596,6 +8687,11 @@
                         + '<span class="qida-dsh-sep">&middot;</span>'
                         + '<span class="qida-dsh-meta-item">' + icon('briefcase', 11) + ' ' + esc(lead.serviceType || '-') + '</span>'
                     + '</span>'
+                    // v1.49.7: 📞 si hay llamada pendiente + botón "+ Crear actividad". Orden final
+                    //   del header: meta -> 📞 -> Crear actividad -> Marcar hecho. El margin-left:auto
+                    //   queda en el PRIMERO de los 3 elementos del bloque derecho (selectores CSS).
+                    + callIndicator
+                    + headerNewActBtn
                     // v1.43 (6b): "Marcar hecho" en el header del detalle (mismo handler que la tabla).
                     + renderDetailMarkDoneBtn(state.currentLeadId)
                 + '</div>';
