@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.2
+ * QIDA ASSISTANT v1.49.3
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,18 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.3 (2026-06-08 — "Análisis IA" carga con el resto del detalle, no más skeleton "Analizando…"):
+ *   - El panel "Análisis IA" ahora sale del nuevo GET /api/leads/{id}/detail (lead_analysis_long
+ *     persistido en lead_followup_state, mig 0014), que LeadDetailService.fetchAll pide EN PARALELO con
+ *     los datasets de Odoo. Antes esperaba al POST /recommendation (drafts, LLM, 5-15s) -> el panel
+ *     mostraba el skeleton "Analizando el lead…" perceptible aunque el análisis ya estaba pre-calculado.
+ *   - loadRecommendation se mantiene en background SOLO para los drafts del chat IA; ya no bloquea
+ *     este panel. Default que tomé: si el detalle vuelve sin análisis (lead recién onboardeado / el
+ *     analyzer aún no corrió, o /detail falla), muestro el fallback "Análisis aún no disponible — se
+ *     genera en el próximo recompute" en vez de un skeleton infinito.
+ *   - Backend acompaña (qida-followup-api, feature/lead-detail-includes-analysis): endpoint read-only
+ *     que SOLO lee lo persistido (no regenera, no toca LLM/Databricks) y respeta el ownership por AF.
  *
  * Cambios v1.49.2 (2026-06-08 — tab "Hoy": dedupe AI-861 + display_id en filas Sugerencia):
  *   - El tab "Hoy" ya NO muestra como tipo Sugerencia un lead que YA tiene una actividad pendiente en
@@ -1642,7 +1654,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.2';
+    var VERSION = '1.49.3';
     var CONFIG = null;
 
     // ============================================================
@@ -3156,6 +3168,7 @@
                 activities: null,
                 attachments: null,
                 followers: null,
+                analysis: null,   // v1.49.3: análisis IA (GET /detail) — se puebla con el resto del detalle.
                 _loading: true,
                 _loadedAt: null,
                 _error: null,
@@ -3210,6 +3223,13 @@
                 jobs.push(rawLead.message_follower_ids && rawLead.message_follower_ids.length
                     ? odooCall('mail.followers', 'read', [rawLead.message_follower_ids], { fields: FOLLOWER_FIELDS })
                     : Promise.resolve([]));
+                // [5] análisis IA del backend (qida-followup-api, Postgres mig 0014). NO es odooCall:
+                //   GET /api/leads/{id}/detail. Va en el MISMO Promise.allSettled que los datasets de
+                //   Odoo -> el panel "Análisis IA" aparece junto con el resto del detalle, no en una
+                //   request lazy aparte (antes esperaba al POST /recommendation, 5-15s). Sin API real
+                //   (mock/flag off) -> null -> renderIaAnalysis cae al fallback/mock. Si /detail rechaza
+                //   (403/red), allSettled lo captura -> null -> fallback (nunca rompe el detalle).
+                jobs.push(useRealApi() ? fetchLeadDetail(odooId) : Promise.resolve(null));
 
                 return Promise.allSettled(jobs).then(function (results) {
                     function pluck(idx, mapper) {
@@ -3229,6 +3249,7 @@
                         activities: pluck(2, function (arr) { return (arr || []).map(mapActivity); }),
                         attachments: pluck(3, function (arr) { return (arr || []).map(mapAttachment); }),
                         followers: pluck(4, function (arr) { return (arr || []).map(mapFollower); }),
+                        analysis: pluck(5),   // v1.49.3: response de GET /detail (o null si rechazó/sin API real)
                         _errors: [errMsg(results[0]), errMsg(results[1]), errMsg(results[2]), errMsg(results[3]), errMsg(results[4])],
                         _loadedAt: Date.now(),
                         _loading: false,
@@ -3250,6 +3271,7 @@
                     activities: null,
                     attachments: null,
                     followers: null,
+                    analysis: null,
                     _loading: false,
                     _loadedAt: null,
                     _error: err && err.message ? err.message : String(err),
@@ -5314,21 +5336,32 @@
     // v1.16: "Análisis IA". Mismo patrón visual que renderIaSummary (header ✨ + acción
     //   Generar/Regenerar + "Generado hace X" + body). Sin edición inline ni backend:
     //   Generar/Regenerar hacen console.log (preparación de UI; se conectará después).
-    function renderIaAnalysis(lead, leadId) {
+    function renderIaAnalysis(lead, leadId, cached) {
         leadId = (leadId != null ? leadId : (lead && lead.id));  // v1.27: clave canonica del lead
         var title = icon('sparkles', 12) + ' Análisis IA';
 
-        // v1.31 (FIX A): en modo real el análisis viene de /recommendation (lead_analysis_long),
-        //   poblado por loadRecommendation al abrir el detalle. Fallback a mock con flag off / sin dato.
-        var rec = (useRealApi() && state.recommendationCache) ? state.recommendationCache[leadId] : null;
-        if (rec && rec._loading) {
-            return infoCard(title, '', '<div class="qida-aichat-loading"><span class="qida-spinner" aria-hidden="true"></span><span class="qida-aichat-loading-text">Analizando el lead…</span></div>');
+        // v1.49.3: en modo real el análisis viene del DETALLE (GET /api/leads/{id}/detail ->
+        //   cached.analysis.lead_analysis_long, persistido en lead_followup_state mig 0014), que carga
+        //   JUNTO con el resto del detalle vía LeadDetailService.fetchAll. Ya NO espera al POST
+        //   /recommendation: ese sigue corriendo en background para los drafts del chat, pero no
+        //   bloquea este panel (antes mostraba el skeleton "Analizando el lead…" 5-15s).
+        if (useRealApi()) {
+            // Skeleton SOLO mientras fetchAll está en vuelo (mismo gate que renderIaSummary/renderCare).
+            if (cached && cached._loading) {
+                return infoCard(title, '', renderSkeletonLines(3));
+            }
+            var an = cached && cached.analysis;
+            if (an && an.lead_analysis_long) {
+                return infoCard(title, 'Generado por IA',
+                    '<div class="qida-info-card-highlight"><p class="qida-ia-text">' + esc(an.lead_analysis_long) + '</p></div>');
+            }
+            // Sin análisis persistido (lead recién onboardeado / analyzer no corrió, o /detail falló):
+            //   fallback claro, NUNCA skeleton infinito.
+            return infoCard(title, '',
+                '<p class="qida-ia-empty">Análisis aún no disponible — se genera en el próximo recompute.</p>');
         }
-        if (rec && rec.lead_analysis_long) {
-            return infoCard(title, 'Generado por IA',
-                '<div class="qida-info-card-highlight"><p class="qida-ia-text">' + esc(rec.lead_analysis_long) + '</p></div>');
-        }
-        // Fallback v1.16 (mock / flag off / análisis aún no disponible).
+
+        // Fallback v1.16 (mock / flag off).
         var a = getIaAnalysis(leadId);
 
         var actions = '';
@@ -6524,6 +6557,16 @@
         if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
         return apiFetchJson('GET', '/api/leads/' + numericId + '/conversation', { noun: 'la conversación de este lead' });
     }
+    // v1.49.3: GET /api/leads/{id}/detail -> análisis IA persistido en lead_followup_state (mig 0014:
+    //   lead_analysis_long/short, responsiveness, closeness, best_contact_hour, analysis_generated_at).
+    //   Lectura pura (el backend NO regenera nada). Lo consume LeadDetailService.fetchAll para que el
+    //   panel "Análisis IA" cargue JUNTO con el resto del detalle, sin esperar al POST /recommendation
+    //   (drafts, LLM, 5-15s). Análisis vacío (lead recién onboardeado) -> campos null -> fallback claro.
+    function fetchLeadDetail(leadId) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        return apiFetchJson('GET', '/api/leads/' + numericId + '/detail', { noun: 'el análisis de este lead' });
+    }
     // Normaliza la respuesta del backend a la shape interna del pane WhatsApp:
     //   WhatsApp: { kind:'wa', from:'af'|'lead', text, time, hasAttachment, attachmentName, attachmentUrl, status }.
     //   Llamada:  { kind:'call', from, direction, missed, durationSeconds, time }.
@@ -7433,10 +7476,10 @@
             // v1.38: "Resumen IA" RE-ACTIVADO. En modo real sale de crm.lead.ai_description (HTML
             //   sanitizado con sanitizeOdooHtml); si el lead no tiene ai_description, renderIaSummary
             //   devuelve '' (panel oculto, sin placeholder). En mock (flag OFF) sigue usando
-            //   MOCK_IA_SUMMARIES como siempre. El panel contiguo "Análisis IA" (lead_analysis_long
-            //   de /recommendation) queda igual.
+            //   MOCK_IA_SUMMARIES como siempre. v1.49.3: el panel contiguo "Análisis IA" ahora también
+            //   sale del detalle (cached.analysis = GET /detail), no del POST /recommendation.
             + renderIaSummary(lead, leadId, cached)
-            + renderIaAnalysis(lead, leadId)
+            + renderIaAnalysis(lead, leadId, cached)
             + renderCare(lead, cached, leadId)
             + renderInternalNotes(lead, cached, leadId)
             + renderActivities(lead, cached, leadId)
