@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.8
+ * QIDA ASSISTANT v1.49.9
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,38 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.9 (2026-06-09 — fiabilidad de la conversación WhatsApp en el detalle):
+ *   - FIX 1 (apiFetchJson cuelga sin timeout/retry): apiFetchJson ahora envuelve fetch() con
+ *     AbortController (timeout 10s — tolera Neon cold-start sin frustrar a la AF) y reintenta
+ *     hasta 2 veces ante errores de red, timeouts y 5xx (backoff 500ms / 1500ms). 4xx NUNCA
+ *     reintenta (auth/validación: reintentar empeora la UX). Cada retry se loguea con log()
+ *     para visibilidad en consola. La shape del Promise (resuelto/rechazado con Error tipado
+ *     .userMessage/.code/.status) es IDÉNTICA — los callers no cambian. El timeout llega como
+ *     status=0 + code='TIMEOUT' tras agotar reintentos; el banner "Reintentar" del pane sigue
+ *     funcionando como antes (loadConversation captura el error y marca _error). El safety net
+ *     de select-lead (`if (!cc || cc._error)` -> reintenta al reabrir) sigue intacto, pero ahora
+ *     un fetch lento ya no se queda colgado: o resuelve, o falla con _error y la AF puede
+ *     reintentar sin reabrir el lead.
+ *   - FIX 2 (renderWhatsAppPane: "Sin mensajes" vs "Cargando"): si `conversationCache[key]` es
+ *     undefined en modo real (loadConversation todavía no marcó loading, o el slot quedó
+ *     vacío por una key mal normalizada de otra rama), el pane mostraba "Sin mensajes de
+ *     WhatsApp para este lead." — confundiendo a la AF: "no hay mensajes" cuando en realidad
+ *     estaba cargando. Ahora cae a un loader explícito (spinner + "Cargando conversación…",
+ *     mismo chrome que el path `_loading: true`). Sólo se muestra "Sin mensajes" cuando el
+ *     fetch ya resolvió con `messages: []`. Sin entrada en cache => loader, no estado vacío.
+ *   - FIX 3 (cache key no normalizada: dashboard "L124260" vs Actividades 124260): helper
+ *     central `cacheKeyFor(leadId)` (reusa toNumericLeadId; numeric id si existe, fallback a
+ *     la key cruda para el caso mock "L<n>"). Aplicado a TODOS los reads/writes de
+ *     `state.conversationCache[...]`, `state.leadDetailCache[...]` y a `getFromCache` (que
+ *     normaliza internamente). Antes había dos entradas distintas por lead según el entry
+ *     point (dashboard pasaba "L124260" string, Actividades pasaba 124260 numérico) — el
+ *     fetch se relanzaba y la ventana volvía a aparecer vacía al cambiar de tab. Ahora una
+ *     sola entrada por lead, sin importar de dónde se abrió. Cubre: select-lead (dashboard +
+ *     Actividades), openLeadDetail (deep-link Odoo), loadConversation (marca _loading y
+ *     guarda response), sendWhatsAppReal/sendWaVoicePreview (push optimista del mensaje
+ *     saliente), LeadDetailService.fetchAll (skeleton + final), optimisticAddActivity,
+ *     handleActivityComplete/removeActivityFromState, handleReschedule, findActivitySummary.
  *
  * Cambios v1.49.8 (2026-06-09 — "Dar por perdido" un lead desde el detalle):
  *   - Botón "Dar por perdido" en el header del detalle del lead, entre el pill de días sin contacto
@@ -1759,7 +1791,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.8';
+    var VERSION = '1.49.9';
     var CONFIG = null;
 
     // ============================================================
@@ -3327,14 +3359,19 @@
     //   [0]=caredPerson, [1]=notes, [2]=activities, [3]=attachments, [4]=followers.
     var LeadDetailService = {
         fetchAll: function (leadId) {
+            // v1.49.9 (FIX 3): la key del cache se normaliza a numeric id (o crudo si no hay digitos)
+            //   para colapsar dashboard ("L<n>") + Actividades (numero) + deep-link a UNA sola entrada.
+            //   El parametro `leadId` se sigue usando para el race-guard (state.currentLeadId) — la
+            //   normalizacion es solo del almacen.
+            var cacheKey = cacheKeyFor(leadId);
             // Modo mock: hidratar sync desde MOCK_* y devolver Promise.resolve.
             if (!IS_ODOO_MODE) {
-                state.leadDetailCache[leadId] = mockHydrate(leadId);
-                return Promise.resolve(state.leadDetailCache[leadId]);
+                state.leadDetailCache[cacheKey] = mockHydrate(leadId);
+                return Promise.resolve(state.leadDetailCache[cacheKey]);
             }
 
             // Marcar loading inmediatamente para que los skeletons aparezcan.
-            state.leadDetailCache[leadId] = {
+            state.leadDetailCache[cacheKey] = {
                 lead: null,
                 caredPerson: null,
                 notes: null,
@@ -3415,7 +3452,7 @@
                         return (r.reason && r.reason.message) ? r.reason.message : String(r.reason);
                     }
 
-                    state.leadDetailCache[leadId] = {
+                    state.leadDetailCache[cacheKey] = {
                         lead: mapLead(rawLead),
                         caredPerson: pluck(0, function (arr) { return mapCared(arr && arr[0]); }),
                         notes: pluck(1, function (arr) { return (arr || []).map(mapNote); }),
@@ -3433,11 +3470,11 @@
                     if (state.currentLeadId === leadId) {
                         rerenderContent();
                     }
-                    return state.leadDetailCache[leadId];
+                    return state.leadDetailCache[cacheKey];
                 });
             }).catch(function (err) {
                 // Error en crm.lead.read - todo el detail queda en error global.
-                state.leadDetailCache[leadId] = {
+                state.leadDetailCache[cacheKey] = {
                     lead: null,
                     caredPerson: null,
                     notes: null,
@@ -3467,6 +3504,12 @@
         },
 
         getFromCache: function (leadId) {
+            // v1.49.9 (FIX 3): normalizar la key internamente. Antes los callers (dashboard vs
+            //   Actividades vs deep-link) pasaban formas distintas del mismo id y generaban dos
+            //   entradas. Ahora una sola entrada por lead. Fallback `state.leadDetailCache[leadId]`
+            //   para no romper si por algun camino se escribio con la key cruda en sesion antigua.
+            var k = cacheKeyFor(leadId);
+            if (k != null && state.leadDetailCache[k]) return state.leadDetailCache[k];
             return state.leadDetailCache[leadId] || null;
         }
     };
@@ -6233,7 +6276,9 @@
             if (state.currentLeadId !== leadId) return;
             state.waVoiceSending = false;
             state.waVoiceError = null;
-            var conv = state.conversationCache[leadId] || (state.conversationCache[leadId] = { _loading: false, _error: null, messages: [] });
+            // v1.49.9 (FIX 3): empujar al slot canonico del cache, no a una segunda entrada.
+            var convKey = cacheKeyFor(leadId);
+            var conv = state.conversationCache[convKey] || (state.conversationCache[convKey] = { _loading: false, _error: null, messages: [] });
             if (!conv.messages) conv.messages = [];
             conv.messages.push({
                 from: 'af',
@@ -6287,8 +6332,11 @@
             state.waSending = false;
             state.waSendError = null;
             // Empujar el mensaje al pane (con el message_uid real). El pane real lee de conversationCache.
-            if (state.conversationCache[leadId] && state.conversationCache[leadId].messages) {
-                state.conversationCache[leadId].messages.push({
+            // v1.49.9 (FIX 3): leer y escribir por la key canonica para que el push aparezca en el
+            //   pane que la AF tiene abierto (no en un slot huerfano).
+            var convKey = cacheKeyFor(leadId);
+            if (state.conversationCache[convKey] && state.conversationCache[convKey].messages) {
+                state.conversationCache[convKey].messages.push({
                     from: 'af', text: finalText, time: formatConvTime(new Date().toISOString()),
                     hasAttachment: false, status: 'sent', uid: (resp && resp.message_uid) || null
                 });
@@ -6593,6 +6641,18 @@
     function toNumericLeadId(leadId) {
         return String(leadId == null ? '' : leadId).replace(/\D/g, '');
     }
+    // v1.49.9 (FIX 3): clave canonica para los caches por-lead (conversationCache, leadDetailCache).
+    //   El dashboard pasa display_id "L124260" y el tab Actividades pasa el numero 124260 — sin
+    //   normalizar son DOS entradas distintas para el mismo lead, y cambiar de tab dispara un nuevo
+    //   fetch (la AF ve la ventana vacia mientras carga). cacheKeyFor() colapsa a la clave numerica
+    //   (string) cuando existe; cae al original (string) si el id no es numerico (p.ej. ids mock raros
+    //   sin digitos). Esto preserva el comportamiento mock (MOCK_WHATSAPP['L122581'] no usa este path,
+    //   se accede directo por display_id en renderWhatsAppPane). Devuelve null si leadId es null/undef.
+    function cacheKeyFor(leadId) {
+        if (leadId == null) return null;
+        var n = toNumericLeadId(leadId);
+        return n || String(leadId);
+    }
     // v1.49.1: parsea el hash router de Odoo para detectar un deep-link al detalle de un lead.
     //   Ejemplo: https://erp.qida.es/web#id=125460&cids=1%2C2%2C3&menu_id=139&action=194&model=crm.lead&view_type=form
     //   Devuelve el lead_id (Number > 0) SOLO si las 3 condiciones se cumplen sobre el hash:
@@ -6711,6 +6771,20 @@
         if (status >= 500) return 'El servicio tuvo un error temporal. Reintentá en unos segundos.';
         return serverMsg || ('Error ' + status + ' al pedir ' + noun + '.');
     }
+    // v1.49.9 (FIX 1): timeouts + retries para apiFetchJson.
+    //   - Timeout: 10s por intento (tolera Neon cold-start tipico 3-7s; 8s era estricto y disparaba
+    //     timeouts evitables). AbortController cancela el fetch real cuando vence.
+    //   - Retry: hasta 2 reintentos (3 intentos en total) ante errores de red, timeouts o 5xx.
+    //     Backoff: 500ms antes del primer retry, 1500ms antes del segundo. NUNCA reintenta 4xx
+    //     (auth/validacion: reintentar empeora la UX y puede ratelimitear).
+    //   - Cada retry se loguea con log('api retry', ...) para visibilidad en consola.
+    //   - Shape del Promise resuelto/rechazado IDENTICA a antes (Error tipado .userMessage/.code
+    //     /.status). El timeout final llega como status=0 + code='TIMEOUT'; los callers que
+    //     chequean err.userMessage siguen funcionando sin cambios.
+    var API_FETCH_TIMEOUT_MS = 10000;
+    var API_FETCH_MAX_RETRIES = 2;
+    var API_FETCH_RETRY_BACKOFF_MS = [500, 1500];
+
     // Fetch JSON genérico contra qida-followup-api. Mismo manejo de error que fetchRecommendation:
     //   200 -> data; 4xx/5xx/red -> rechaza con Error tipado (.userMessage). opts:
     //   { afEmail:bool (default true), body:obj|null, noun:string }.
@@ -6726,24 +6800,79 @@
         var bodyStr;
         if (opts.body != null) { headers['Content-Type'] = 'application/json'; bodyStr = JSON.stringify(opts.body); }
         var url = apiBaseUrl() + path;
-        var t0 = Date.now();
-        return fetch(url, { method: method, headers: headers, body: bodyStr }).then(function (res) {
-            return res.text().then(function (raw) {
-                var data = null;
-                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
-                if (res.ok) {
-                    log('api ok', { method: method, path: path, ms: Date.now() - t0 });
-                    return data;
-                }
-                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
-                var serverMsg = (data && data.error && data.error.message)
-                        || (res.status === 422 ? format422Detail(data) : null)
-                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
-                        || (typeof (data && data.detail) === 'string' ? data.detail : null);
-                log('api error', { method: method, path: path, status: res.status, code: code });
-                throw makeApiError(apiErrorCopy(res.status, serverMsg, opts.noun), code, res.status);
+
+        // Un solo intento: arma AbortController + timer + fetch. Resuelve con la data normalizada,
+        //   o rechaza con un Error tipado. Distingue "retryable" (red/timeout/5xx) de "fatal" (4xx)
+        //   via err._retryable para que el orquestador decida.
+        function attempt() {
+            var t0 = Date.now();
+            var aborted = false;
+            var ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+            var timer = setTimeout(function () {
+                aborted = true;
+                if (ac) { try { ac.abort(); } catch (e) { /* noop */ } }
+            }, API_FETCH_TIMEOUT_MS);
+            var init = { method: method, headers: headers, body: bodyStr };
+            if (ac) init.signal = ac.signal;
+            return fetch(url, init).then(function (res) {
+                return res.text().then(function (raw) {
+                    clearTimeout(timer);
+                    var data = null;
+                    try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                    if (res.ok) {
+                        log('api ok', { method: method, path: path, ms: Date.now() - t0 });
+                        return data;
+                    }
+                    var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                    var serverMsg = (data && data.error && data.error.message)
+                            || (res.status === 422 ? format422Detail(data) : null)
+                            || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                            || (typeof (data && data.detail) === 'string' ? data.detail : null);
+                    log('api error', { method: method, path: path, status: res.status, code: code });
+                    var err = makeApiError(apiErrorCopy(res.status, serverMsg, opts.noun), code, res.status);
+                    err._retryable = (res.status >= 500);   // 5xx -> retry; 4xx -> fatal
+                    throw err;
+                });
+            }, function (netErr) {
+                clearTimeout(timer);
+                // Red caida, DNS fail, CORS preflight fail, o abort por timeout -> Error generico sin
+                //   .status http. Si fue por timeout (aborted=true), lo marcamos con code TIMEOUT para
+                //   distinguirlo en logs/UI. status=0 mantiene el contrato (callers chequean .userMessage).
+                var msg = aborted
+                    ? 'La petición tardó demasiado. Reintentá en unos segundos.'
+                    : 'No se pudo conectar con el servicio. Revisá tu conexión y reintentá.';
+                var code = aborted ? 'TIMEOUT' : 'NETWORK';
+                log('api network error', { method: method, path: path, code: code, msg: (netErr && netErr.message) || String(netErr) });
+                var e = makeApiError(msg, code, 0);
+                e._retryable = true;
+                throw e;
             });
-        });
+        }
+
+        // Orquestador: corre attempt(), reintenta si el error es retryable y todavia quedan intentos.
+        //   Devuelve la misma Promise shape que la implementacion previa.
+        function runWithRetries(retriesLeft, attemptIdx) {
+            return attempt().catch(function (err) {
+                if (!err || !err._retryable || retriesLeft <= 0) {
+                    // Fatal 4xx, error no-retryable, o sin intentos restantes -> bubble al caller
+                    //   despues de limpiar la marca interna (._retryable es de uso privado).
+                    if (err) delete err._retryable;
+                    throw err;
+                }
+                var backoff = API_FETCH_RETRY_BACKOFF_MS[attemptIdx] || 1500;
+                log('api retry', {
+                    method: method, path: path,
+                    attempt: attemptIdx + 1,
+                    of: API_FETCH_MAX_RETRIES,
+                    backoffMs: backoff,
+                    reason: (err.code || err.status || 'unknown')
+                });
+                return new Promise(function (resolve) { setTimeout(resolve, backoff); })
+                    .then(function () { return runWithRetries(retriesLeft - 1, attemptIdx + 1); });
+            });
+        }
+
+        return runWithRetries(API_FETCH_MAX_RETRIES, 0);
     }
 
     // v1.43.2: marca un lead como leído al abrir su detalle. Se llama desde select-lead, que es el
@@ -7625,10 +7754,14 @@
     // v1.21: carga la conversación real (GET) cuando el flag está on. Idempotente por lead.
     function loadConversation(leadId) {
         if (!useRealApi()) return;
-        state.conversationCache[leadId] = { _loading: true, _error: null, messages: null };
+        // v1.49.9 (FIX 3): conversationCache se indexa por la key canonica para que dashboard +
+        //   Actividades + deep-link compartan UN solo slot por lead. fetchConversation sigue
+        //   recibiendo el id original (lo strippea via toNumericLeadId internamente).
+        var cacheKey = cacheKeyFor(leadId);
+        state.conversationCache[cacheKey] = { _loading: true, _error: null, messages: null };
         rerenderContent();
         fetchConversation(leadId).then(function (resp) {
-            state.conversationCache[leadId] = { _loading: false, _error: null, messages: normalizeConversation(resp) };
+            state.conversationCache[cacheKey] = { _loading: false, _error: null, messages: normalizeConversation(resp) };
             // v1.27 race-guard: si la AF ya cambió de lead, NO re-renderizar sobre el nuevo (la cache
             //   queda guardada en su slot para cuando se reabra). Mismo patrón que fetchAll.
             if (state.currentLeadId !== leadId) return;
@@ -7636,7 +7769,7 @@
             rerenderContent();
         }).catch(function (err) {
             log('fetchConversation failed', err && (err.code || err.message));
-            state.conversationCache[leadId] = { _loading: false, _error: (err && err.userMessage) || 'No se pudo cargar la conversación.', messages: null };
+            state.conversationCache[cacheKey] = { _loading: false, _error: (err && err.userMessage) || 'No se pudo cargar la conversación.', messages: null };
             if (state.currentLeadId !== leadId) return;
             rerenderContent();
         });
@@ -7670,13 +7803,20 @@
         //   CANONICA del lead (state.currentLeadId / leadId), NO por lead.id. En modo Odoo lead.id
         //   es el id numerico (mapLead), distinto del display_id "L<n>" con que se guardo la cache
         //   -> leer por lead.id daba cache miss y el pane salia vacio aunque la API respondiera 200.
+        // v1.49.9 (FIX 3): el lookup pasa por cacheKeyFor() — antes el dashboard escribia con
+        //   "L<n>" y Actividades leia con el numero (o viceversa) y la ventana salia vacia.
         leadId = (leadId != null ? leadId : (lead && lead.id));
         var realMode = useRealApi();
-        var conv = realMode ? state.conversationCache[leadId] : null;
+        var conv = realMode ? state.conversationCache[cacheKeyFor(leadId)] : null;
         var msgsHtml;
-        if (realMode && conv && conv._loading) {
+        if (realMode && (!conv || conv._loading)) {
             // v1.41 (FIX 1): spinner ANIMADO (antes un icono estático de refresh que parecía
             //   congelado/roto). Reusa .qida-spinner global, coherente con el resto de loaders.
+            // v1.49.9 (FIX 2): el branch "loader" tambien cubre `!conv` (sin entrada en cache —
+            //   loadConversation todavia no marco _loading, o quedo huerfana por una key mal
+            //   normalizada). Antes esto caia al else y mostraba "Sin mensajes" en plena carga,
+            //   confundiendo a la AF. Solo se considera "sin mensajes" cuando el fetch RESOLVIO
+            //   con messages:[] (rama else explicita mas abajo).
             msgsHtml = '<div class="qida-wa-state"><span class="qida-spinner" aria-hidden="true"></span> Cargando conversación…</div>';
         } else if (realMode && conv && conv._error) {
             msgsHtml = '<div class="qida-wa-state error">'
@@ -9136,8 +9276,11 @@
                     LeadDetailService.fetchAll(leadIdNum);
                 }
                 // v1.21: conversación real (GET) si el flag está on y no está cacheada/ok.
+                // v1.49.9 (FIX 3): el lookup del cache pasa por la key canonica para no
+                //   crear una segunda entrada (esto y openLeadDetail eran los dos sitios donde
+                //   dashboard "L<n>" y Actividades numerico se divergian).
                 if (useRealApi()) {
-                    var cc = state.conversationCache[leadIdNum];
+                    var cc = state.conversationCache[cacheKeyFor(leadIdNum)];
                     if (!cc || cc._error) loadConversation(leadIdNum);
                     loadRecommendation(leadIdNum);  // v1.31 (FIX A): pobla "Análisis IA" (lead_analysis_long)
                 }
@@ -9659,7 +9802,9 @@
         var typeLabel = '';
         var types = resolvedActivityTypes();
         for (var i = 0; i < types.length; i++) { if (types[i].id === m.typeId) { typeLabel = types[i].label; break; } }
-        var cache = state.leadDetailCache && state.leadDetailCache[m.leadId];
+        // v1.49.9 (FIX 3): el cache se indexa por la key canonica (numeric). m.leadId puede venir
+        //   como "L<n>" o como numero segun el origen; cacheKeyFor() los unifica.
+        var cache = state.leadDetailCache && state.leadDetailCache[cacheKeyFor(m.leadId)];
         if (cache && cache.activities) {
             cache.activities.push({
                 id: isRealActivityId(newId) ? newId : ('pending-' + m.resId),
@@ -9709,7 +9854,8 @@
                 if (state.dashRows[i] && String(state.dashRows[i].id) === String(activityId)) return state.dashRows[i].summary || '';
             }
         }
-        var cache = state.leadDetailCache && state.leadDetailCache[leadId];
+        // v1.49.9 (FIX 3): lookup por la key canonica del cache.
+        var cache = state.leadDetailCache && state.leadDetailCache[cacheKeyFor(leadId)];
         if (cache && Array.isArray(cache.activities)) {
             for (var j = 0; j < cache.activities.length; j++) {
                 if (cache.activities[j] && String(cache.activities[j].id) === String(activityId)) return cache.activities[j].summary || '';
@@ -9751,7 +9897,8 @@
             }
         }
         rm(state.dashRows, 'id');
-        var cache = state.leadDetailCache && state.leadDetailCache[leadId];
+        // v1.49.9 (FIX 3): mismo cache key normalizado que findActivitySummary / optimisticAddActivity.
+        var cache = state.leadDetailCache && state.leadDetailCache[cacheKeyFor(leadId)];
         if (cache && cache.activities) rm(cache.activities, 'id');
         return reverts;
     }
@@ -9881,7 +10028,8 @@
             }
         }
         upd(state.dashRows, 'deadlineDate');
-        var cache = state.leadDetailCache && state.leadDetailCache[leadId];
+        // v1.49.9 (FIX 3): mismo cache key normalizado.
+        var cache = state.leadDetailCache && state.leadDetailCache[cacheKeyFor(leadId)];
         if (cache && cache.activities) upd(cache.activities, 'deadline');
         return reverts;
     }
@@ -10616,7 +10764,9 @@
             LeadDetailService.fetchAll(leadIdNum);
         }
         if (useRealApi()) {
-            var cc = state.conversationCache[leadIdNum];
+            // v1.49.9 (FIX 3): mismo helper que select-lead -> una sola entrada por lead, sin
+            //   importar si la AF entro por deep-link Odoo, dashboard o tab Actividades.
+            var cc = state.conversationCache[cacheKeyFor(leadIdNum)];
             if (!cc || cc._error) loadConversation(leadIdNum);
             loadRecommendation(leadIdNum);
         }
