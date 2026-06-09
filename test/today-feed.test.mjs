@@ -2,8 +2,8 @@
  * AI-860 — Harness Node para el feed del tab "Hoy".
  * Verifica: (1) merge + tag _kind sin mutar los originales; (2) el dedupe AI-861 (v1.49.2):
  * la Sugerencia de un lead con actividad en ventana se suprime, su Actividad queda; (3) el filtro
- * de actividades (solo hoy + atrasadas activas, NO futuras); (4) el sort por fecha límite asc con
- * empate -> Sugerencia antes que Actividad. Mismo patrón que test/dashboard-feed.test.mjs.
+ * de actividades (solo hoy + atrasadas activas, NO futuras); (4) el sort jerárquico (v1.49.10):
+ * actividades atrasadas -> actividades de hoy -> sugerencias. Mismo patrón que test/dashboard-feed.test.mjs.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +43,7 @@ const mod = new Function(
     extractVar(SRC, 'SUGGESTION_ACTIVITY_LOOKAHEAD_DAYS') + '\n' +
     // v1.49.6: buildTodayFeed reusa isCallActivity (en el tie-break llamadas-primero); extraer
     //   la constante de keywords + la función para el harness.
+    // v1.49.10: buildTodayFeed además reusa isOverdueActivity (Tier 2: atrasada antes que hoy).
     extractVar(SRC, 'CALL_TYPE_KEYWORDS') + '\n' +
     extractFn(SRC, 'pad2') + '\n' +
     extractFn(SRC, 'todayISO') + '\n' +
@@ -55,6 +56,7 @@ const mod = new Function(
     extractFn(SRC, 'isTodayOrOverdueActivity') + '\n' +
     extractFn(SRC, 'todayEffectiveDeadline') + '\n' +
     extractFn(SRC, 'isCallActivity') + '\n' +
+    extractFn(SRC, 'isOverdueActivity') + '\n' +
     extractFn(SRC, 'buildTodayFeed') + '\n' +
     'return { state, todayISO, addDaysISO, buildTodayRows, suppressSuggestionsWithActivity, isTodayOrOverdueActivity, todayEffectiveDeadline, isCallActivity, buildTodayFeed };'
 )();
@@ -91,17 +93,18 @@ test('todayEffectiveDeadline: sugerencia -> hoy; actividad -> su deadlineDate', 
     assert.equal(mod.todayEffectiveDeadline({ _kind: 'activity', deadlineDate: mod.addDaysISO(-2) }), mod.addDaysISO(-2));
 });
 
-test('buildTodayFeed: excluye actividades futuras; atrasada primero; empate -> sugerencia antes que actividad', () => {
+test('buildTodayFeed: excluye actividades futuras; actividades (atrasada -> hoy) antes que sugerencias', () => {
     const rows = mod.buildTodayRows(
         [{ id: 'LA' }, { id: 'LB' }],
         [
-            { id: 1, deadlineDate: mod.addDaysISO(-2), state: 'overdue' },  // atrasada -> arriba
-            { id: 2, deadlineDate: TODAY, state: 'today' },                // hoy -> después de las sugerencias
+            { id: 1, deadlineDate: mod.addDaysISO(-2), state: 'overdue' },  // atrasada -> arriba del todo
+            { id: 2, deadlineDate: TODAY, state: 'today' },                // hoy -> tras las atrasadas, antes de sugerencias
             { id: 3, deadlineDate: mod.addDaysISO(5), state: 'planned' }   // futura -> EXCLUIDA
         ]
     );
     const feed = mod.buildTodayFeed(rows);
-    assert.deepEqual(feed.map((r) => r.id), [1, 'LA', 'LB', 2]);
+    // v1.49.10: actividades atrasadas -> actividades de hoy -> sugerencias (todas al final).
+    assert.deepEqual(feed.map((r) => r.id), [1, 2, 'LA', 'LB']);
 });
 
 test('buildTodayFeed: las sugerencias se muestran aunque no haya actividades', () => {
