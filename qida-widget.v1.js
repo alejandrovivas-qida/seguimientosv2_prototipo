@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.4
+ * QIDA ASSISTANT v1.49.5
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,22 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.5 (2026-06-09 — Badge real: actividades del día + sugerencias filtradas):
+ *   - El badge del bottom-right (número rojo) usaba countLeadsUrgent() que cuenta sobre MOCK_LEADS
+ *     -> mismo número fijo para toda AF, sin relación con su data real. Fix: en modo Odoo el badge
+ *     ahora suma "cosas para hacer hoy" = Actividades del día (hoy + atrasadas activas, mismo
+ *     criterio que el tab Hoy) + Sugerencias del día YA FILTRADAS por AI-861 (no duplica leads
+ *     que ya tienen actividad pendiente en ventana, mismo criterio que el tab Sugerencias).
+ *   - countBadgeItemsAsync() hace los 2 fetchs en paralelo (fetchLeadsList('suggestions') +
+ *     fetchActivitiesForFilter), aplica suppressSuggestionsWithActivity, cuenta. Nunca rechaza:
+ *     si una de las fuentes falla contribuye 0 (degrade silencioso, sin número en el badge).
+ *   - injectBadge ahora monta el badge sin número (mount inmediato, no espera fetch) y agrega
+ *     el span del contador cuando el async resuelve. countLeadsUrgent se preserva intacto para
+ *     modo mock (index.html / demo local).
+ *   - Sin cambios en el filtro de sugerencias: la ventana [-LOOKBACK, +LOOKAHEAD] (30 días atrás
+ *     hasta 2 días adelante) ya cubre las actividades atrasadas activas. El badge usa la misma
+ *     lógica, manteniendo consistencia entre los 3 superficies (badge, tab Sugerencias, tab Hoy).
  *
  * Cambios v1.49.4 (2026-06-09 — "Convertidos este mes" lee real desde Odoo):
  *   - La card "Convertidos" del dashboard mostraba siempre 0 porque el backend devuelve
@@ -1668,7 +1684,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.4';
+    var VERSION = '1.49.5';
     var CONFIG = null;
 
     // ============================================================
@@ -2518,8 +2534,9 @@
     }
 
     // ----- Helpers de cartera (solo lo que sigue vivo en v1.10) -----
-    // countLeadsUrgent: contador para el badge del bottom-right (numero rojo).
-    // Se mantiene como simple count de lead.urgent sobre cartera activa.
+    // countLeadsUrgent: contador del badge del bottom-right en modo MOCK (index.html).
+    // Se mantiene para no romper la demo local. En modo real (Odoo) el contador se
+    // calcula con countBadgeItemsAsync() abajo.
     function countLeadsUrgent() {
         var n = 0;
         for (var i = 0; i < MOCK_LEADS.length; i++) {
@@ -2527,6 +2544,38 @@
             if (!l.historico && l.urgent) n++;
         }
         return n;
+    }
+
+    // v1.49.5: contador real del badge para modo Odoo. Definición de producto: cantidad de
+    //   "cosas para hacer hoy" = Actividades del día (hoy + atrasadas activas) + Sugerencias del
+    //   día YA FILTRADAS por AI-861 (suppressSuggestionsWithActivity con ventana
+    //   [-LOOKBACK, +LOOKAHEAD] días). Si el lead tiene actividad pendiente en ventana, NO
+    //   contribuye como sugerencia (igual criterio que el tab Sugerencias y el tab Hoy).
+    //
+    // Nunca rechaza: ante fallo de cualquiera de las 2 fetchs, contribuye 0 (degrade silencioso).
+    //   Si ambas fallan -> 0 -> el badge no muestra número (consistente con "no urgent" en mock).
+    function countBadgeItemsAsync() {
+        if (!useRealApi()) return Promise.resolve(countLeadsUrgent());
+        var sugP = fetchLeadsList('suggestions').catch(function (err) {
+            log('badge sugerencias failed', err && (err.code || err.message));
+            return [];
+        });
+        var actP = fetchActivitiesForFilter().then(function (v) {
+            return Array.isArray(v) ? v : [];
+        }).catch(function (err) {
+            log('badge actividades failed', err && (err.code || err.message));
+            return [];
+        });
+        return Promise.all([sugP, actP]).then(function (results) {
+            var sugs = results[0] || [];
+            var acts = results[1] || [];
+            var filteredSugs = suppressSuggestionsWithActivity(sugs, acts);
+            var todayActs = 0;
+            for (var i = 0; i < acts.length; i++) {
+                if (isTodayOrOverdueActivity(acts[i])) todayActs++;
+            }
+            return filteredSugs.length + todayActs;
+        });
     }
 
     // ----- Fechas helpers para schedule modal -----
@@ -9735,16 +9784,34 @@
     // ============================================================
     function injectBadge() {
         if (document.querySelector('.qida-badge')) return;
-        var urgent = countLeadsUrgent();
         var badge = document.createElement('div');
         badge.className = 'qida-badge';
         badge.setAttribute('data-action', 'open-modal');
         badge.setAttribute('role', 'button');
         badge.setAttribute('aria-label', 'Abrir Qida Seguimientos');
-        badge.innerHTML = '<img src="' + QIDA_LOGO_URL + '" alt="Qida">'
-            + (urgent > 0 ? '<span class="qida-badge-count">' + urgent + '</span>' : '');
+        badge.innerHTML = '<img src="' + QIDA_LOGO_URL + '" alt="Qida">';
         badge.addEventListener('click', handleClick);
         document.body.appendChild(badge);
+
+        // v1.49.5: contador real (modo Odoo: actividades hoy/atrasadas + sugerencias filtradas
+        //   por AI-861; modo mock: countLeadsUrgent sobre MOCK_LEADS). Async para no bloquear el
+        //   mount; arranca sin número y lo agrega cuando los fetchs resuelven. Degrade silencioso
+        //   ante fallo (sin número).
+        countBadgeItemsAsync().then(function (count) {
+            if (typeof count !== 'number' || count <= 0) return;
+            // Re-verificar el badge sigue en el DOM (no fue removido por unmount entre tanto).
+            var live = document.querySelector('.qida-badge');
+            if (!live) return;
+            var existing = live.querySelector('.qida-badge-count');
+            if (existing) {
+                existing.textContent = String(count);
+            } else {
+                var span = document.createElement('span');
+                span.className = 'qida-badge-count';
+                span.textContent = String(count);
+                live.appendChild(span);
+            }
+        });
     }
 
     function injectModal() {
