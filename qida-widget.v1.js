@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.5
+ * QIDA ASSISTANT v1.49.6
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,30 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.6 (2026-06-09 — tab Hoy/Actividades: columna "Tarea" + emoji llamada + orden llamadas-primero):
+ *   - Tab Hoy: nueva columna "Tarea" entre Contacto y Temp. En filas tipo Actividad muestra el
+ *     `summary` de mail.activity (mismo campo que ya usa el tab Actividades). En filas tipo Sugerencia
+ *     muestra el `reason` (el "Por qué", mismo campo que el tab Sugerencias usa en su columna POR QUE).
+ *     El grid del header/row del tab pasa de 7 a 8 columnas; la media query angosta mantiene la columna
+ *     Tarea (la que se cae sigue siendo Temp + Sin contacto).
+ *   - Diferenciación llamada vs WhatsApp/seguimiento: si la actividad es de tipo "Llamada"
+ *     (mail.activity.type cuyo nombre matchea 'llamada' / 'call' / 'phonecall'; mismas keywords que
+ *     ACTIVITY_TYPE_WHITELIST.call para no duplicar fuente de verdad), la celda Tarea muestra un
+ *     emoji 📞 grande ANTES del texto del summary. Si el summary es vacío, igual va el 📞 (el ícono
+ *     es la fuente de verdad, no el texto). Aplica a la columna Tarea de AMBOS tabs (Hoy + Actividades).
+ *     Las sugerencias NO llevan 📞 (no son una llamada agendada, son un seguimiento sugerido).
+ *   - Orden intra-día: dentro de un mismo día (mismo `deadlineDate` efectivo), las llamadas van ARRIBA
+ *     del resto (WhatsApp / seguimientos / sugerencias). Sort cross-día se mantiene (atrasadas → hoy →
+ *     futuras / sugerencias en su slot del día). buildTodayFeed: en empate por effectiveDeadline,
+ *     primero las actividades-llamada, luego sugerencias, luego actividades NO-llamada (preserva el
+ *     tie-break previo entre sugerencia y actividad no-llamada). buildActivitiesFeed: el sort interno
+ *     de cada grupo (overdue / restFiltered) ahora aplica byCallFirstThenDeadline (llamadas primero a
+ *     igual fecha, después byDeadlineAsc), sin tocar el split atrasadas-vs-resto ni el chip temporal.
+ *   - Helper único `isCallActivity(act)`: matchea por `typeLabel` contra ['llamada','call','phonecall']
+ *     (insensible a mayúsculas). Reusado por renderTaskCell, renderTodaySuggestionRow (devuelve false),
+ *     y los comparators de sort. Si en el futuro Odoo manda activity_type_id sin label, hay que
+ *     enriquecer el mapper (mapOdooActivity) — hoy el label ya viene resuelto en el many2one.
  *
  * Cambios v1.49.5 (2026-06-09 — Badge real: actividades del día + sugerencias filtradas):
  *   - El badge del bottom-right (número rojo) usaba countLeadsUrgent() que cuenta sobre MOCK_LEADS
@@ -1684,7 +1708,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.5';
+    var VERSION = '1.49.6';
     var CONFIG = null;
 
     // ============================================================
@@ -4011,9 +4035,10 @@
             '.qida-actv-reschedule:hover{background:#fffbeb;}',
             '.qida-actv-reschedule[disabled]{opacity:.5;cursor:default;}',
             /* ===== AI-860 TAB HOY (experimental) ===== */
-            /* 7 cols: Contacto · Temp · Sin contacto · Estado · Tipo · Fecha · Acciones. grid-template
-               IDÉNTICO en header y fila (la última col es fija, no auto, para que no se desalineen). */
-            '.qida-today-header,.qida-today-row{display:grid;grid-template-columns:minmax(160px,2fr) 104px 84px 116px 104px 92px 184px;gap:14px;align-items:center;}',
+            /* v1.49.6: 8 cols (sumada TAREA entre Contacto y Temp). Mismo ancho que el tab Actividades
+               para la columna Tarea (minmax(150px,2.1fr)) -> consistencia visual entre tabs.
+               grid-template IDÉNTICO en header y fila (la última col es fija, no auto). */
+            '.qida-today-header,.qida-today-row{display:grid;grid-template-columns:minmax(160px,2fr) minmax(150px,2.1fr) 104px 84px 116px 104px 92px 184px;gap:14px;align-items:center;}',
             '.qida-today-header{padding:9px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--s700);font-weight:500;background:#f3f4f6;border-bottom:0.5px solid var(--s200);}',
             '.qida-today-row{padding:11px 14px;background:#fff;border-bottom:0.5px solid #f3f4f6;font-size:12.5px;color:var(--s800);cursor:pointer;}',
             '.qida-today-row:nth-child(even){background:#FAFAFA;}',
@@ -4024,8 +4049,12 @@
             '.qida-tipo-pill{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;font-size:10.5px;font-weight:600;white-space:nowrap;}',
             '.qida-tipo-sugerencia{background:#EEF2FF;color:#4338CA;border:0.5px solid #C7D2FE;}',  /* índigo */
             '.qida-tipo-actividad{background:#ECFEFF;color:#0E7490;border:0.5px solid #A5F3FC;}',   /* cian */
-            /* En angosto ocultamos TEMP (col 2) y SIN CONTACTO (col 3) -> 5 cols (igual que .qida-actv-*). */
-            '@media (max-width:1100px){.qida-today-header,.qida-today-row{grid-template-columns:minmax(140px,1.8fr) 116px 104px 92px 184px;}.qida-today-header > div:nth-child(2),.qida-today-header > div:nth-child(3){display:none;}.qida-today-row .qida-cell-temp,.qida-today-row .qida-cell-dias{display:none;}}',
+            /* v1.49.6: emoji 📞 grande (16-18px) en la celda Tarea para actividades tipo Llamada.
+               Reusa .qida-actv-task (flex+gap:6px) -> queda alineado con el texto sin tocar el ellipsis. */
+            '.qida-task-call-icon{font-size:16px;line-height:1;flex:0 0 auto;}',
+            /* v1.49.6: en angosto el grid pasa a 6 cols (Contacto + Tarea + Estado + Tipo + Fecha + Acciones).
+               TEMP (col 3) y SIN CONTACTO (col 4) se ocultan; Tarea se mantiene visible. */
+            '@media (max-width:1100px){.qida-today-header,.qida-today-row{grid-template-columns:minmax(130px,1.6fr) minmax(140px,1.8fr) 116px 104px 92px 184px;}.qida-today-header > div:nth-child(3),.qida-today-header > div:nth-child(4){display:none;}.qida-today-row .qida-cell-temp,.qida-today-row .qida-cell-dias{display:none;}}',
             /* ===== fin AI-860 TAB HOY ===== */
             '.qida-act-new-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;}',
             '.qida-act-new-btn:hover{background:#0c5a46;}',
@@ -4692,13 +4721,23 @@
             : '';
 
         // TAREA: summary || stripHtml(note) || "Sin descripción". El ellipsis (CSS) trunca; title = texto completo.
+        // v1.49.6: si la actividad es tipo Llamada -> 📞 grande ANTES del texto (fuente de verdad
+        //   visual). Si el summary está vacío y es Llamada, igual va el 📞 (sin "Sin descripción").
         var taskText = act.summary || stripHtml(act.note);
+        var isCall = isCallActivity(act);
         var pendingBadge = act._pending
             ? '<span class="qida-actv-badge-pending" aria-label="Pendiente de sincronizar">' + icon('clock', 10) + 'Pendiente</span>'
             : '';
-        var taskHtml = taskText
-            ? '<span class="qida-actv-task-text" title="' + esc(taskText) + '">' + esc(taskText) + '</span>'
-            : '<span class="qida-actv-task-empty">Sin descripción</span>';
+        var callIconHtml = isCall ? '<span class="qida-task-call-icon" aria-label="Llamada">📞</span>' : '';
+        var taskInner;
+        if (taskText) {
+            taskInner = '<span class="qida-actv-task-text" title="' + esc(taskText) + '">' + esc(taskText) + '</span>';
+        } else if (isCall) {
+            taskInner = '';
+        } else {
+            taskInner = '<span class="qida-actv-task-empty">Sin descripción</span>';
+        }
+        var taskHtml = callIconHtml + taskInner;
 
         if (pendingBadge) taskHtml += pendingBadge;
 
@@ -4731,6 +4770,8 @@
     // v1.47: pipeline del tab Actividades. (1) buscador sobre TODO; (2) split atrasadas vs resto;
     //   (3) chips temporales SOLO al resto; (4) orden: atrasadas asc + resto (hoy<próxima) asc.
     //   Las atrasadas SIEMPRE arriba, sin importar el chip (pedido de Eva).
+    // v1.49.6: dentro de un mismo día (mismo deadlineDate), las llamadas van ARRIBA del resto. Aplica
+    //   tanto al grupo atrasadas como al resto. Cross-día se mantiene cronológico (atrasadas primero).
     function buildActivitiesFeed(rows) {
         rows = rows || [];
         var q = (state.dashSearchQuery || '').trim().toLowerCase();
@@ -4748,10 +4789,10 @@
         for (i = 0; i < rest.length; i++) {
             if (activityInRange(rest[i], range)) restFiltered.push(rest[i]);
         }
-        overdue.sort(byDeadlineAsc);
+        overdue.sort(byCallFirstThenDeadline);
         restFiltered.sort(function (a, b) {
             var r = activityStateRank(a) - activityStateRank(b);
-            return r !== 0 ? r : byDeadlineAsc(a, b);
+            return r !== 0 ? r : byCallFirstThenDeadline(a, b);
         });
         return overdue.concat(restFiltered);
     }
@@ -4767,6 +4808,32 @@
         var da = (a && a.deadlineDate) || '9999-12-31';
         var db = (b && b.deadlineDate) || '9999-12-31';
         return da < db ? -1 : (da > db ? 1 : 0);
+    }
+    // v1.49.6: ¿la actividad es tipo "Llamada"? Reusa las keywords de ACTIVITY_TYPE_WHITELIST.call
+    //   (insensible a mayúsculas). Sugerencias / objetos sin typeLabel -> false. Fuente del label:
+    //   mapOdooActivity ya resuelve el many2one activity_type_id -> typeLabel; en mock viene como
+    //   activity_type_label (fallback aceptado).
+    var CALL_TYPE_KEYWORDS = ['llamada', 'call', 'phonecall'];
+    function isCallActivity(a) {
+        if (!a) return false;
+        var label = a.typeLabel || a.type || a.activity_type_label;
+        if (!label) return false;
+        var lc = String(label).toLowerCase();
+        for (var i = 0; i < CALL_TYPE_KEYWORDS.length; i++) {
+            if (lc.indexOf(CALL_TYPE_KEYWORDS[i]) !== -1) return true;
+        }
+        return false;
+    }
+    // v1.49.6: comparator usado por buildActivitiesFeed dentro de cada grupo (overdue / restFiltered).
+    //   A igual deadlineDate, llamadas arriba; cuando difiere la fecha, manda byDeadlineAsc (atrasadas
+    //   primero, después fechas más próximas). NO cambia el split atrasadas-vs-resto.
+    function byCallFirstThenDeadline(a, b) {
+        var da = (a && a.deadlineDate) || '9999-12-31';
+        var db = (b && b.deadlineDate) || '9999-12-31';
+        if (da !== db) return da < db ? -1 : 1;
+        var ca = isCallActivity(a) ? 0 : 1;
+        var cb = isCallActivity(b) ? 0 : 1;
+        return ca - cb;
     }
     function activityInRange(a, range) {
         if (range === 'all' || !range) return true;
@@ -4880,12 +4947,15 @@
             }
             feed.push(r);
         }
+        // v1.49.6: a igual effectiveDeadline, primero las llamadas (rank 0), luego sugerencias
+        //   (rank 1), luego actividades NO-llamada (rank 2). Preserva el tie-break previo entre
+        //   sugerencia y actividad no-llamada (test 'empate -> sugerencia antes que actividad').
         feed.sort(function (a, b) {
             var da = todayEffectiveDeadline(a), db = todayEffectiveDeadline(b);
             if (da !== db) return da < db ? -1 : 1;
-            var ka = a._kind === 'suggestion' ? 0 : 1;
-            var kb = b._kind === 'suggestion' ? 0 : 1;
-            return ka - kb;
+            var ra = (a._kind === 'activity' && isCallActivity(a)) ? 0 : (a._kind === 'suggestion' ? 1 : 2);
+            var rb = (b._kind === 'activity' && isCallActivity(b)) ? 0 : (b._kind === 'suggestion' ? 1 : 2);
+            return ra - rb;
         });
         return feed;
     }
@@ -4932,10 +5002,12 @@
         + '</div>';
     }
 
-    // 7 columnas: Contacto · Temp · Sin contacto · Estado · Tipo · Fecha límite · Acciones.
+    // v1.49.6: 8 columnas: Contacto · Tarea · Temp · Sin contacto · Estado · Tipo · Fecha límite · Acciones.
+    //   Tarea = summary (actividades) | reason (sugerencias), prefijado con 📞 si activity_type es Llamada.
     function renderTodayHeader() {
         return '<div class="qida-today-header">'
             + '<div>Contacto</div>'
+            + '<div>Tarea</div>'
             + '<div>Temp</div>'
             + '<div>Sin contacto</div>'
             + '<div>Estado</div>'
@@ -4943,6 +5015,23 @@
             + '<div>Fecha límite</div>'
             + '<div></div>'
         + '</div>';
+    }
+
+    // v1.49.6: celda Tarea unificada. Reusa el patrón de .qida-actv-task del tab Actividades.
+    //   text: el string a mostrar (summary | reason). isCall: si true, prefija 📞 grande (16-18px)
+    //   ANTES del texto. Si text es vacío y es llamada, igual va el 📞 (el ícono es la fuente de
+    //   verdad). Si no hay texto y no es llamada, "Sin descripción" italic gris (mismo patrón que renderActivityRow).
+    function renderTaskCell(text, isCall) {
+        var callIcon = isCall ? '<span class="qida-task-call-icon" aria-label="Llamada">📞</span>' : '';
+        var body;
+        if (text) {
+            body = '<span class="qida-actv-task-text" title="' + esc(text) + '">' + esc(text) + '</span>';
+        } else if (isCall) {
+            body = '';
+        } else {
+            body = '<span class="qida-actv-task-empty">Sin descripción</span>';
+        }
+        return '<div class="qida-dash-cell qida-actv-task">' + callIcon + body + '</div>';
     }
 
     // Columna TIPO: pill que distingue el origen de la fila. Índigo (Sugerencia) / Cian (Actividad)
@@ -4971,11 +5060,15 @@
         var line2 = parentesco
             ? '<div class="qida-cell-line2">cuida a su ' + esc(String(parentesco).toLowerCase()) + '</div>'
             : '';
+        // v1.49.6: columna Tarea -> el `reason` de la sugerencia ("Por qué"). Sin 📞 (no es una
+        //   llamada agendada, es un seguimiento sugerido).
+        var taskCell = renderTaskCell(row.reason || '', false);
         return '<div class="qida-today-row" data-action="select-lead" data-id="' + esc(row.id) + '">'
             + '<div class="qida-dash-cell qida-cell-familia">'
                 + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(name) + '</span>' + refHtml + '</div>'
                 + line2
             + '</div>'
+            + taskCell
             + renderTempCell(row.temperature)
             + renderDiasCell(row)
             + renderEstadoCell(row)
@@ -5002,11 +5095,16 @@
         var tempCell = leadData ? renderTempCell(leadData.temperature) : emptyDashCell('qida-cell-temp');
         var diasCell = (leadData && leadData.daysWithoutTouch != null) ? renderDiasCell(leadData) : emptyDashCell('qida-cell-dias');
         var deadlineCls = (act.state === 'overdue') ? ' qida-actv-deadline-overdue' : '';
+        // v1.49.6: columna Tarea -> summary || stripHtml(note). isCall = activity_type "Llamada" ->
+        //   prefijo 📞 grande. Sin texto + isCall: igual sale el 📞 (el ícono es la fuente de verdad).
+        var taskText = act.summary || stripHtml(act.note);
+        var taskCell = renderTaskCell(taskText, isCallActivity(act));
         return '<div class="qida-today-row" data-action="select-lead" data-source="activities" data-id="' + esc(act.leadId != null ? act.leadId : '') + '">'
             + '<div class="qida-dash-cell qida-actv-contacto qida-cell-familia">'
                 + '<div class="qida-cell-line1"><span class="qida-cell-name">' + esc(contactName) + '</span>' + refHtml + '</div>'
                 + line2
             + '</div>'
+            + taskCell
             + tempCell
             + diasCell
             + renderActivityEstadoBadge(act.state, leadData)
