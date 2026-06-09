@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.49.9
+ * QIDA ASSISTANT v1.49.10
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,9 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.49.10 (2026-06-09 — tab Hoy reordenado):
+ *   - Tab Hoy reordenado: actividades atrasadas → actividades de hoy → sugerencias.
  *
  * Cambios v1.49.9 (2026-06-09 — fiabilidad de la conversación WhatsApp en el detalle):
  *   - FIX 1 (apiFetchJson cuelga sin timeout/retry): apiFetchJson ahora envuelve fetch() con
@@ -1791,7 +1794,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.49.9';
+    var VERSION = '1.49.10';
     var CONFIG = null;
 
     // ============================================================
@@ -5097,8 +5100,8 @@
     }
 
     // Pipeline del tab "Hoy" (render-time). (1) actividades: solo hoy/atrasadas; (2) buscador
-    //   (reusa los matchers de cada tipo); (3) sort por fecha límite asc; empate -> sugerencia
-    //   primero (la actividad ya está programada). `rows` viene de liveDashRows (sin completadas).
+    //   (reusa los matchers de cada tipo); (3) sort jerárquico (v1.49.10): actividades atrasadas ->
+    //   actividades de hoy -> sugerencias. `rows` viene de liveDashRows (sin completadas).
     function buildTodayFeed(rows) {
         rows = rows || [];
         var q = (state.dashSearchQuery || '').trim().toLowerCase();
@@ -5113,15 +5116,27 @@
             }
             feed.push(r);
         }
-        // v1.49.6: a igual effectiveDeadline, primero las llamadas (rank 0), luego sugerencias
-        //   (rank 1), luego actividades NO-llamada (rank 2). Preserva el tie-break previo entre
-        //   sugerencia y actividad no-llamada (test 'empate -> sugerencia antes que actividad').
+        // v1.49.10: orden jerárquico (reemplaza el sort por effectiveDeadline de v1.49.6). De arriba
+        //   a abajo: actividades ATRASADAS -> actividades de HOY -> sugerencias (todas al final).
+        //   Tier 1 grupo (actividad < sugerencia); Tier 2 estado de la actividad (atrasada < hoy, vía
+        //   isOverdueActivity); Tier 3 llamadas primero (isCallActivity); Tier 4 fecha límite asc.
         feed.sort(function (a, b) {
+            // Tier 1: las actividades (atrasadas + hoy) van por encima de todas las sugerencias.
+            var ga = (a._kind === 'activity') ? 0 : 1;
+            var gb = (b._kind === 'activity') ? 0 : 1;
+            if (ga !== gb) return ga - gb;
+            // Entre dos actividades: Tier 2 estado (atrasada antes que hoy) + Tier 3 llamadas arriba.
+            if (ga === 0) {
+                var sa = isOverdueActivity(a) ? 0 : 1;
+                var sb = isOverdueActivity(b) ? 0 : 1;
+                if (sa !== sb) return sa - sb;
+                var ca = isCallActivity(a) ? 0 : 1;
+                var cb = isCallActivity(b) ? 0 : 1;
+                if (ca !== cb) return ca - cb;
+            }
+            // Tier 4: último tie-break por fecha límite efectiva asc (sugerencia -> hoy).
             var da = todayEffectiveDeadline(a), db = todayEffectiveDeadline(b);
-            if (da !== db) return da < db ? -1 : 1;
-            var ra = (a._kind === 'activity' && isCallActivity(a)) ? 0 : (a._kind === 'suggestion' ? 1 : 2);
-            var rb = (b._kind === 'activity' && isCallActivity(b)) ? 0 : (b._kind === 'suggestion' ? 1 : 2);
-            return ra - rb;
+            return da < db ? -1 : (da > db ? 1 : 0);
         });
         return feed;
     }
