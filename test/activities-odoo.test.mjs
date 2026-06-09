@@ -31,12 +31,22 @@ function extractFn(src, name) {
     }
     return src.slice(start, i);
 }
+// v1.49.6: extractor para `var <NAME> = ...;` (idéntico al de today-feed.test.mjs).
+function extractVar(src, name) {
+    const re = new RegExp('var\\s+' + name + '\\s*=\\s*[^;]+;');
+    const m = src.match(re);
+    assert.ok(m, 'no se encontró var ' + name);
+    return m[0];
+}
 
 // Reconstruye un módulo con solo las piezas puras + un `state` controlado por el test.
 //   `var document = undefined` fuerza a stripHtml al fallback regex (en node no hay DOM) -> determinista.
 const mod = new Function(
     'var document = undefined;' + '\n' +
     'var state = { dashSearchQuery: "", dashDateRange: "all", leadById: null };' + '\n' +
+    // v1.49.6: buildActivitiesFeed sortea con byCallFirstThenDeadline (que lee isCallActivity +
+    //   las keywords). Extracción del helper y la constante para no romper el harness.
+    extractVar(SRC, 'CALL_TYPE_KEYWORDS') + '\n' +
     extractFn(SRC, 'daysBetween') + '\n' +
     extractFn(SRC, 'activityStateFromDeadline') + '\n' +
     extractFn(SRC, 'tName') + '\n' +
@@ -50,9 +60,11 @@ const mod = new Function(
     extractFn(SRC, 'isOverdueActivity') + '\n' +
     extractFn(SRC, 'activityStateRank') + '\n' +
     extractFn(SRC, 'byDeadlineAsc') + '\n' +
+    extractFn(SRC, 'isCallActivity') + '\n' +
+    extractFn(SRC, 'byCallFirstThenDeadline') + '\n' +
     extractFn(SRC, 'activityInRange') + '\n' +
     extractFn(SRC, 'buildActivitiesFeed') + '\n' +
-    'return { state: state, mapOdooActivity, parseLeadName, stripHtml, buildActivitiesFeed };'
+    'return { state: state, mapOdooActivity, parseLeadName, stripHtml, buildActivitiesFeed, isCallActivity };'
 )();
 
 let passed = 0;

@@ -41,6 +41,9 @@ const mod = new Function(
     'function log() {}' + '\n' +
     extractVar(SRC, 'SUGGESTION_ACTIVITY_LOOKBACK_DAYS') + '\n' +
     extractVar(SRC, 'SUGGESTION_ACTIVITY_LOOKAHEAD_DAYS') + '\n' +
+    // v1.49.6: buildTodayFeed reusa isCallActivity (en el tie-break llamadas-primero); extraer
+    //   la constante de keywords + la función para el harness.
+    extractVar(SRC, 'CALL_TYPE_KEYWORDS') + '\n' +
     extractFn(SRC, 'pad2') + '\n' +
     extractFn(SRC, 'todayISO') + '\n' +
     extractFn(SRC, 'addDaysISO') + '\n' +
@@ -51,8 +54,9 @@ const mod = new Function(
     extractFn(SRC, 'buildTodayRows') + '\n' +
     extractFn(SRC, 'isTodayOrOverdueActivity') + '\n' +
     extractFn(SRC, 'todayEffectiveDeadline') + '\n' +
+    extractFn(SRC, 'isCallActivity') + '\n' +
     extractFn(SRC, 'buildTodayFeed') + '\n' +
-    'return { state, todayISO, addDaysISO, buildTodayRows, suppressSuggestionsWithActivity, isTodayOrOverdueActivity, todayEffectiveDeadline, buildTodayFeed };'
+    'return { state, todayISO, addDaysISO, buildTodayRows, suppressSuggestionsWithActivity, isTodayOrOverdueActivity, todayEffectiveDeadline, isCallActivity, buildTodayFeed };'
 )();
 
 let passed = 0;
