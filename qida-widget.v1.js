@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.50.0
+ * QIDA ASSISTANT v1.50.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,17 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.50.1 (2026-06-10 — fix: render del draft de /recommendation/draft):
+ *   - BUG: draftPayloadFromResp leía `resp.draft_text` (shape viejo, singular) pero el backend
+ *     Sprint 2 — ya en prod — devuelve `drafts: [{name, text, length, tone_style, char_count}]`.
+ *     Como `draft_text` no existe en la response, `text` quedaba '' y SIEMPRE caía al fallback
+ *     "No vino borrador del servicio…", aunque el backend respondiera 200 con un draft válido.
+ *   - FIX (quirúrgico, solo draftPayloadFromResp): leer `resp.drafts[]`, mapear cada draft a una
+ *     variante {name,label,text,length,tone_style} y reusar el render kind:'variants' existente
+ *     (source:'draft' -> "Esta me gusta más" -> pick-variant -> Copiar al WhatsApp). Maneja 1 o N
+ *     drafts. Compat: si llega el shape viejo `draft_text`, se sigue soportando.
+ *   - SIN cambios al backend (su contrato manda) ni al resto del flujo del asistente.
  *
  * Cambios v1.50.0 (2026-06-09 — Chat Agent Sprint 2: 4 tipos de mensaje + lazy generation):
  *   - Reemplazo del bloque "ASISTENTE IA" del detalle. Antes: chips genéricos "Material marketing",
@@ -1850,7 +1861,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.50.0';
+    var VERSION = '1.50.1';
     var CONFIG = null;
 
     // ============================================================
@@ -10753,8 +10764,27 @@
     //   "Esta me gusta más" -> pick-variant -> refine -> Copiar al WhatsApp. Cero rewrite del
     //   flujo de cómo se inserta el texto en el textarea de WhatsApp.
     function draftPayloadFromResp(resp, meta) {
-        var text = (resp && resp.draft_text) || '';
-        if (!text) {
+        // v1.50.1 fix: el backend /draft (Sprint 2) devuelve `drafts: [{name,text,length,tone_style,...}]`,
+        //   NO `draft_text` (shape viejo, inexistente en la response actual). Antes `text` quedaba ''
+        //   y SIEMPRE caía al fallback aunque el backend respondiera 200 con un draft válido.
+        var drafts = (resp && resp.drafts) || [];
+        if (!drafts.length && resp && resp.draft_text) {
+            // Compat: shape viejo de variante única en draft_text.
+            drafts = [{ name: resp.type || '', text: resp.draft_text }];
+        }
+        var variants = [];
+        for (var i = 0; i < drafts.length; i++) {
+            var d = drafts[i];
+            if (!d || !d.text) continue;
+            variants.push({
+                name: d.name || resp.type || '',
+                label: meta.label,
+                text: d.text,
+                length: d.length || 'medium',
+                tone_style: d.tone_style || ''
+            });
+        }
+        if (!variants.length) {
             return { kind: 'free', text: 'No vino borrador del servicio. Probá otro tipo o redactá manualmente.' };
         }
         var intro = (resp && resp.rationale) ? resp.rationale : ('Propuesta para ' + meta.label.toLowerCase() + ':');
@@ -10762,13 +10792,7 @@
             kind: 'variants',
             source: 'draft',
             intro: intro,
-            variants: [{
-                name: resp.type || '',
-                label: meta.label,
-                text: text,
-                length: 'medium',
-                tone_style: ''
-            }]
+            variants: variants
         };
     }
 
