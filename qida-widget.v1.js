@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.50.1
+ * QIDA ASSISTANT v1.50.2
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,19 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.50.2 (2026-06-10 — fix: propagación de drafts[] en fetchRecommendationDraft):
+ *   - BUG: el #41 (v1.50.1) arregló draftPayloadFromResp para leer `resp.drafts[]`, pero el fix
+ *     quedó incompleto: una capa más arriba, fetchRecommendationDraft() recibe la response del
+ *     backend (que SÍ trae `drafts: [{name, text, ...}]`) y construía un objeto nuevo que copiaba
+ *     solo el campo viejo `draft_text` (inexistente en la response actual → quedaba '') y DESCARTABA
+ *     el array `drafts`. Así draftPayloadFromResp recibía un objeto sin `drafts`, caía a
+ *     variants.length === 0 y SEGUÍA mostrando "No vino borrador del servicio…" pese al 200 válido.
+ *   - FIX (quirúrgico, 1 línea): en el bloque `if (res.ok)` de fetchRecommendationDraft, propagar
+ *     `drafts: (data && data.drafts) || []`. El resto de la función no cambia; el path 404
+ *     (fallback a /recommendation que arma draft_text) sigue intacto y draftPayloadFromResp ya
+ *     tiene compat para leer draft_text cuando drafts viene vacío.
+ *   - SIN cambios al backend ni a draftPayloadFromResp (ya correcto del #41).
  *
  * Cambios v1.50.1 (2026-06-10 — fix: render del draft de /recommendation/draft):
  *   - BUG: draftPayloadFromResp leía `resp.draft_text` (shape viejo, singular) pero el backend
@@ -1861,7 +1874,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.50.1';
+    var VERSION = '1.50.2';
     var CONFIG = null;
 
     // ============================================================
@@ -6959,6 +6972,7 @@
                     log('recommendation/draft ok', { lead: numericId, type: normType, ms: Date.now() - t0 });
                     return {
                         type: normType,
+                        drafts: (data && data.drafts) || [],
                         draft_text: (data && data.draft_text) || '',
                         signature_format_used: (data && data.signature_format_used) || '',
                         rationale: (data && data.rationale) || '',
