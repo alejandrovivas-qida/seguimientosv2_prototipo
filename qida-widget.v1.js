@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.50.2
+ * QIDA ASSISTANT v1.51.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,30 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.51.0 (2026-06-10 — botón "Material marketing" cableado al backend real /materials):
+ *   - ANTES: handleAiChip('material-marketing') devolvía 3 items MOCK hardcodeados
+ *     (getAiPromptResponse -> MOCK_AI_RESPONSES['material-marketing']: qida.es/blog, /, /servicios).
+ *     No veía el lead, no pegaba al backend. El motor real de KB (embeddings + cosine) existía pero
+ *     el botón nunca se cableó (TODO[ai] histórico: "replace with AIService.findMaterial").
+ *   - AHORA (solo cuando useRealApi()): el botón pega a POST /api/leads/{id}/materials (endpoint
+ *     dedicado nuevo, UNGATED — a diferencia de /assistant/chat que está gateado por mode). Flujo
+ *     async idéntico al de los tipos de mensaje: burbuja loading -> material | error+Reintentar.
+ *     Render kind:'material' enriquecido con `reason` (por qué ese material para este caso).
+ *   - Material EN FUNCIÓN DEL LEAD: el backend arma la query desde el análisis persistido del lead
+ *     (short/long_description del recompute). Más contexto = búsqueda más específica; menos = más
+ *     genérica. La AF no elige query: el sistema la deriva del caso.
+ *   - PEDIR ALGO ESPECÍFICO: cada panel de material trae un input "¿Buscás algo más específico?".
+ *     Enter o "Buscar" dispara una nueva búsqueda con ESE texto (req on-demand) contra el mismo
+ *     endpoint ungated. Empuja una burbuja nueva (user = la query) sin perder las anteriores.
+ *   - MOCK INTACTO: en index.html / demo (useRealApi()===false) el botón sigue mostrando los 3 items
+ *     mock de siempre (cero regresión). El input de búsqueda solo aparece en resultados reales
+ *     (payload.materialSearch). 'sugerir-mensaje' y los 4 tipos de mensaje no se tocaron.
+ *   - Defaults que tomé: k=3 resultados (igual que /recommendation); botón compartir reusa
+ *     ai-share-material (chip de adjunto existente, NO auto-envía — principio rector intacto);
+ *     copy del intro varía por query_source (explícita / caso / genérica).
+ *   - SIN cambios al gate del chat libre (/assistant/chat sigue gateado por mode; relajarlo es una
+ *     escritura prod-DB separada, fuera de scope de este cambio).
  *
  * Cambios v1.50.2 (2026-06-10 — fix: propagación de drafts[] en fetchRecommendationDraft):
  *   - BUG: el #41 (v1.50.1) arregló draftPayloadFromResp para leer `resp.drafts[]`, pero el fix
@@ -1874,7 +1898,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.50.2';
+    var VERSION = '1.51.0';
     var CONFIG = null;
 
     // ============================================================
@@ -4089,6 +4113,12 @@
             '.qida-aichat-mat-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;}',
             '.qida-aichat-mat-share{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#0F6E56;color:#fff;border:0;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;transition:background .15s;}',
             '.qida-aichat-mat-share:hover{background:#143C32;}',
+            /* v1.51: buscador de material on-demand (req: pedir algo específico) */
+            '.qida-aichat-mat-search{display:flex;align-items:center;gap:6px;margin-top:8px;}',
+            '.qida-aichat-mat-search-input{flex:1;min-width:0;background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:12px;color:var(--s800);outline:none;}',
+            '.qida-aichat-mat-search-input:focus{border-color:#0F6E56;}',
+            '.qida-aichat-mat-search-btn{display:inline-flex;align-items:center;gap:5px;padding:7px 12px;background:#fff;color:#0F6E56;border:0.5px solid var(--s300);border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;white-space:nowrap;}',
+            '.qida-aichat-mat-search-btn:hover{background:var(--s50);}',
             /* v1.23: banner de error de envio de WhatsApp + Reintentar */
             '.qida-wa-send-error{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;padding:8px 10px;border:0.5px solid #F0C9C0;border-radius:8px;background:#FCF4F2;font-size:12px;color:#9A3A28;}',
             '.qida-aichat-input{display:flex;align-items:flex-end;gap:8px;background:var(--s50);border:0.5px solid var(--s300);border-radius:8px;padding:8px 12px;}',
@@ -7006,6 +7036,46 @@
         });
     }
 
+    // v1.51: pega a POST /api/leads/{id}/materials (endpoint dedicado, UNGATED). `query` opcional:
+    //   si la AF pidió algo específico ("cuidados nocturnos") se manda; si es null/'', el backend
+    //   arma la query desde el análisis persistido del lead. Mismo molde que fetchRecommendationDraft.
+    function fetchMaterials(leadId, query) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) {
+            return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        }
+        var headers = afEmailHeaders();
+        headers['Content-Type'] = 'application/json';
+        if (!headers['X-AF-Email']) {
+            return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la petición.', 'NO_AF_EMAIL', 0));
+        }
+        var body = {};
+        var q = (query || '').trim();
+        if (q) body.query = q;  // sin query -> el backend deriva del análisis del lead
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/materials';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) {
+                    log('materials ok', { lead: numericId, ms: Date.now() - t0, source: (data && data.query_source) || '', n: (data && data.materials && data.materials.length) || 0 });
+                    return {
+                        materials: (data && data.materials) || [],
+                        query_used: (data && data.query_used) || '',
+                        query_source: (data && data.query_source) || ''
+                    };
+                }
+                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || null;
+                log('materials error', { lead: numericId, status: res.status, code: code, ms: Date.now() - t0 });
+                throw makeApiError(httpErrorCopy(res.status, serverMsg), code, res.status);
+            });
+        });
+    }
+
     // ============================================================
     // v1.21: helper genérico de fetch JSON + copy de error (3 wires nuevos)
     // ============================================================
@@ -7872,8 +7942,9 @@
         }
         html += '</div>';
 
-        // Material marketing — chip separado en su propia fila, sin destacado. Sigue el handler
-        //   existente (handleAiChip('material-marketing')) — mock items con cards "Compartir".
+        // Material marketing — chip separado en su propia fila, sin destacado. handleAiChip
+        //   ('material-marketing'): v1.51 pega al backend real (/materials, ungated) cuando
+        //   useRealApi(); en mock (index.html) muestra los 3 items mock con cards "Compartir".
         html += '<div class="qida-aichat-chips">'
             + '<button class="qida-aichat-chip" data-action="ai-chip" data-id="material-marketing">'
             + icon('book', 12) + ' Material marketing'
@@ -7978,13 +8049,25 @@
                 var it = payload.items[j];
                 // v1.33: "Adjuntar" ahora reusa ai-share-material (pushea el chip arriba del textarea,
                 //   mecánica v1.26) en vez del toast mock. "Ver material" abre el url en otra pestaña.
+                // v1.51: línea `reason` (por qué ese material para este caso) cuando el backend la trae.
+                //   Aditiva: los items mock no tienen reason -> no se dibuja (cero cambio visual en demo).
                 html += '<div class="qida-aichat-mat-card">'
                     + '<div class="qida-aichat-mat-title">' + esc(it.title) + '</div>'
-                    + '<div class="qida-aichat-mat-desc">' + esc(it.desc) + '</div>'
+                    + (it.desc ? '<div class="qida-aichat-mat-desc">' + esc(it.desc) + '</div>' : '')
+                    + (it.reason ? '<div class="qida-aichat-mat-reason">' + esc(it.reason) + '</div>' : '')
                     + '<div class="qida-aichat-mat-actions">'
                         + (it.url ? '<button class="qida-aichat-mat-action" data-action="ai-view-material" data-url="' + esc(it.url) + '">' + icon('file', 10) + ' Ver material</button>' : '')
                         + '<button class="qida-aichat-mat-share" data-action="ai-share-material" data-title="' + esc(it.title) + '" data-url="' + esc(it.url || '') + '">' + icon('paperclip', 10) + ' ' + esc(it.action) + '</button>'
                     + '</div>'
+                + '</div>';
+            }
+            // v1.51: input de búsqueda on-demand (req: "pedir material de algo específico"). Solo en
+            //   resultados reales del backend (payload.materialSearch); el mock no lo trae. Enter
+            //   (data-input) o el botón (data-action) disparan ai-material-search con ESE texto.
+            if (payload.materialSearch) {
+                html += '<div class="qida-aichat-mat-search">'
+                    + '<input type="text" class="qida-aichat-mat-search-input" data-input="ai-material-search" placeholder="¿Buscás algo más específico? Ej: cuidados nocturnos" />'
+                    + '<button class="qida-aichat-mat-search-btn" data-action="ai-material-search">' + icon('search', 11) + ' Buscar</button>'
                 + '</div>';
             }
         } else if (payload.kind === 'approaches' && payload.approaches) {
@@ -8060,9 +8143,15 @@
             // v1.20/v1.21: error claro + Reintentar. retry:'chat' reusa el último mensaje del chat;
             //   por defecto ('suggest') reintenta la recomendación. data-id = lead de la burbuja.
             var leadIdForRetry = esc(lead ? lead.id : (state.currentLeadId || ''));
-            var retryBtn = (payload.retry === 'chat')
-                ? '<button class="qida-aichat-retry" data-action="ai-retry-chat" data-id="' + leadIdForRetry + '" data-msg="' + esc(payload.message || '') + '">' + icon('refresh-cw', 11) + ' Reintentar</button>'
-                : '<button class="qida-aichat-retry" data-action="ai-retry-suggest" data-id="' + leadIdForRetry + '">' + icon('refresh-cw', 11) + ' Reintentar</button>';
+            var retryBtn;
+            if (payload.retry === 'chat') {
+                retryBtn = '<button class="qida-aichat-retry" data-action="ai-retry-chat" data-id="' + leadIdForRetry + '" data-msg="' + esc(payload.message || '') + '">' + icon('refresh-cw', 11) + ' Reintentar</button>';
+            } else if (payload.retry === 'material') {
+                // v1.51: reintenta la búsqueda de material reusando la misma query (vacía = derivar del lead).
+                retryBtn = '<button class="qida-aichat-retry" data-action="ai-retry-material" data-id="' + leadIdForRetry + '" data-query="' + esc(payload._query || '') + '">' + icon('refresh-cw', 11) + ' Reintentar</button>';
+            } else {
+                retryBtn = '<button class="qida-aichat-retry" data-action="ai-retry-suggest" data-id="' + leadIdForRetry + '">' + icon('refresh-cw', 11) + ' Reintentar</button>';
+            }
             html += '<div class="qida-aichat-error">'
                 + '<p class="qida-aichat-error-text">' + icon('alert-triangle', 13) + ' ' + esc(payload.text || 'Ocurrió un error.') + '</p>'
                 + retryBtn
@@ -9876,6 +9965,20 @@
             case 'ai-retry-chat':
                 retryChat(id || state.currentLeadId, target.getAttribute('data-msg') || '');
                 return;
+            // v1.51: reintentar la búsqueda de material (reusa la query del intento fallido; vacía
+            //   = derivar del análisis del lead).
+            case 'ai-retry-material':
+                retryMaterial(id || state.currentLeadId, target.getAttribute('data-query') || '');
+                return;
+            // v1.51: búsqueda de material on-demand desde el input del panel (req: "pedir material de
+            //   algo específico"). Lee el input hermano del botón; con texto -> nueva búsqueda explícita.
+            case 'ai-material-search':
+                var matSearchInput = target.parentNode ? target.parentNode.querySelector('.qida-aichat-mat-search-input') : null;
+                var matSearchQuery = matSearchInput ? (matSearchInput.value || '').trim() : '';
+                if (!matSearchQuery) { if (matSearchInput) matSearchInput.focus(); return; }
+                var matSearchLead = currentLead();
+                if (matSearchLead) startMaterialFlow(matSearchLead, matSearchQuery);
+                return;
             // v1.8: la AF elige una variante (sugerir mensaje o reactivar) -> push al chat
             //   como user message + respuesta IA tipo refine. Material marketing mantiene su
             //   propio handler ai-material-action (sin tocar).
@@ -10643,11 +10746,18 @@
         var lead = currentLead();  // v1.29: cache Odoo + fallback mock (antes getLead -> null en leads reales)
         if (!lead) return;
 
-        // v1.15 (Pieza A) / v1.20: SOLO 'sugerir-mensaje' cambia su origen -> /recommendation.
-        //   Ahora es ASINCRONO (loading -> result | error+retry) porque puede salir al backend real.
-        //   'material-marketing' y 'reactivar-sin-presionar' quedan EXACTAMENTE igual (sincronos).
+        // v1.15 (Pieza A) / v1.20: 'sugerir-mensaje' sale a /recommendation (async, loading ->
+        //   result | error+retry).
         if (promptId === 'sugerir-mensaje') {
             startSuggestFlow(lead);
+            return;
+        }
+
+        // v1.51: 'material-marketing' contra el backend real (POST /materials, ungated). Solo cuando
+        //   useRealApi(): en mock (index.html) cae al path síncrono de abajo (getAiPromptResponse),
+        //   sin regresión. 'reactivar-sin-presionar' sigue siendo mock síncrono siempre.
+        if (promptId === 'material-marketing' && useRealApi()) {
+            startMaterialFlow(lead, null);
             return;
         }
 
@@ -10715,6 +10825,78 @@
         }
         var lead = getLead(leadId);
         if (lead) startSuggestFlow(lead);
+    }
+
+    // v1.51: mapea la response de /materials al payload kind:'material' del render. PURA.
+    //   - intro varía por query_source (explícita / derivada del caso / genérica).
+    //   - cada item: {title, desc(snippet), reason, action(label), url}.
+    //   - materialSearch:true -> el render agrega el input "buscar algo más específico" (req on-demand).
+    //   - sin resultados: igual devuelve kind:'material' (items:[]) para conservar el input de búsqueda.
+    function materialPayloadFromResp(resp) {
+        var mats = (resp && resp.materials) || [];
+        var items = [];
+        for (var i = 0; i < mats.length; i++) {
+            var m = mats[i] || {};
+            items.push({
+                title: m.title || 'Material',
+                desc: m.snippet || '',
+                reason: m.reason || '',
+                action: 'Compartir con el lead',
+                url: m.url || ''
+            });
+        }
+        var src = resp && resp.query_source;
+        var intro;
+        if (!items.length) {
+            intro = 'No encontré material puntual para este caso. Probá una búsqueda más específica:';
+        } else if (src === 'explicit') {
+            intro = 'Material para tu búsqueda:';
+        } else if (src === 'generic') {
+            intro = 'Material general de Qida:';
+        } else {
+            intro = 'Material útil para este caso:';
+        }
+        return { kind: 'material', intro: intro, items: items, materialSearch: true };
+    }
+
+    // v1.51: arranca el flujo de "Material marketing" contra el backend real. `query` null/''
+    //   => el backend deriva del análisis del lead; con texto => búsqueda explícita (req on-demand).
+    //   Empuja user msg (la query o "Material marketing") + burbuja loading y dispara el fetch.
+    function startMaterialFlow(lead, query) {
+        var q = (query || '').trim();
+        var userLabel = q || 'Material marketing';
+        pushAiChat(lead.id, userLabel, { kind: 'loading', text: 'Buscando material…' });
+        state.aiChatDraft = '';
+        var hist = state.aiChatHistory[lead.id];
+        driveMaterialBubble(hist[hist.length - 1], lead.id, q);
+    }
+
+    // v1.51: maneja el ciclo loading -> material | error+retry de UNA burbuja de material.
+    //   Reusado por startMaterialFlow (primer pedido / búsqueda explícita) y retryMaterial.
+    function driveMaterialBubble(bubble, leadId, query) {
+        bubble.payload = { kind: 'loading', text: 'Buscando material…' };
+        state.__aiNeedsScroll = true;
+        rerenderContent();
+        return fetchMaterials(leadId, query).then(function (resp) {
+            bubble.payload = materialPayloadFromResp(resp);
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        }).catch(function (err) {
+            log('fetchMaterials failed', err && (err.code || err.message));
+            bubble.payload = { kind: 'error', text: (err && err.userMessage) || 'No se pudo buscar material. Reintentá.', retry: 'material', _query: (query || '') };
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        });
+    }
+
+    // v1.51: Reintentar la búsqueda de material reusando la última burbuja IA del lead.
+    function retryMaterial(leadId, query) {
+        var hist = (state.aiChatHistory && state.aiChatHistory[leadId]) || [];
+        for (var i = hist.length - 1; i >= 0; i--) {
+            if (hist[i].from === 'ai') { driveMaterialBubble(hist[i], leadId, query); return; }
+        }
+        var lead = getLead(leadId);
+        if (lead) startMaterialFlow(lead, query);
     }
 
     // v1.50.0: handler del botón de tipo de mensaje (operativa/seguimiento/presentacion/reactivar).
@@ -10957,6 +11139,14 @@
             e.preventDefault();
             e.stopPropagation();
             handleAiChatSend(node.value);
+        } else if (input === 'ai-material-search') {
+            // v1.51: Enter en el buscador de material -> nueva búsqueda explícita (req on-demand).
+            e.preventDefault();
+            e.stopPropagation();
+            var matKbQuery = (node.value || '').trim();
+            if (!matKbQuery) return;
+            var matKbLead = currentLead();
+            if (matKbLead) startMaterialFlow(matKbLead, matKbQuery);
         }
     }
 
