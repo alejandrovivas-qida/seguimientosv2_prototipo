@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.52.0
+ * QIDA ASSISTANT v1.53.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,30 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.53.0 (2026-06-11 — selector del asistente: 4 tipos → 3 botones INICIO · SEGUIMIENTO · CIERRE):
+ *   - El detalle del lead deja de pintar 4 tipos (operativa/seguimiento/presentacion/reactivar) y pasa
+ *     a 3 botones: INICIO · SEGUIMIENTO · CIERRE (var AI_SELECTOR_BUTTONS).
+ *   - SEGUIMIENTO = la sugerencia IA actual, INTACTA: handleAiTypeClick('seguimiento') ->
+ *     fetchRecommendationDraft -> POST /recommendation/draft. Único botón que llama al LLM. Mantiene
+ *     el ✨ "sugerido" (cuando el planner recomienda seguir hoy) y el estado .busy.
+ *   - INICIO / CIERRE = plantillas por AF (destiladas offline, GET /api/me/templates). SIN OpenAI.
+ *     handleAiTemplateClick('inicial'|'cierre') -> fetchTemplates() (cacheada por af_key) -> rellena
+ *     {nombre} con el PRIMER NOMBRE del contacto (lead.contact, NO la persona cuidada) -> mismo card
+ *     editable+copiable de los drafts (kind:'variants', source:'template').
+ *   - Placeholders no resueltos por el backend ({nombre_af} si no vino, {telefono_af}, otros) quedan
+ *     VISIBLES para que la AF los complete. Principio rector intacto: el widget NO envía; la AF copia.
+ *   - Mock (flag-off): MOCK_AF_TEMPLATES (mismo shape { inicial:{text}, cierre:{text} }) para que
+ *     Inicio/Cierre anden en index.html sin backend.
+ *   - Limpieza: operativa/presentacion/reactivar dejan de ser BOTONES (el render usa AI_SELECTOR_BUTTONS;
+ *     AI_TYPE_META reducido a seguimiento). AI_MESSAGE_TYPES queda solo como vocabulario del planner
+ *     (available_types). Removido el mock muerto 'reactivar-sin-presionar' +
+ *     getAiPromptResponse(approaches) + la rama kind:'approaches' de renderAiPayload (no la
+ *     renderizaba ningún chip vivo). 'sugerir-mensaje' y el chip "Material marketing" NO se tocaron.
+ *   - Defaults que tomé: iconos Inicio='file-text', Cierre='check', Seguimiento='handshake' (existentes);
+ *     orden Inicio→Seguimiento→Cierre; caché de plantillas por af_key (invalidada al cambiar de AF en
+ *     setViewingAs, como recommendationCache); el card de plantilla reusa el flujo pick-variant→refine→
+ *     "Copiar al WhatsApp" sin agregar envío. FILENAME y WIDGET_URL sin cambios (no-breaking, sigue v1).
  *
  * Cambios v1.52.0 (2026-06-11 — envía el IA Summary del lead al backend en los 4 fetchers):
  *   - mapLead ahora expone `writeDate` (o.write_date; ya estaba en LEAD_FIELDS pero sin mapear).
@@ -1908,7 +1932,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.52.0';
+    var VERSION = '1.53.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2297,14 +2321,19 @@
                 { label: 'Mas calida',  text: 'Hola {contactName}, como esta {relation} {caredPersonName}? Queria retomar lo que hablamos la semana pasada cuando tengas un momento. Sin prisa.' },
                 { label: 'Mas directa', text: 'Hola {contactName}, sigo a la espera de tu confirmacion sobre el presupuesto que enviamos. Tienes alguna duda que pueda ayudarte a resolver?' }
             ]
-        },
-        'reactivar-sin-presionar': {
-            intro: 'Para reactivar sin presionar, te sugiero:',
-            approaches: [
-                { title: 'Acercamiento humano, sin agenda', rationale: 'El lead lleva varios dias sin responder. Un mensaje sin pedirle nada concreto baja la friccion.', example: 'Hola {contactName}, pensaba en {relation} {caredPersonName} estos dias. Como van las cosas en casa? Sin presion, solo queria saber.' },
-                { title: 'Compartir valor primero',         rationale: 'En lugar de pedir respuesta, ofrecer algo util. Crea reciprocidad sin obligacion.',          example: 'Hola {contactName}, te paso un articulo que escribio una colega sobre cuidados a domicilio. Por si os sirve. Cualquier cosa, aqui estoy.' }
-            ]
         }
+        // v1.53.0: 'reactivar-sin-presionar' (kind:'approaches') removido — era mock muerto: ningún
+        //   chip vivo lo renderizaba y el botón "reactivar" del selector tampoco lo usaba.
+    };
+
+    // v1.53.0: plantillas mock de Inicio/Cierre para cuando el backend no está (index.html /
+    //   useRealApi()===false). Mismo shape que GET /api/me/templates: { inicial:{text}, cierre:{text} }.
+    //   {nombre} lo rellena el widget (primer nombre del contacto); {nombre_af}/{telefono_af} quedan
+    //   como placeholders visibles (en real los rellena/deja el backend) — la AF los completa.
+    //   Nombre MOCK_AF_TEMPLATES para no chocar con el MOCK_TEMPLATES (panel de marketing) removido en v1.6.
+    var MOCK_AF_TEMPLATES = {
+        inicial: { text: 'Hola {nombre}, soy {nombre_af} de Qida (ayuda a domicilio). Te escribo para presentarme y poder ayudarte con el cuidado de tu familiar. ¿Cuándo te viene bien que hablemos unos minutos? Un saludo, {nombre_af}.' },
+        cierre:  { text: 'Hola {nombre}, no quiero molestarte más. Si en el futuro necesitas ayuda con el cuidado de tu familiar, aquí tienes mi contacto ({telefono_af}) y estaré encantada de ayudarte. Un abrazo, {nombre_af}.' }
     };
 
     // ============================================================
@@ -6168,6 +6197,20 @@
             .replace(/\{caredPersonName\}/g, lead.caredPersonName || '');
     }
 
+    // v1.53.0: primer nombre del CONTACTO/decisor (lead.contact) — NUNCA la persona cuidada
+    //   (lead.caredPersonName). Se usa para rellenar {nombre} en las plantillas de Inicio/Cierre.
+    function leadFirstName(lead) {
+        var c = (lead && lead.contact) ? String(lead.contact).trim() : '';
+        if (!c) return '';
+        return c.split(/\s+/)[0];
+    }
+    // Rellena SOLO {nombre} con el primer nombre del contacto. Si no hay nombre fiable, deja
+    //   {nombre} VISIBLE (placeholder > dato adivinado). El resto de placeholders no se tocan.
+    function fillTemplateName(text, lead) {
+        var fn = leadFirstName(lead);
+        return fn ? String(text).replace(/\{nombre\}/g, fn) : String(text);
+    }
+
     // Pad fecha HH:MM al estilo de los timestamps de MOCK_WHATSAPP.
     function nowHHMM() {
         var d = new Date();
@@ -6632,7 +6675,7 @@
         // Devolvemos una copia con kind para que el renderer sepa que formato dibujar.
         if (promptId === 'material-marketing') return { kind: 'material', intro: raw.intro, items: raw.items.slice() };
         if (promptId === 'sugerir-mensaje')    return { kind: 'variants', intro: raw.intro, variants: raw.variants.slice() };
-        if (promptId === 'reactivar-sin-presionar') return { kind: 'approaches', intro: raw.intro, approaches: raw.approaches.slice() };
+        // v1.53.0: 'reactivar-sin-presionar' (kind:'approaches') removido junto con su mock.
         return null;
     }
 
@@ -6731,6 +6774,7 @@
         }
         // El AF efectivo cambió: invalidar caches que dependen de af_key.
         state.recommendationCache = {};
+        state.templatesCache = {};   // v1.53.0: plantillas Inicio/Cierre son por af_key.
         state.draftVariantsLoaded = false;
         // v1.25 (ISSUE A): cambiar de AF cambia X-AF-Email -> los datos del dashboard son de OTRO AF.
         //   1) Si hay un lead abierto, cerrarlo (no tiene sentido bajo otro AF).
@@ -6910,22 +6954,34 @@
         });
     }
 
-    // v1.50.0: tipos de mensaje del Sprint 2 — el planner devuelve uno de estos en tipo_mensaje,
-    //   y el draft endpoint los acepta en su body. Si el backend devuelve algo fuera de esta lista
-    //   (defensive), fallback a 'seguimiento' (más neutro). Orden de visualización en el panel:
-    //   operativa (cuestiones logísticas) -> seguimiento (estado) -> presentacion (intro a Qida) ->
-    //   reactivar (lead dormido). Material marketing NO es un tipo aquí (chip aparte, mock local).
+    // v1.53.0: el selector pasó de 4 tipos a 3 botones (Inicio · Seguimiento · Cierre).
+    //   AI_MESSAGE_TYPES YA NO maneja botones (el render usa AI_SELECTOR_BUTTONS); queda como el
+    //   VOCABULARIO del planner (lo que el backend devuelve en tipo_mensaje / available_types).
+    //   SEGUIMIENTO es el único tipo de mensaje IA visible: handleAiTypeClick siempre pide
+    //   'seguimiento' al /draft. AI_TYPE_META queda reducido a 'seguimiento' (lo consultan
+    //   handleAiTypeClick y normalizeMessageType). El planner puede devolver tipos viejos en
+    //   tipo_mensaje; normalizeMessageType los colapsa a 'seguimiento' (único botón IA), así el ✨
+    //   "sugerido" se pinta sobre Seguimiento cuando la IA recomienda seguir hoy.
     var AI_MESSAGE_TYPES = ['operativa', 'seguimiento', 'presentacion', 'reactivar'];
     var AI_TYPE_META = {
-        operativa:    { label: 'Operativa',    icon: 'phone' },
-        seguimiento:  { label: 'Seguimiento',  icon: 'handshake' },
-        presentacion: { label: 'Presentación', icon: 'file-text' },
-        reactivar:    { label: 'Reactivar',    icon: 'refresh-cw' }
+        seguimiento: { label: 'Seguimiento', icon: 'handshake' }
     };
     function normalizeMessageType(t) {
         if (t && AI_TYPE_META[t]) return t;
         return 'seguimiento';
     }
+
+    // v1.53.0: los 3 botones del selector. 'ia' = Seguimiento (sugerencia IA, intacta);
+    //   'template' = Inicio/Cierre (plantilla por AF, sin LLM, GET /api/me/templates).
+    var AI_SELECTOR_BUTTONS = [
+        { id: 'inicio',      label: 'Inicio',      icon: 'file-text', kind: 'template', template: 'inicial' },
+        { id: 'seguimiento', label: 'Seguimiento', icon: 'handshake', kind: 'ia' },
+        { id: 'cierre',      label: 'Cierre',      icon: 'check',     kind: 'template', template: 'cierre' }
+    ];
+    var TEMPLATE_META = {
+        inicial: { label: 'Inicio' },
+        cierre:  { label: 'Cierre' }
+    };
 
     // v1.50.0: POST /api/leads/{lead_id}/recommendation/plan (chat agent sprint 2).
     //   Devuelve { tipo_mensaje, rationale, available_types, should_followup_today, gate_reason }.
@@ -7900,12 +7956,12 @@
         return infoCard(title, '', collapse);
     }
 
-    // v1.50.0: render de los 4 botones de tipo de mensaje + chip Material marketing aparte.
-    //   El sugerido (state.recommendationPlan[leadId].tipo_mensaje) se pinta en NARANJA QIDA
-    //   con ✨ y el rationale como title= (tooltip nativo desktop). Los otros 3 en estilo
-    //   neutro gris/blanco. Si un draft está _loading, el botón correspondiente queda .busy
-    //   (cursor:wait + opacidad reducida) para feedback. Material marketing en su propia fila
-    //   (chip plano, sin destacado) — es la "biblioteca" de la AF, no un tipo de mensaje.
+    // v1.53.0: render de los 3 botones del selector (Inicio · Seguimiento · Cierre) + chip
+    //   Material marketing aparte. Seguimiento es la sugerencia IA: cuando el planner recomienda
+    //   seguir hoy se pinta en NARANJA QIDA con ✨ y el rationale como title= (tooltip nativo).
+    //   Si un draft/plantilla está _loading, el botón correspondiente queda .busy (cursor:wait +
+    //   opacidad). Inicio/Cierre son plantillas por AF (sin LLM). Material marketing en su propia
+    //   fila (chip plano, sin destacado) — es la "biblioteca" de la AF, no un tipo de mensaje.
     function renderAiTypeButtons(lead) {
         var leadId = lead.id;
         var plan = (state.recommendationPlan && state.recommendationPlan[leadId]) || null;
@@ -7941,26 +7997,39 @@
                 + '</div>';
         }
 
-        // Fila de 4 botones de tipo (flex-wrap si no entran).
+        // v1.53.0: fila de 3 botones — Inicio · Seguimiento · Cierre (flex-wrap si no entran).
+        //   Seguimiento (kind:'ia') conserva el ✨ sugerido + spinner desde recommendationDraft.
+        //   Inicio/Cierre (kind:'template') muestran .busy desde state.templateBusy (sin LLM).
+        var tplBusy = (state.templateBusy && state.templateBusy[leadId]) || {};
         html += '<div class="qida-aichat-typegrid">';
-        for (var i = 0; i < AI_MESSAGE_TYPES.length; i++) {
-            var t = AI_MESSAGE_TYPES[i];
-            var meta = AI_TYPE_META[t];
-            var draftState = drafts[t] || null;
-            var isLoading = !!(draftState && draftState._loading);
-            var isSuggested = (t === suggestedType);
-            var cls = 'qida-aichat-typebtn'
-                + (isSuggested ? ' suggested' : '')
-                + (isLoading ? ' busy' : '');
-            var titleAttr = (isSuggested && rationale) ? ' title="' + esc(rationale) + '"' : '';
-            var disabledAttr = isLoading ? ' disabled' : '';
-            var sparkles = isSuggested ? '<span class="qida-aichat-typebtn-spark" aria-hidden="true">' + icon('sparkles', 11) + '</span>' : '';
-            var spinner = isLoading ? '<span class="qida-spinner qida-aichat-typebtn-spinner" aria-hidden="true"></span>' : '';
-            html += '<button class="' + cls + '" data-action="ai-type-btn" data-type="' + esc(t) + '"' + titleAttr + disabledAttr + '>'
-                + (spinner || icon(meta.icon, 12))
-                + ' <span class="qida-aichat-typebtn-label">' + esc(meta.label) + '</span>'
-                + sparkles
-                + '</button>';
+        for (var i = 0; i < AI_SELECTOR_BUTTONS.length; i++) {
+            var b = AI_SELECTOR_BUTTONS[i];
+            if (b.kind === 'ia') {
+                // SEGUIMIENTO: comportamiento actual intacto (handleAiTypeClick -> /draft).
+                var segState = drafts['seguimiento'] || null;
+                var segLoading = !!(segState && segState._loading);
+                var isSeg = (suggestedType === 'seguimiento');
+                var segCls = 'qida-aichat-typebtn' + (isSeg ? ' suggested' : '') + (segLoading ? ' busy' : '');
+                var segTitle = (isSeg && rationale) ? ' title="' + esc(rationale) + '"' : '';
+                var segDisabled = segLoading ? ' disabled' : '';
+                var segSpark = isSeg ? '<span class="qida-aichat-typebtn-spark" aria-hidden="true">' + icon('sparkles', 11) + '</span>' : '';
+                var segSpin = segLoading ? '<span class="qida-spinner qida-aichat-typebtn-spinner" aria-hidden="true"></span>' : '';
+                html += '<button class="' + segCls + '" data-action="ai-type-btn" data-type="seguimiento"' + segTitle + segDisabled + '>'
+                    + (segSpin || icon(b.icon, 12))
+                    + ' <span class="qida-aichat-typebtn-label">' + esc(b.label) + '</span>'
+                    + segSpark
+                    + '</button>';
+            } else {
+                // INICIO / CIERRE: plantilla por AF (handleAiTemplateClick -> /api/me/templates).
+                var tLoading = !!tplBusy[b.template];
+                var tCls = 'qida-aichat-typebtn' + (tLoading ? ' busy' : '');
+                var tDisabled = tLoading ? ' disabled' : '';
+                var tSpin = tLoading ? '<span class="qida-spinner qida-aichat-typebtn-spinner" aria-hidden="true"></span>' : '';
+                html += '<button class="' + tCls + '" data-action="ai-template-btn" data-template="' + esc(b.template) + '"' + tDisabled + '>'
+                    + (tSpin || icon(b.icon, 12))
+                    + ' <span class="qida-aichat-typebtn-label">' + esc(b.label) + '</span>'
+                    + '</button>';
+            }
         }
         html += '</div>';
 
@@ -8039,7 +8108,7 @@
                 + chipsHtml
             + '</div>';
     }
-    // Render del payload de un mensaje IA segun su tipo (variants / material / approaches / free / refine).
+    // Render del payload de un mensaje IA segun su tipo (variants / material / free / refine).
     // v1.8: el boton de variantes y approaches pasa de "Usar este mensaje" (data-action="ai-use-message")
     //   a "Esta me gusta mas" (data-action="ai-pick-variant" + data-label) para activar el flujo
     //   conversacional refine. Material marketing queda intacto.
@@ -8090,17 +8159,6 @@
                 html += '<div class="qida-aichat-mat-search">'
                     + '<input type="text" class="qida-aichat-mat-search-input" data-input="ai-material-search" placeholder="¿Buscás algo más específico? Ej: cuidados nocturnos" />'
                     + '<button class="qida-aichat-mat-search-btn" data-action="ai-material-search">' + icon('search', 11) + ' Buscar</button>'
-                + '</div>';
-            }
-        } else if (payload.kind === 'approaches' && payload.approaches) {
-            for (var k = 0; k < payload.approaches.length; k++) {
-                var ap = payload.approaches[k];
-                var resolvedEx = resolveAiPlaceholders(ap.example, lead);
-                html += '<div class="qida-aichat-variant">'
-                    + '<div class="qida-aichat-variant-label">' + icon('sparkles', 10) + ' ' + esc(ap.title) + '</div>'
-                    + '<p class="qida-aichat-rationale">' + esc(ap.rationale) + '</p>'
-                    + '<p class="qida-aichat-variant-text">' + esc(resolvedEx) + '</p>'
-                    + '<button class="qida-aichat-variant-action" data-action="ai-pick-variant" data-label="' + esc(ap.title) + '" data-text="' + esc(resolvedEx) + '">' + icon('arrowRight', 11) + ' Esta me gusta mas</button>'
                 + '</div>';
             }
         } else if (payload.kind === 'refine' && payload.text) {
@@ -8171,6 +8229,9 @@
             } else if (payload.retry === 'material') {
                 // v1.51: reintenta la búsqueda de material reusando la misma query (vacía = derivar del lead).
                 retryBtn = '<button class="qida-aichat-retry" data-action="ai-retry-material" data-id="' + leadIdForRetry + '" data-query="' + esc(payload._query || '') + '">' + icon('refresh-cw', 11) + ' Reintentar</button>';
+            } else if (payload.retry === 'template') {
+                // v1.53.0: reintenta la plantilla Inicio/Cierre (data-which = inicial|cierre).
+                retryBtn = '<button class="qida-aichat-retry" data-action="ai-retry-template" data-which="' + esc(payload._which || '') + '">' + icon('refresh-cw', 11) + ' Reintentar</button>';
             } else {
                 retryBtn = '<button class="qida-aichat-retry" data-action="ai-retry-suggest" data-id="' + leadIdForRetry + '">' + icon('refresh-cw', 11) + ' Reintentar</button>';
             }
@@ -9966,10 +10027,16 @@
             case 'ai-chip':
                 handleAiChip(id);
                 return;
-            // v1.50.0: chat agent sprint 2 — botón de tipo de mensaje (operativa / seguimiento /
-            //   presentacion / reactivar). Dispara la generación lazy del draft.
+            // v1.53.0: botón SEGUIMIENTO (sugerencia IA). Dispara la generación lazy del draft.
             case 'ai-type-btn':
                 handleAiTypeClick(target.getAttribute('data-type'));
+                return;
+            // v1.53.0: botones INICIO / CIERRE — plantilla por AF (sin LLM). data-template = inicial|cierre.
+            case 'ai-template-btn':
+                handleAiTemplateClick(target.getAttribute('data-template'));
+                return;
+            case 'ai-retry-template':
+                handleAiTemplateClick(target.getAttribute('data-which'));
                 return;
             // v1.50.0: retry del planner si /plan falla (no-blocking, sólo refresca la sugerencia).
             case 'ai-retry-plan':
@@ -10777,7 +10844,7 @@
 
         // v1.51: 'material-marketing' contra el backend real (POST /materials, ungated). Solo cuando
         //   useRealApi(): en mock (index.html) cae al path síncrono de abajo (getAiPromptResponse),
-        //   sin regresión. 'reactivar-sin-presionar' sigue siendo mock síncrono siempre.
+        //   sin regresión.
         if (promptId === 'material-marketing' && useRealApi()) {
             startMaterialFlow(lead, null);
             return;
@@ -10787,9 +10854,7 @@
         if (!resp) return;
 
         // El "user message" del chip usa la label del chip como texto visible.
-        var label = (promptId === 'material-marketing') ? 'Material marketing'
-                  : (promptId === 'reactivar-sin-presionar') ? 'Reactivar sin presionar'
-                  : promptId;
+        var label = (promptId === 'material-marketing') ? 'Material marketing' : promptId;
         pushAiChat(lead.id, label, resp);
         state.aiChatDraft = '';
         rerenderContent();
@@ -11012,6 +11077,77 @@
             intro: intro,
             variants: variants
         };
+    }
+
+    // v1.53.0: trae las plantillas Inicial/Cierre de la AF logueada. Cacheadas por af_key (como
+    //   otros recursos /me/*). useRealApi() -> GET /api/me/templates (X-AF-Email vía apiFetchJson);
+    //   flag OFF -> MOCK_AF_TEMPLATES (para que Inicio/Cierre anden en index.html sin backend).
+    //   El backend ya interpola {nombre_af}; el resto de placeholders viene visible.
+    function fetchTemplates() {
+        var afKey = resolveAfKey();
+        if (!state.templatesCache) state.templatesCache = {};
+        if (state.templatesCache[afKey]) return Promise.resolve(state.templatesCache[afKey]);
+        var p = useRealApi()
+            ? apiFetchJson('GET', '/api/me/templates', { noun: 'plantillas' })
+            : Promise.resolve(MOCK_AF_TEMPLATES);
+        return p.then(function (tpls) {
+            var norm = { inicial: (tpls && tpls.inicial) || null, cierre: (tpls && tpls.cierre) || null };
+            state.templatesCache[afKey] = norm;
+            return norm;
+        });
+    }
+
+    // v1.53.0: handler de los botones de plantilla (Inicio/Cierre). NO llama al LLM: trae la
+    //   plantilla destilada de la AF, rellena {nombre} con el primer nombre del contacto y la
+    //   muestra en el MISMO card editable+copiable de los drafts (kind:'variants', source:'template'
+    //   -> pick-variant -> refine -> "Copiar al WhatsApp", sin envío). Placeholders no resueltos
+    //   ({telefono_af}, {nombre_af} si no vino del backend, otros) quedan visibles para la AF.
+    function handleAiTemplateClick(which) {
+        var lead = currentLead();
+        if (!lead) return;
+        var meta = TEMPLATE_META[which];
+        if (!meta) return;
+        var leadId = lead.id;
+        if (!state.templateBusy) state.templateBusy = {};
+        if (!state.templateBusy[leadId]) state.templateBusy[leadId] = {};
+        if (state.templateBusy[leadId][which]) return;  // ya en vuelo, ignorar doble-click
+
+        pushAiChat(leadId, meta.label, { kind: 'loading', text: 'Preparando ' + meta.label.toLowerCase() + '…' });
+        state.templateBusy[leadId][which] = true;
+        state.aiChatDraft = '';
+        var hist = state.aiChatHistory[leadId];
+        var bubble = hist[hist.length - 1];
+        state.__aiNeedsScroll = true;
+        rerenderContent();
+
+        fetchTemplates().then(function (tpls) {
+            if (state.templateBusy[leadId]) state.templateBusy[leadId][which] = false;
+            if (state.currentLeadId !== leadId) return;
+            var tpl = tpls && tpls[which];
+            var text = (tpl && tpl.text) ? String(tpl.text) : '';
+            if (!text) {
+                bubble.payload = { kind: 'free', text: 'No hay plantilla disponible para este caso. Redactá el mensaje manualmente.' };
+                state.__aiNeedsScroll = true;
+                rerenderContent();
+                return;
+            }
+            var filled = fillTemplateName(text, lead);  // {nombre} -> primer nombre del contacto
+            bubble.payload = {
+                kind: 'variants',
+                source: 'template',
+                intro: 'Plantilla de ' + meta.label.toLowerCase() + ' (editá lo que necesites antes de copiar):',
+                variants: [{ label: meta.label, text: filled }]
+            };
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        }).catch(function (err) {
+            log('fetchTemplates failed', err && (err.code || err.message));
+            if (state.templateBusy[leadId]) state.templateBusy[leadId][which] = false;
+            if (state.currentLeadId !== leadId) return;
+            bubble.payload = { kind: 'error', text: suggestErrorCopy(err), retry: 'template', _which: which };
+            state.__aiNeedsScroll = true;
+            rerenderContent();
+        });
     }
 
     // v1.50.0: retry del planner. Limpia el slot del lead y re-dispara loadRecommendationPlan.
