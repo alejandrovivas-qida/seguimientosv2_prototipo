@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.51.0
+ * QIDA ASSISTANT v1.52.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,16 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.52.0 (2026-06-11 — envía el IA Summary del lead al backend en los 4 fetchers):
+ *   - mapLead ahora expone `writeDate` (o.write_date; ya estaba en LEAD_FIELDS pero sin mapear).
+ *   - withLeadIaSummary(leadId, body): adjunta `ia_summary` (lead.iaSummary, HTML crudo de Odoo) +
+ *     `lead_write_date` (lead.writeDate) al body de fetchRecommendationPlan / Draft / Materials /
+ *     AssistantChat. El lead se resuelve del cache de detalle (currentLead); null si no está cargado.
+ *   - Por qué: el backend NO tiene cliente Odoo (CORS lo bloquea), así que el IA Summary viaja en el
+ *     payload. El backend (feat/ia-summary-from-widget-payload) lo usa para la política de selección
+ *     de transcripts + inyección al prompt del planner/writer. Sin cambios de UI. Campos OPCIONALES:
+ *     un backend que no los espere los ignora (deploy del backend va primero).
  *
  * Cambios v1.51.0 (2026-06-10 — botón "Material marketing" cableado al backend real /materials):
  *   - ANTES: handleAiChip('material-marketing') devolvía 3 items MOCK hardcodeados
@@ -1898,7 +1908,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.51.0';
+    var VERSION = '1.52.0';
     var CONFIG = null;
 
     // ============================================================
@@ -3320,6 +3330,7 @@
             urgency: o.urgency || '',
             gender: o.gender || null,  // v1.35: genero estructurado (female/male) -> "Persona cuidada"
             iaSummary: o.ai_description || null,  // v1.38: HTML de Odoo (crm.lead.ai_description); se sanitiza al render. null = sin resumen -> panel oculto.
+            writeDate: o.write_date || null,  // v1.52: write_date de Odoo (proxy de "última actualización del summary"); se manda al backend en los fetchers (withLeadIaSummary).
             urgent: !!o.urgent_service,
             responsableAf: tName(o.user_id) || '',
             plannedStartDate: o.planned_start_date || null,
@@ -6923,6 +6934,17 @@
     //   por default. Permite mergear el widget antes que el backend sin romper a la AF.
     //   Errores no-404 (5xx, red, timeout) se propagan igual que fetchRecommendation -> burbuja
     //   de error con retry.
+    // v1.52: adjunta el IA Summary del lead (HTML crudo) + write_date al `body` de
+    //   los fetchers de recomendación. El backend NO tiene cliente Odoo; consume estos
+    //   campos del payload. Resuelve el lead del cache de detalle (currentLead); si no
+    //   está cargado, manda null -> el backend cae a su fallback. Muta y devuelve `body`.
+    function withLeadIaSummary(leadId, body) {
+        var lead = currentLead(leadId) || {};
+        body.ia_summary = lead.iaSummary || null;
+        body.lead_write_date = lead.writeDate || null;
+        return body;
+    }
+
     function fetchRecommendationPlan(leadId) {
         var numericId = toNumericLeadId(leadId);
         if (!numericId) {
@@ -6935,7 +6957,7 @@
         }
         var url = apiBaseUrl() + '/api/leads/' + numericId + '/recommendation/plan';
         var t0 = Date.now();
-        return fetch(url, { method: 'POST', headers: headers, body: '{}' }).then(function (res) {
+        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(withLeadIaSummary(leadId, {})) }).then(function (res) {
             return res.text().then(function (raw) {
                 var data = null;
                 try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
@@ -6994,7 +7016,7 @@
         var normType = normalizeMessageType(type);
         var url = apiBaseUrl() + '/api/leads/' + numericId + '/recommendation/draft';
         var t0 = Date.now();
-        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify({ type: normType }) }).then(function (res) {
+        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(withLeadIaSummary(leadId, { type: normType })) }).then(function (res) {
             return res.text().then(function (raw) {
                 var data = null;
                 try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
@@ -7054,7 +7076,7 @@
         if (q) body.query = q;  // sin query -> el backend deriva del análisis del lead
         var url = apiBaseUrl() + '/api/leads/' + numericId + '/materials';
         var t0 = Date.now();
-        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(body) }).then(function (res) {
+        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(withLeadIaSummary(leadId, body)) }).then(function (res) {
             return res.text().then(function (raw) {
                 var data = null;
                 try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
@@ -7488,7 +7510,7 @@
         var numericId = toNumericLeadId(leadId);
         if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
         return apiFetchJson('POST', '/api/leads/' + numericId + '/assistant/chat',
-            { body: { message: message, session_id: sessionId || null }, noun: 'el asistente de este lead' }
+            { body: withLeadIaSummary(leadId, { message: message, session_id: sessionId || null }), noun: 'el asistente de este lead' }
         );
     }
 
