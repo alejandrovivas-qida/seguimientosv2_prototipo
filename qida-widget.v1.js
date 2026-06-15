@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.53.0
+ * QIDA ASSISTANT v1.54.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,30 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.54.0 (2026-06-15 — plantillas Inicio/Cierre EDITABLES por AF + personalización ligera al lead):
+ *   - "Armá tu asistente" deja de editar draft-variants (length/tone, muertos con el writer de 2 pasos)
+ *     y pasa a ser el EDITOR de las 2 plantillas de la AF: textareas Inicio + Cierre (apiladas) con
+ *     chips de variables ({nombre}, {nombre_af}, {telefono_af}) y "Restaurar genérica" por plantilla.
+ *     Carga GET /api/me/templates?raw=true (CRUDO: no interpola {nombre_af}, así no se hornea el
+ *     placeholder al guardar) y guarda con PUT /api/me/templates (preserva la metadata del AfTemplate,
+ *     solo pisa el texto). openAgentBuilder/renderAgentBuilder/agentBuilderDirty/ab-save repurposados.
+ *   - Inicio/Cierre dejan de rellenar la plantilla en el cliente: ahora pegan a
+ *     POST /api/leads/{id}/template-draft (handleAiTemplateClick -> fetchTemplateDraft), que devuelve
+ *     la plantilla PERSONALIZADA ligero al lead (nombre del contacto + ≤1 guiño a lo hablado, sin
+ *     reescribir). Mismo flujo async que Seguimiento: burbuja loading -> card editable+copiable
+ *     (kind:'variants', source:'template') -> pick-variant -> "Copiar al WhatsApp", sin envío.
+ *   - Mock (flag-off): el editor lee/escribe MOCK_AF_TEMPLATES; los botones Inicio/Cierre derivan el
+ *     draft de MOCK_AF_TEMPLATES con {nombre} relleno (fallback:true). index.html anda sin backend.
+ *   - Si el personalizador del backend está apagado o el LLM falla, el endpoint devuelve la plantilla
+ *     con el nombre puesto (degrada al comportamiento de v1.53, sin error). Principio rector intacto:
+ *     el widget NO envía; la AF edita y copia.
+ *   - Defaults que tomé: textareas apiladas (no pestañas) + chips de variables + "Restaurar genérica"
+ *     desde la plantilla genérica (MOCK_AF_TEMPLATES); Guardar requiere ambas plantillas no vacías;
+ *     length='medium'/tone='neutral' en el draft de plantilla; "Restaurar genérica" resetea al texto
+ *     genérico de Qida; al guardar se invalida templatesCache. FILENAME y WIDGET_URL sin cambios
+ *     (no-breaking, sigue v1). SIN publicar al Blob (lo hace el orquestador). Código muerto de
+ *     draft-variants (validateVariants/renderVariantRow/DraftService.*DraftVariants) queda sin uso.
  *
  * Cambios v1.53.0 (2026-06-11 — selector del asistente: 4 tipos → 3 botones INICIO · SEGUIMIENTO · CIERRE):
  *   - El detalle del lead deja de pintar 4 tipos (operativa/seguimiento/presentacion/reactivar) y pasa
@@ -1932,7 +1956,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.53.0';
+    var VERSION = '1.54.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2573,6 +2597,14 @@
         agentBuilderLoading: false,
         agentBuilderError: null,
         agentBuilderSaving: false,
+        // v1.54.0: editor de plantillas Inicio/Cierre (repurposa "Armá tu asistente").
+        //   tplDraft: copia de trabajo {inicial,cierre} (solo texto). tplSaved: snapshot guardado
+        //   (dirty-check). tplFull: objetos AfTemplate completos del GET ?raw=true (preserva
+        //   metadata al guardar). tplLoaded: lazy. Plantillas por af_key -> se invalidan en setViewingAs.
+        tplDraft: { inicial: '', cierre: '' },
+        tplSaved: { inicial: '', cierre: '' },
+        tplFull: { inicial: null, cierre: null },
+        tplLoaded: false,
         recommendationCache: {},
 
         // v1.50.0: chat agent sprint 2 — planner + draft separados (lazy generation).
@@ -4629,6 +4661,16 @@
             '.qida-ab-add[disabled]{opacity:.5;cursor:not-allowed;}',
             '.qida-ab-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;padding-top:16px;border-top:0.5px solid var(--s100);}',
             '.qida-btn-primary[disabled]{opacity:.5;cursor:not-allowed;}',
+            /* v1.54.0: editor de plantillas Inicio/Cierre */
+            '.qida-tpl-row{border:0.5px solid var(--s200);border-radius:10px;padding:12px;background:#fff;margin-bottom:12px;}',
+            '.qida-tpl-row.has-error{border-color:#fca5a5;}',
+            '.qida-tpl-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}',
+            '.qida-tpl-restore{background:transparent;border:0;color:var(--qg);font-size:11.5px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:2px 4px;}',
+            '.qida-tpl-restore:hover{text-decoration:underline;}',
+            '.qida-tpl-input{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:9px 11px;font-family:inherit;font-size:13px;line-height:1.5;color:var(--s900);outline:none;width:100%;box-sizing:border-box;resize:vertical;min-height:96px;}',
+            '.qida-tpl-input:focus{border-color:var(--qg);}',
+            '.qida-tpl-vars{font-size:11px;color:var(--s500);margin:6px 0 0;}',
+            '.qida-tpl-chip{background:var(--s100);border:0.5px solid var(--s200);border-radius:5px;padding:1px 5px;font-size:11px;color:var(--s700);font-family:ui-monospace,Menlo,Consolas,monospace;}',
             /* Confirm "¿Descartar cambios?" */
             '.qida-ab-confirm-overlay{position:absolute;inset:0;background:rgba(28,25,23,.35);display:flex;align-items:center;justify-content:center;z-index:20;}',
             '.qida-ab-confirm{background:#fff;border-radius:12px;padding:20px;max-width:320px;width:90%;box-shadow:0 16px 40px rgba(0,0,0,.25);}',
@@ -6776,6 +6818,7 @@
         state.recommendationCache = {};
         state.templatesCache = {};   // v1.53.0: plantillas Inicio/Cierre son por af_key.
         state.draftVariantsLoaded = false;
+        state.tplLoaded = false;     // v1.54.0: el editor recarga las plantillas de la nueva AF.
         // v1.25 (ISSUE A): cambiar de AF cambia X-AF-Email -> los datos del dashboard son de OTRO AF.
         //   1) Si hay un lead abierto, cerrarlo (no tiene sentido bajo otro AF).
         //   2) Forzar loading (dashRows=null + dashMetrics=null) y re-fetch del view activo:
@@ -9190,14 +9233,16 @@
         return out;
     }
     function agentBuilderDirty() {
-        return JSON.stringify(state.draftVariants) !== JSON.stringify(state.draftVariantsSaved);
+        // v1.54.0: dirty del editor de plantillas (texto Inicio/Cierre vs último guardado).
+        return state.tplDraft.inicial !== state.tplSaved.inicial
+            || state.tplDraft.cierre !== state.tplSaved.cierre;
     }
 
     function renderAgentBuilder() {
         // v1.21: estados async del GET de configuración.
         if (state.agentBuilderLoading) {
             return '<div class="qida-ab"><div class="qida-ab-inner">'
-                + '<div class="qida-ab-loading">' + icon('refresh-cw', 14) + ' Cargando tu configuración…</div>'
+                + '<div class="qida-ab-loading">' + icon('refresh-cw', 14) + ' Cargando tus plantillas…</div>'
             + '</div></div>';
         }
         if (state.agentBuilderError) {
@@ -9209,31 +9254,45 @@
             + '</div></div>';
         }
 
-        var variants = state.draftVariants || [];
-        var v = validateVariants(variants);
+        // v1.54.0: editor de las 2 plantillas (Inicio/Cierre). Las textareas son requeridas.
         var dirty = agentBuilderDirty();
         var saving = !!state.agentBuilderSaving;
-        var saveDisabled = (!v.ok || !dirty || saving) ? ' disabled' : '';
-
-        var rowsHtml = '';
-        for (var i = 0; i < variants.length; i++) rowsHtml += renderVariantRow(variants[i], i, v.errors[i]);
-
-        var addDisabled = (variants.length >= 3) ? ' disabled' : '';
-        var generalErr = v.general ? '<p class="qida-ab-general-error">' + esc(v.general) + '</p>' : '';
+        var iniText = state.tplDraft.inicial || '';
+        var cieText = state.tplDraft.cierre || '';
+        var iniEmpty = !iniText.replace(/\s/g, '');
+        var cieEmpty = !cieText.replace(/\s/g, '');
+        var saveDisabled = (iniEmpty || cieEmpty || !dirty || saving) ? ' disabled' : '';
         var saveLabel = saving ? (icon('refresh-cw', 13) + ' Guardando…') : (icon('check', 13) + ' Guardar');
 
         return '<div class="qida-ab">'
             + '<div class="qida-ab-inner">'
-                + '<p class="qida-ab-lead">Configurá de 1 a 3 variantes de borrador. Cuando uses "Sugerir mensaje" en un lead, el asistente propondrá una opción por cada variante. La IA propone; vos editás y enviás.</p>'
-                + '<div class="qida-ab-list">' + rowsHtml + '</div>'
-                + generalErr
-                + '<button class="qida-btn-ghost qida-ab-add" data-action="ab-add-variant"' + addDisabled + '>' + icon('plus', 13) + ' Agregar variante</button>'
+                + '<p class="qida-ab-lead">Editá tus plantillas de <strong>Inicio</strong> y <strong>Cierre</strong>. Cuando las uses en un lead, se personalizan solas (nombre del contacto + un guiño a lo hablado) manteniendo tu estructura y tu voz. La IA propone; vos editás y copiás.</p>'
+                + renderTemplateEditorRow('inicial', 'Inicio', iniText, iniEmpty)
+                + renderTemplateEditorRow('cierre', 'Cierre', cieText, cieEmpty)
                 + '<div class="qida-ab-foot">'
                     + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
                     + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + saveLabel + '</button>'
                 + '</div>'
             + '</div>'
             + (state.agentBuilderConfirmDiscard ? renderDiscardConfirm() : '')
+        + '</div>';
+    }
+
+    // v1.54.0: una fila del editor de plantillas (textarea + chips de variables + restaurar genérica).
+    var TEMPLATE_VARS = ['{nombre}', '{nombre_af}', '{telefono_af}'];
+    function renderTemplateEditorRow(which, label, text, isEmpty) {
+        var chips = '';
+        for (var i = 0; i < TEMPLATE_VARS.length; i++) {
+            chips += '<code class="qida-tpl-chip">' + esc(TEMPLATE_VARS[i]) + '</code>' + (i < TEMPLATE_VARS.length - 1 ? ' ' : '');
+        }
+        return '<div class="qida-tpl-row' + (isEmpty ? ' has-error' : '') + '">'
+            + '<div class="qida-tpl-head">'
+                + '<label class="qida-ab-label">' + esc(label) + '</label>'
+                + '<button class="qida-tpl-restore" data-action="tpl-restore" data-which="' + esc(which) + '">' + icon('refresh-cw', 11) + ' Restaurar genérica</button>'
+            + '</div>'
+            + '<textarea class="qida-tpl-input" data-input="tpl-text" data-which="' + esc(which) + '" rows="5" placeholder="Escribí tu plantilla de ' + esc(label.toLowerCase()) + '…">' + esc(text) + '</textarea>'
+            + '<p class="qida-tpl-vars">Variables: ' + chips + '. {nombre} y el guiño los completa el asistente; el resto los completás vos.</p>'
+            + (isEmpty ? '<p class="qida-ab-error">No puede quedar vacía.</p>' : '')
         + '</div>';
     }
 
@@ -9758,27 +9817,40 @@
                 }
                 return;
             }
+            // v1.54.0: guarda las 2 plantillas (PUT /api/me/templates; mock con flag off).
             case 'ab-save': {
-                var val = validateVariants(state.draftVariants);
-                if (!val.ok || state.agentBuilderSaving) { rerenderContent(); return; }
-                var afKey = resolveAfKey();
-                var working = deepCopyVariants(state.draftVariants);
-                state.agentBuilderSaving = true;   // v1.21: loading del PUT (real con flag on)
+                if (state.agentBuilderSaving) return;
+                var iniT = (state.tplDraft.inicial || '').replace(/\s/g, '');
+                var cieT = (state.tplDraft.cierre || '').replace(/\s/g, '');
+                if (!iniT || !cieT) { rerenderContent(); return; }  // ambas requeridas (min_length=1)
+                state.agentBuilderSaving = true;
                 rerenderContent();
-                DraftService.saveDraftVariants(afKey, working).then(function (res) {
+                var tplPayload = buildTemplatesPayload();
+                saveEditorTemplates(tplPayload).then(function (res) {
                     state.agentBuilderSaving = false;
                     if (res && res.ok) {
-                        state.draftVariantsSaved = deepCopyVariants(working);
-                        showToast('Asistente guardado.');
+                        state.tplSaved = { inicial: state.tplDraft.inicial, cierre: state.tplDraft.cierre };
+                        state.templatesCache = {};  // invalida la cache de lectura de Inicio/Cierre
+                        showToast('Plantillas guardadas.');
                     } else {
-                        showToast((res && res.userMessage) || 'No se pudo guardar (revisá los campos).');
+                        showToast((res && res.userMessage) || 'No se pudieron guardar las plantillas.');
                     }
                     rerenderContent();
                 }).catch(function (err) {
                     state.agentBuilderSaving = false;
-                    showToast((err && err.userMessage) || 'No se pudo guardar tu configuración.');
+                    showToast((err && err.userMessage) || 'No se pudieron guardar las plantillas.');
                     rerenderContent();
                 });
+                return;
+            }
+            // v1.54.0: restaura una plantilla al texto genérico de Qida (MOCK_AF_TEMPLATES).
+            case 'tpl-restore': {
+                var rWhich = target.getAttribute('data-which');
+                if (rWhich === 'inicial' || rWhich === 'cierre') {
+                    var gen = MOCK_AF_TEMPLATES[rWhich];
+                    state.tplDraft[rWhich] = (gen && gen.text) ? String(gen.text) : '';
+                    rerenderContent();
+                }
                 return;
             }
             // v1.21: reintentar la carga del form tras un error de GET.
@@ -10801,6 +10873,12 @@
             //   global del equipo) pero el rerender la re-mounta con la misma metrica activa.
             state.leaderDash.locFilter = node.value || 'all';
             rerenderContent();
+        } else if (input === 'tpl-text') {
+            // v1.54.0: textarea de plantilla. Update en cada keystroke SIN rerender (no perder
+            //   foco/caret); rerender en 'change' (blur) para refrescar dirty/vacío/Guardar.
+            var tWhich = node.getAttribute('data-which');
+            if (tWhich === 'inicial' || tWhich === 'cierre') state.tplDraft[tWhich] = node.value;
+            if (e.type === 'change') rerenderContent();
         } else if (input === 'ab-name') {
             // v1.15: nombre de variante. Update en cada keystroke SIN rerender (no perder foco);
             //   rerender solo en 'change' (blur) para refrescar validación/errores/Guardar.
@@ -11097,11 +11175,75 @@
         });
     }
 
-    // v1.53.0: handler de los botones de plantilla (Inicio/Cierre). NO llama al LLM: trae la
-    //   plantilla destilada de la AF, rellena {nombre} con el primer nombre del contacto y la
-    //   muestra en el MISMO card editable+copiable de los drafts (kind:'variants', source:'template'
-    //   -> pick-variant -> refine -> "Copiar al WhatsApp", sin envío). Placeholders no resueltos
-    //   ({telefono_af}, {nombre_af} si no vino del backend, otros) quedan visibles para la AF.
+    // v1.54.0: POST /api/leads/{id}/template-draft -> personaliza ligero la plantilla Inicio/Cierre
+    //   de la AF al lead (nombre del contacto + ≤1 guiño). Mismo shape de respuesta que
+    //   /recommendation/draft (drafts[]). Flag off -> mock derivado de MOCK_AF_TEMPLATES con {nombre}
+    //   relleno (fallback:true). NO envía: el resultado es un card editable+copiable.
+    function fetchTemplateDraft(leadId, which) {
+        if (!useRealApi()) {
+            return simulateLatency(120, 280).then(function () {
+                var lead = currentLead(leadId) || {};
+                var gen = MOCK_AF_TEMPLATES[which] || { text: '' };
+                var filled = fillTemplateName(String(gen.text || ''), lead);  // {nombre} -> contacto
+                return { type: which, drafts: [{ name: which, text: filled, length: 'medium', tone_style: 'neutral' }], fallback: true };
+            });
+        }
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) {
+            return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        }
+        var headers = afEmailHeaders();
+        headers['Content-Type'] = 'application/json';
+        if (!headers['X-AF-Email']) {
+            return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la petición.', 'NO_AF_EMAIL', 0));
+        }
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/template-draft';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(withLeadIaSummary(leadId, { type: which })) }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) {
+                    log('template-draft ok', { lead: numericId, type: which, ms: Date.now() - t0 });
+                    return { type: which, drafts: (data && data.drafts) || [], fallback: !!(data && data.fallback) };
+                }
+                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || null;
+                log('template-draft error', { lead: numericId, type: which, status: res.status, code: code, ms: Date.now() - t0 });
+                throw makeApiError(httpErrorCopy(res.status, serverMsg), code, res.status);
+            });
+        });
+    }
+
+    // v1.54.0: convierte la respuesta de /template-draft a payload kind:'variants' (card
+    //   editable+copiable). source:'template' (no emite telemetría draft_copied, igual que v1.53).
+    //   Los placeholders que sigan ({telefono_af}, etc.) los resuelve renderAiPayload contra el lead.
+    function templateDraftPayload(resp, meta) {
+        var drafts = (resp && resp.drafts) || [];
+        var variants = [];
+        for (var i = 0; i < drafts.length; i++) {
+            var d = drafts[i];
+            if (!d || !d.text) continue;
+            variants.push({ label: meta.label, text: d.text });
+        }
+        if (!variants.length) {
+            return { kind: 'free', text: 'No hay plantilla disponible para este caso. Redactá el mensaje manualmente.' };
+        }
+        return {
+            kind: 'variants',
+            source: 'template',
+            intro: 'Plantilla de ' + meta.label.toLowerCase() + ' personalizada (editá lo que necesites antes de copiar):',
+            variants: variants
+        };
+    }
+
+    // v1.54.0: handler de los botones de plantilla (Inicio/Cierre). Antes rellenaba la plantilla en
+    //   el cliente (fetchTemplates + {nombre}); ahora pega a POST /api/leads/{id}/template-draft, que
+    //   la PERSONALIZA al lead (nombre + ≤1 guiño, sin reescribir). Mismo flujo async que Seguimiento:
+    //   burbuja loading -> card editable+copiable (kind:'variants', source:'template') -> pick-variant
+    //   -> "Copiar al WhatsApp", sin envío. Mantiene el principio rector: el widget NO envía.
     function handleAiTemplateClick(which) {
         var lead = currentLead();
         if (!lead) return;
@@ -11112,7 +11254,7 @@
         if (!state.templateBusy[leadId]) state.templateBusy[leadId] = {};
         if (state.templateBusy[leadId][which]) return;  // ya en vuelo, ignorar doble-click
 
-        pushAiChat(leadId, meta.label, { kind: 'loading', text: 'Preparando ' + meta.label.toLowerCase() + '…' });
+        pushAiChat(leadId, meta.label, { kind: 'loading', text: 'Personalizando ' + meta.label.toLowerCase() + '…' });
         state.templateBusy[leadId][which] = true;
         state.aiChatDraft = '';
         var hist = state.aiChatHistory[leadId];
@@ -11120,28 +11262,14 @@
         state.__aiNeedsScroll = true;
         rerenderContent();
 
-        fetchTemplates().then(function (tpls) {
+        fetchTemplateDraft(leadId, which).then(function (resp) {
             if (state.templateBusy[leadId]) state.templateBusy[leadId][which] = false;
             if (state.currentLeadId !== leadId) return;
-            var tpl = tpls && tpls[which];
-            var text = (tpl && tpl.text) ? String(tpl.text) : '';
-            if (!text) {
-                bubble.payload = { kind: 'free', text: 'No hay plantilla disponible para este caso. Redactá el mensaje manualmente.' };
-                state.__aiNeedsScroll = true;
-                rerenderContent();
-                return;
-            }
-            var filled = fillTemplateName(text, lead);  // {nombre} -> primer nombre del contacto
-            bubble.payload = {
-                kind: 'variants',
-                source: 'template',
-                intro: 'Plantilla de ' + meta.label.toLowerCase() + ' (editá lo que necesites antes de copiar):',
-                variants: [{ label: meta.label, text: filled }]
-            };
+            bubble.payload = templateDraftPayload(resp, meta);
             state.__aiNeedsScroll = true;
             rerenderContent();
         }).catch(function (err) {
-            log('fetchTemplates failed', err && (err.code || err.message));
+            log('fetchTemplateDraft failed', err && (err.code || err.message));
             if (state.templateBusy[leadId]) state.templateBusy[leadId][which] = false;
             if (state.currentLeadId !== leadId) return;
             bubble.payload = { kind: 'error', text: suggestErrorCopy(err), retry: 'template', _which: which };
@@ -11390,25 +11518,66 @@
         log('openLeadersDashboard()');
     }
 
-    // v1.15: abre "Armá tu asistente". Carga la config (lazy) en la copia de trabajo + snapshot.
+    // v1.54.0: trae las plantillas CRUDAS para el editor (sin interpolar {nombre_af} — el editor
+    //   necesita el placeholder, si no se "hornea" al guardar). Real -> GET /api/me/templates?raw=true;
+    //   flag off -> MOCK_AF_TEMPLATES. Devuelve objetos AfTemplate completos (se preservan al guardar).
+    function fetchEditorTemplates() {
+        var p = useRealApi()
+            ? apiFetchJson('GET', '/api/me/templates?raw=true', { noun: 'plantillas' })
+            : simulateLatency(80, 180).then(function () { return MOCK_AF_TEMPLATES; });
+        return p.then(function (tpls) {
+            return { inicial: (tpls && tpls.inicial) || null, cierre: (tpls && tpls.cierre) || null };
+        });
+    }
+
+    // Arma el body del PUT preservando la metadata del AfTemplate (variables/lang/flags) y pisando
+    //   solo el texto editado.
+    function buildTemplatesPayload() {
+        function merge(full, text) {
+            var obj = full ? JSON.parse(JSON.stringify(full)) : {};
+            obj.text = text;
+            return obj;
+        }
+        return {
+            inicial: merge(state.tplFull.inicial, state.tplDraft.inicial),
+            cierre: merge(state.tplFull.cierre, state.tplDraft.cierre)
+        };
+    }
+
+    // PUT /api/me/templates (real) o mock (persiste en MOCK_AF_TEMPLATES para que reabrir el editor
+    //   muestre la edición en index.html). Devuelve { ok }.
+    function saveEditorTemplates(templatesPayload) {
+        if (!useRealApi()) {
+            if (templatesPayload.inicial) MOCK_AF_TEMPLATES.inicial = { text: templatesPayload.inicial.text };
+            if (templatesPayload.cierre) MOCK_AF_TEMPLATES.cierre = { text: templatesPayload.cierre.text };
+            return simulateLatency(80, 180).then(function () { return { ok: true }; });
+        }
+        return apiFetchJson('PUT', '/api/me/templates', { body: { templates: templatesPayload }, noun: 'plantillas' })
+            .then(function () { return { ok: true }; });
+    }
+
+    // v1.54.0: abre "Armá tu asistente" (editor de plantillas). Carga (lazy) las plantillas crudas
+    //   en la copia de trabajo + snapshot. tplLoaded cachea por sesión; setViewingAs lo invalida.
     function openAgentBuilder() {
         state.agentBuilderConfirmDiscard = false;
         state.agentBuilderError = null;
         state.view = 'agentBuilder';
-        if (state.draftVariantsLoaded) { rerenderContent(); log('openAgentBuilder() [cache]'); return; }
-        // v1.21: cargar la config via GET (real con flag on; mock async con flag off) + loading/error.
+        if (state.tplLoaded) { rerenderContent(); log('openAgentBuilder() [cache]'); return; }
         state.agentBuilderLoading = true;
         rerenderContent();
-        DraftService.getDraftVariants(resolveAfKey()).then(function (cfg) {
-            state.draftVariantsSaved = deepCopyVariants(cfg.variants);
-            state.draftVariants = deepCopyVariants(cfg.variants);
-            state.draftVariantsLoaded = true;
+        fetchEditorTemplates().then(function (tpls) {
+            state.tplFull = { inicial: tpls.inicial || null, cierre: tpls.cierre || null };
+            var ini = (tpls.inicial && tpls.inicial.text) ? String(tpls.inicial.text) : '';
+            var cie = (tpls.cierre && tpls.cierre.text) ? String(tpls.cierre.text) : '';
+            state.tplSaved = { inicial: ini, cierre: cie };
+            state.tplDraft = { inicial: ini, cierre: cie };
+            state.tplLoaded = true;
             state.agentBuilderLoading = false;
             rerenderContent();
         }).catch(function (err) {
             state.agentBuilderLoading = false;
-            state.agentBuilderError = (err && err.userMessage) || 'No se pudo cargar tu configuración del asistente.';
-            log('getDraftVariants failed', err && (err.code || err.message));
+            state.agentBuilderError = (err && err.userMessage) || 'No se pudieron cargar tus plantillas.';
+            log('fetchEditorTemplates failed', err && (err.code || err.message));
             rerenderContent();
         });
         log('openAgentBuilder()');
@@ -11425,7 +11594,8 @@
         rerenderContent();
     }
     function abDiscardAndLeave() {
-        state.draftVariants = deepCopyVariants(state.draftVariantsSaved);
+        // v1.54.0: descartar la edición de plantillas -> volver al último snapshot guardado.
+        state.tplDraft = { inicial: state.tplSaved.inicial, cierre: state.tplSaved.cierre };
         state.agentBuilderConfirmDiscard = false;
         state.view = 'dashboard';
         rerenderContent();
