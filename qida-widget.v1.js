@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.54.0
+ * QIDA ASSISTANT v1.56.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,10 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.56.0 (2026-06-15 — go-live demo: combina plantillas+personalización (v1.54.0) y los 6 fixes (v1.55.0)):
+ *   - Branch de integración para la demo: v1.54.0 + v1.55.0 juntos sobre v1.53.0. Sin cambios de
+ *     comportamiento más allá de la suma de ambas features. Detalle de cada una en sus bloques debajo.
  *
  * Cambios v1.54.0 (2026-06-15 — plantillas Inicio/Cierre EDITABLES por AF + personalización ligera al lead):
  *   - "Armá tu asistente" deja de editar draft-variants (length/tone, muertos con el writer de 2 pasos)
@@ -33,6 +37,35 @@
  *     genérico de Qida; al guardar se invalida templatesCache. FILENAME y WIDGET_URL sin cambios
  *     (no-breaking, sigue v1). SIN publicar al Blob (lo hace el orquestador). Código muerto de
  *     draft-variants (validateVariants/renderVariantRow/DraftService.*DraftVariants) queda sin uso.
+ *
+ * Cambios v1.55.0 (2026-06-15 — batch de 6 fixes; v1.54.0 reservado para la feature de plantillas, otra branch):
+ *   - #1 (bug) SCROLL conversación WhatsApp: el auto-scroll al fondo (scrollWaToBottom, flag
+ *     state.__waNeedsScroll) se perdía cuando los loads ASYNC del Resumen/Análisis IA re-renderizaban
+ *     sin setear el flag. Ahora loadRecommendation, loadRecommendationPlan y LeadDetailService.fetchAll
+ *     (rerender que puebla `analysis`) setean __waNeedsScroll=true antes del rerender (dentro del
+ *     race-guard currentLeadId===leadId). La conversación queda anclada al último mensaje tras cada load.
+ *   - #3 (feature) ID+NOMBRE del lead = BOTÓN deep-link a Odoo: en el header del detalle el id+nombre
+ *     pasa a ser un <button class="qida-dsh-idname" data-action="open-lead-odoo"> (fondo+borde). Click ->
+ *     navigateLeadToOdoo(leadId): setea window.location.hash reusando cids/menu_id/action del hash actual
+ *     y swapeando id (toNumericLeadId)/model=crm.lead/view_type=form (inverso de parseOdooLeadDeepLink).
+ *   - #4 (UI) Modal "+ Nueva actividad": "Fecha límite" pasa a la DERECHA de "Tipo" (fila de 2 columnas,
+ *     nueva clase .qida-sb-row2 grid 1fr 1fr); antes quedaba escondida debajo de Resumen/Nota. Solo layout.
+ *   - #5 (bug) "Marcar hecho" del HEADER no hacía nada: state.completedTodayIds mezclaba formatos de id
+ *     (fila=display_id "L#####", header=currentLeadId numérico). Normalizado TODO a clave canónica
+ *     toNumericLeadId (markFollowupDone/undoFollowupDone/persist* + renderDetailMarkDoneBtn + liveDashRows).
+ *     Ahora el header marca hecho idéntico a la fila (flip "Hecho hoy" + fila filtrada + POST done_today),
+ *     desde cualquier entrada (dashboard/Actividades/deep-link).
+ *   - #6 (feature) Badge "Urgente" en el header del detalle cuando normalizeUrgency(lead.urgency)==='alta'
+ *     (mismo umbral/clases .qida-dash-badge-urgent + .qida-dash-badge-dot que el dashboard). Sin backend.
+ *   - #7 (bug) Lead no abría desde deep-link si NO estaba en la cartera activa (state.leadById): antes
+ *     rebotaba al dashboard en silencio. Ahora se intenta abrir igual (openLeadDetail); el detalle lo lee
+ *     Odoo (crm.lead.read) y los paneles del backend validan pertenencia (403 -> degradan). Si Odoo tampoco
+ *     deja leerlo, fetchAll.catch muestra mensaje claro ("no está en tu cartera activa o no tenés acceso")
+ *     vía state.deepLinkAttemptId. Así se abren convertidos/fuera-de-cartera que SÍ son de la AF.
+ *   - Defaults que tomé: badge "Urgente" junto a la IDENTIDAD del lead (en el header NO hay badge
+ *     "Mensaje nuevo" — vive solo en filas del dashboard); #7 usa el ACL de Odoo sobre crm.lead.read como
+ *     gate del "abrir" (el 403 del backend solo afecta los paneles, que ya degradan); #5 clave canónica
+ *     numérica. FILENAME y WIDGET_URL sin cambios (no-breaking, sigue v1). SIN publicar al Blob.
  *
  * Cambios v1.53.0 (2026-06-11 — selector del asistente: 4 tipos → 3 botones INICIO · SEGUIMIENTO · CIERRE):
  *   - El detalle del lead deja de pintar 4 tipos (operativa/seguimiento/presentacion/reactivar) y pasa
@@ -1956,7 +1989,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.54.0';
+    var VERSION = '1.56.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2511,6 +2544,10 @@
         //   o a dashboard). Doble función: race-guard del fetch async + trigger del skeleton en
         //   renderDetail durante la validación. Se limpia en closeModal y en back-to-dashboard.
         deepLinkLeadId: null,
+        // v1.55.0 (#7): id (canónico numérico) de un deep-link a un lead FUERA de la cartera activa
+        //   que igual intentamos abrir. Si Odoo no deja leerlo, fetchAll.catch muestra el mensaje
+        //   claro "no está en tu cartera activa". Se limpia al resolver (éxito/fallo) y al volver.
+        deepLinkAttemptId: null,
 
         // v1.10: dashboard "lista de leads enfriandose".
         //   completedTodayIds: Set<leadId>. Filas que la AF marco como hechas en esta sesion.
@@ -3661,8 +3698,11 @@
                         _error: null
                     };
 
+                    // v1.55.0 (#7): el lead abrió OK (Odoo lo dejó leer) -> ya no es un intento pendiente.
+                    state.deepLinkAttemptId = null;
                     // Race-guard: solo rerender si el lead activo sigue siendo este.
                     if (state.currentLeadId === leadId) {
+                        state.__waNeedsScroll = true;  // v1.55.0 (#1): re-anclar al fondo tras poblar el detalle (Resumen/Análisis IA)
                         rerenderContent();
                     }
                     return state.leadDetailCache[cacheKey];
@@ -3682,10 +3722,17 @@
                     _error: err && err.message ? err.message : String(err),
                     _errors: [null, null, null, null, null]
                 };
+                // v1.55.0 (#7): si era un deep-link a un lead fuera de la cartera y Odoo no lo deja
+                //   leer -> mensaje claro en vez del genérico. Limpiamos el flag igual (resolvió).
+                var wasDeepLinkAttempt = state.deepLinkAttemptId
+                    && state.deepLinkAttemptId === (toNumericLeadId(leadId) || String(leadId));
+                state.deepLinkAttemptId = null;
                 if (state.currentLeadId === leadId) {
                     rerenderContent();
                     var msg = err && err.message ? err.message : 'Error desconocido';
-                    if (msg.indexOf('session expired') >= 0 || msg.indexOf('sesion expirada') >= 0) {
+                    if (wasDeepLinkAttempt) {
+                        showToast('Este lead no está en tu cartera activa o no tenés acceso.');
+                    } else if (msg.indexOf('session expired') >= 0 || msg.indexOf('sesion expirada') >= 0) {
                         showToast('Sesion expirada en Odoo. Recarga la pagina.');
                     } else if (msg.indexOf('Lead not found') >= 0) {
                         showToast('Lead no encontrado en Odoo');
@@ -3959,6 +4006,9 @@
             '.qida-detail-shell-head{display:flex;align-items:center;gap:14px;flex:1;min-width:0;}',
             '.qida-dsh-name{font-size:14px;font-weight:500;color:var(--s900);line-height:1;white-space:nowrap;}',
             '.qida-dsh-id{font-size:12px;font-weight:400;color:var(--s500);}',
+            /* v1.55.0 (#3): id+nombre clickeable -> deep-link a Odoo */
+            '.qida-dsh-idname{display:inline-flex;align-items:center;gap:6px;background:var(--s100);border:0.5px solid var(--s200);border-radius:8px;padding:3px 10px;cursor:pointer;font-family:inherit;line-height:1;transition:background .12s,border-color .12s;}',
+            '.qida-dsh-idname:hover{background:var(--qg-soft);border-color:var(--qg);}',
             '.qida-dsh-meta{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:12px;font-weight:400;flex-wrap:wrap;min-width:0;overflow:hidden;}',
             '.qida-dsh-meta-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}',
             '.qida-dsh-sep{color:var(--s300);}',
@@ -4235,6 +4285,8 @@
             '.qida-schedule-sub{font-size:12px;color:var(--s600);margin:4px 0 0;}',
             '.qida-schedule-body{padding:16px 20px;overflow-y:auto;}',
             '.qida-sb-section{margin-bottom:18px;}',
+            /* v1.55.0 (#4): fila de 2 columnas (Tipo | Fecha límite) en el modal de actividad */
+            '.qida-sb-row2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px;}',
             '.qida-sb-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--s600);margin-bottom:8px;}',
             '.qida-sb-shortcuts{display:flex;gap:6px;flex-wrap:wrap;}',
             '.qida-sb-short{padding:6px 12px;border:1px solid var(--s200);border-radius:6px;font-size:12px;background:#fff;cursor:pointer;font-family:inherit;color:var(--s700);transition:border-color .15s,background .15s;}',
@@ -4742,7 +4794,7 @@
         var out = [];
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i];
-            if (state.completedTodayIds && state.completedTodayIds.has(r.id)) continue;
+            if (state.completedTodayIds && state.completedTodayIds.has(toNumericLeadId(r.id) || String(r.id))) continue;  // v1.55.0 (#5): clave canónica numérica
             // v1.49.8: leads marcados como perdidos en esta sesión desaparecen del dashboard
             //   (mismo patrón que completedTodayIds). El Set guarda ids en múltiples formatos
             //   (display 'L#####', numérico string, numérico int) -> chequeamos por r.id directo y
@@ -5873,7 +5925,8 @@
     //   (undo-mark-done con data-id, para poder deshacer aunque el toast de 4s ya haya expirado).
     function renderDetailMarkDoneBtn(leadId) {
         if (leadId == null || leadId === '') return '';
-        var done = state.completedTodayIds && state.completedTodayIds.has(leadId);
+        // v1.55.0 (#5): chequeo por clave canónica numérica (igual que markFollowupDone/liveDashRows).
+        var done = state.completedTodayIds && state.completedTodayIds.has(toNumericLeadId(leadId) || String(leadId));
         if (done) {
             return '<button class="qida-dsh-markdone is-done" data-action="undo-mark-done" data-id="'
                 + esc(leadId) + '" title="Marcado hecho hoy — clic para deshacer">'
@@ -6941,6 +6994,29 @@
         var id = parseInt(m[1], 10);
         return (id > 0) ? id : null;
     }
+    // v1.55.0 (#3): navega a la ficha del lead en Odoo (same-origin) seteando window.location.hash.
+    //   Reusa cids/menu_id/action del hash ACTUAL y swapea id/model/view_type. Inverso de
+    //   parseOdooLeadDeepLink. Defaults sensatos si falta algún param (cids->'1'; menu_id/action se
+    //   omiten si no están). No-op defensivo si window.location es inaccesible.
+    function navigateLeadToOdoo(leadId) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return;
+        var cur = '';
+        try { cur = (window.location && window.location.hash) || ''; } catch (e) { return; }
+        var s = cur.charAt(0) === '#' ? cur.slice(1) : cur;
+        function param(name) {
+            var mm = s.match(new RegExp('(?:^|[?&#/])' + name + '=([^&#/]+)'));
+            return mm ? mm[1] : null;
+        }
+        var cids = param('cids') || '1';
+        var menuId = param('menu_id');
+        var action = param('action');
+        var parts = ['id=' + numericId, 'cids=' + cids];
+        if (menuId) parts.push('menu_id=' + menuId);
+        if (action) parts.push('action=' + action);
+        parts.push('model=crm.lead', 'view_type=form');
+        try { window.location.hash = '#' + parts.join('&'); } catch (e) { /* noop */ }
+    }
     // Error tipado para la UI: .userMessage (texto claro), .code, .status.
     function makeApiError(userMessage, code, status) {
         var e = new Error(code || userMessage || 'API_ERROR');
@@ -7377,25 +7453,33 @@
     //   (solo estado local de sesión, como siempre).
     function markFollowupDone(id) {
         if (!id) return;
+        // v1.55.0 (#5): clave CANONICA numérica. El botón de fila pasa display_id ("L#####") y el
+        //   del header pasa state.currentLeadId (numérico si entró por Actividades/deep-link). Sin
+        //   normalizar, el header agregaba "124260" pero el chequeo has() comparaba contra el número
+        //   124260 -> nunca matcheaba -> "no hacía nada". toNumericLeadId colapsa ambos a "124260".
+        var key = toNumericLeadId(id) || String(id);
         // (1) optimistic local + toast Deshacer 4s (sobreescribe un undo previo de otra fila).
-        state.completedTodayIds.add(id);
-        state.undoToast = { leadId: id, expiresAt: Date.now() + 4000 };
+        state.completedTodayIds.add(key);
+        state.undoToast = { leadId: key, expiresAt: Date.now() + 4000 };
         if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
         state.undoTimeoutId = setTimeout(function () {
             state.undoToast = null;
             state.undoTimeoutId = null;
             rerenderContent();
         }, 4000);
-        // (2) persistir (solo real); revert en fallo.
-        persistFollowupDone(id);
+        // (2) persistir (solo real); revert en fallo. Pasa la clave normalizada -> el revert toca
+        //   el MISMO key del Set.
+        persistFollowupDone(key);
         rerenderContent();
     }
 
     // Deshacer "Marcar hecho". explicitId = el data-id del botón "Hecho hoy" del detalle (deshace
     //   ese lead aunque el toast ya expiró); sin explicitId usa el lead del toast (botón Deshacer).
     function undoFollowupDone(explicitId) {
-        var id = explicitId || (state.undoToast && state.undoToast.leadId);
-        if (!id) { rerenderContent(); return; }
+        var raw = explicitId || (state.undoToast && state.undoToast.leadId);
+        if (!raw) { rerenderContent(); return; }
+        // v1.55.0 (#5): misma clave canónica numérica que markFollowupDone.
+        var id = toNumericLeadId(raw) || String(raw);
         // (1) optimistic: vuelve a mostrar la fila + cierra el toast si es de este lead.
         state.completedTodayIds["delete"](id);
         if (state.undoToast && String(state.undoToast.leadId) === String(id)) {
@@ -8353,11 +8437,13 @@
         fetchRecommendation(leadId).then(function (rec) {
             state.recommendationCache[leadId] = rec;  // rec.lead_analysis_long lo lee renderIaAnalysis
             if (state.currentLeadId !== leadId) return;  // race-guard
+            state.__waNeedsScroll = true;  // v1.55.0 (#1): re-anclar la conversación al fondo tras poblar Análisis IA
             rerenderContent();
         }).catch(function (err) {
             log('loadRecommendation failed', err && (err.code || err.message));
             state.recommendationCache[leadId] = { _error: (err && err.userMessage) || 'No se pudo cargar el análisis.' };
             if (state.currentLeadId !== leadId) return;
+            state.__waNeedsScroll = true;  // v1.55.0 (#1)
             rerenderContent();
         });
     }
@@ -8395,11 +8481,13 @@
         fetchRecommendationPlan(leadId).then(function (plan) {
             state.recommendationPlan[leadId] = plan;
             if (state.currentLeadId !== leadId) return;
+            state.__waNeedsScroll = true;  // v1.55.0 (#1): re-anclar la conversación al fondo tras cargar la sugerencia
             rerenderContent();
         }).catch(function (err) {
             log('loadRecommendationPlan failed', err && (err.code || err.message));
             state.recommendationPlan[leadId] = { _error: (err && err.userMessage) || 'No se pudo cargar la sugerencia.' };
             if (state.currentLeadId !== leadId) return;
+            state.__waNeedsScroll = true;  // v1.55.0 (#1)
             rerenderContent();
         });
     }
@@ -8796,9 +8884,17 @@
                     + '<p class="qida-schedule-sub">Para <strong>' + esc(m.leadName) + '</strong> &middot; se crea en Odoo. <strong>No es un mensaje al lead</strong>, es una tarea interna tuya.</p>'
                 + '</div>'
                 + '<div class="qida-schedule-body">'
-                    + '<div class="qida-sb-section">'
-                        + '<div class="qida-sb-label">Tipo</div>'
-                        + '<select class="qida-leader-select qida-actv-input" data-input="activity-type">' + typeOpts + '</select>'
+                    // v1.55.0 (#4): Tipo + Fecha límite en una fila (2 columnas) -> la fecha deja de quedar
+                    //   escondida abajo de Resumen/Nota.
+                    + '<div class="qida-sb-row2">'
+                        + '<div class="qida-sb-section">'
+                            + '<div class="qida-sb-label">Tipo</div>'
+                            + '<select class="qida-leader-select qida-actv-input" data-input="activity-type">' + typeOpts + '</select>'
+                        + '</div>'
+                        + '<div class="qida-sb-section">'
+                            + '<div class="qida-sb-label">Fecha límite</div>'
+                            + '<input type="date" class="qida-actv-input" data-input="activity-deadline" value="' + esc(m.deadline || '') + '" min="' + esc(todayISO()) + '" max="' + esc(addDaysISO(30)) + '" />'
+                        + '</div>'
                     + '</div>'
                     + '<div class="qida-sb-section">'
                         + '<div class="qida-sb-label">Resumen *</div>'
@@ -8807,10 +8903,6 @@
                     + '<div class="qida-sb-section">'
                         + '<div class="qida-sb-label">Nota (opcional)</div>'
                         + '<textarea class="qida-sb-note" data-input="activity-note" placeholder="Detalle interno para vos o la AF que tome el lead…">' + esc(m.note) + '</textarea>'
-                    + '</div>'
-                    + '<div class="qida-sb-section">'
-                        + '<div class="qida-sb-label">Fecha límite</div>'
-                        + '<input type="date" class="qida-actv-input" data-input="activity-deadline" value="' + esc(m.deadline || '') + '" min="' + esc(todayISO()) + '" max="' + esc(addDaysISO(30)) + '" />'
                     + '</div>'
                     + '<div class="qida-sb-section qida-actv-meta">'
                         + '<span>' + icon('check', 11) + ' Asignada a vos</span>'
@@ -9578,8 +9670,15 @@
                     : '';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
-                    + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
-                    + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
+                    // v1.55.0 (#3): id+nombre como botón -> deep-link a la ficha del lead en Odoo (same-origin).
+                    + '<button class="qida-dsh-idname" data-action="open-lead-odoo" data-id="' + esc(lead.id) + '" title="Abrir la ficha del lead en Odoo">'
+                        + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
+                        + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
+                    + '</button>'
+                    // v1.55.0 (#6): badge "Urgente" si la urgencia del lead es alta (mismo umbral/clases que el dashboard).
+                    + (normalizeUrgency(lead.urgency) === 'alta'
+                        ? '<span class="qida-dash-badge qida-dash-badge-urgent"><span class="qida-dash-badge-dot"></span>Urgente</span>'
+                        : '')
                     + '<span class="qida-dsh-days ' + lvl + '">' + icon('clock', 11) + ' ' + esc(daysLabel) + '</span>'
                     // v1.49.8: botón "Dar por perdido" entre días-sin-contacto y el separador antes del pill
                     //   de temperatura (ubicación acordada con el PO). Si el gate falla -> string vacío
@@ -9928,12 +10027,17 @@
                 // v1.49.1: deepLinkLeadId:null aborta cualquier validación de deep-link en vuelo (si la
                 //   AF toca "Volver" durante el skeleton, el .then de fetchLeadsForCrossRef no reabre).
                 resetWaVoiceState(true);
-                setState({ view: 'dashboard', currentLeadId: null, deepLinkLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'dashboard', currentLeadId: null, deepLinkLeadId: null, deepLinkAttemptId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.43.3: NO re-fetch al volver (revierte FIX B de v1.43.2). El re-fetch traía
                 //   has_unread fresco y, por el orden "nuevos al tope" + slice MAX_VISIBLE de
                 //   buildDashFeed, el lead recién leído caía fuera de la lista (DESAPARECÍA). El badge
                 //   ya se apaga vía leadsLeidosEnSesion sin re-fetch; tras F5 la persistencia la da el
                 //   POST /read (has_unread=false al recargar). El refresh manual sigue disponible.
+                return;
+
+            // v1.55.0 (#3): id+nombre del header -> abre la ficha del lead en Odoo (same-origin).
+            case 'open-lead-odoo':
+                navigateLeadToOdoo(id);
                 return;
 
             // --- v1.10: dashboard de leads enfriandose. v1.43: persistencia en backend ---
@@ -11772,10 +11876,16 @@
         var owned = !!(state.leadById && state.leadById[toNumericLeadId(leadId)]);
         if (owned) {
             log('deep-link: lead ' + leadId + ' es de la AF -> abriendo detalle');
+            state.deepLinkAttemptId = null;
             openLeadDetail(leadId);
         } else {
-            log('deep-link: lead ' + leadId + ' NO es de la AF -> dashboard silencioso');
-            if (state.view === 'detail') setState({ view: 'dashboard', currentLeadId: null });
+            // v1.55.0 (#7): NO rebotar al dashboard en silencio. Intentamos abrir igual — el detalle se
+            //   lee de Odoo (crm.lead.read) y los paneles del backend validan pertenencia por su cuenta
+            //   (403 -> degradan). Así se abren convertidos / fuera-de-cartera que SÍ son de la AF. Si
+            //   Odoo tampoco deja leerlo, fetchAll.catch usa deepLinkAttemptId para el mensaje claro.
+            log('deep-link: lead ' + leadId + ' no está en la cartera activa -> intento abrir igual');
+            state.deepLinkAttemptId = toNumericLeadId(leadId) || String(leadId);
+            openLeadDetail(leadId);
         }
     }
 
