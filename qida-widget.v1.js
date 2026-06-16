@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.56.0
+ * QIDA ASSISTANT v1.57.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,19 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.57.0 (2026-06-16 — hotfix demo: badge Urgente en detalle + scroll WhatsApp en Inicio/Cierre):
+ *   - #2 (bug) Badge "Urgente" no aparecía en el header del detalle: el lead del detalle
+ *     (crm.lead.read) no siempre trae `urgency` poblado, así que normalizeUrgency(lead.urgency) daba
+ *     null. Fix: fallback a la urgency de la cartera (state.leadById[toNumericLeadId(lead.id)].urgency),
+ *     donde el dashboard SÍ la tiene. Mismo umbral ('alta') y clases que el dashboard.
+ *   - #3 (bug) Al tocar Inicio/Cierre, el pane de WhatsApp saltaba al tope: handleAiTemplateClick
+ *     seteaba __aiNeedsScroll (pane IA) pero NO __waNeedsScroll, y el re-render reseteaba el scroll de
+ *     WhatsApp. Fix: setear __waNeedsScroll en los 3 re-renders de handleAiTemplateClick -> el pane de
+ *     WhatsApp se re-ancla a su último mensaje (no salta arriba).
+ *   - (Backend, fuera de esta branch) El 500 de Inicio/Cierre en /template-draft se arregló server-side
+ *     (event_type 'template_personalized' faltaba en el allowlist + CHECK; ya deployado).
+ *   - Sin tocar WIDGET_URL/loaders/publish.mjs. SIN publicar al Blob (lo hace Alejandro tras testear).
  *
  * Cambios v1.56.0 (2026-06-15 — go-live demo: combina plantillas+personalización (v1.54.0) y los 6 fixes (v1.55.0)):
  *   - Branch de integración para la demo: v1.54.0 + v1.55.0 juntos sobre v1.53.0. Sin cambios de
@@ -1989,7 +2002,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.56.0';
+    var VERSION = '1.57.0';
     var CONFIG = null;
 
     // ============================================================
@@ -9675,10 +9688,19 @@
                         + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
                         + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
                     + '</button>'
-                    // v1.55.0 (#6): badge "Urgente" si la urgencia del lead es alta (mismo umbral/clases que el dashboard).
-                    + (normalizeUrgency(lead.urgency) === 'alta'
-                        ? '<span class="qida-dash-badge qida-dash-badge-urgent"><span class="qida-dash-badge-dot"></span>Urgente</span>'
-                        : '')
+                    // v1.55.0 (#6) + v1.57.0 (#2): badge "Urgente" si la urgencia es alta. El lead del
+                    //   DETALLE (crm.lead.read) no siempre trae `urgency` poblado -> caemos a la urgency
+                    //   de la cartera (state.leadById, donde el dashboard SÍ la tiene). Mismo umbral/clases.
+                    + ((function () {
+                        var u = lead.urgency;
+                        if (normalizeUrgency(u) !== 'alta') {
+                            var row = state.leadById && state.leadById[toNumericLeadId(lead.id)];
+                            if (row && row.urgency) u = row.urgency;
+                        }
+                        return normalizeUrgency(u) === 'alta'
+                            ? '<span class="qida-dash-badge qida-dash-badge-urgent"><span class="qida-dash-badge-dot"></span>Urgente</span>'
+                            : '';
+                    })())
                     + '<span class="qida-dsh-days ' + lvl + '">' + icon('clock', 11) + ' ' + esc(daysLabel) + '</span>'
                     // v1.49.8: botón "Dar por perdido" entre días-sin-contacto y el separador antes del pill
                     //   de temperatura (ubicación acordada con el PO). Si el gate falla -> string vacío
@@ -11364,6 +11386,9 @@
         var hist = state.aiChatHistory[leadId];
         var bubble = hist[hist.length - 1];
         state.__aiNeedsScroll = true;
+        // v1.57.0 (#3): el botón Inicio/Cierre re-renderiza y, sin esto, el pane de WhatsApp saltaba
+        //   al tope. Re-anclamos también el pane de WhatsApp a su último mensaje (no salta arriba).
+        state.__waNeedsScroll = true;
         rerenderContent();
 
         fetchTemplateDraft(leadId, which).then(function (resp) {
@@ -11371,6 +11396,7 @@
             if (state.currentLeadId !== leadId) return;
             bubble.payload = templateDraftPayload(resp, meta);
             state.__aiNeedsScroll = true;
+            state.__waNeedsScroll = true;  // v1.57.0 (#3)
             rerenderContent();
         }).catch(function (err) {
             log('fetchTemplateDraft failed', err && (err.code || err.message));
@@ -11378,6 +11404,7 @@
             if (state.currentLeadId !== leadId) return;
             bubble.payload = { kind: 'error', text: suggestErrorCopy(err), retry: 'template', _which: which };
             state.__aiNeedsScroll = true;
+            state.__waNeedsScroll = true;  // v1.57.0 (#3)
             rerenderContent();
         });
     }
