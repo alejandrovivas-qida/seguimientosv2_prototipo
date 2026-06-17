@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.53.0
+ * QIDA ASSISTANT v1.54.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,37 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.54.0 (2026-06-17 — batch UX: header cierra modal · pane WA más ancho + auto-grow · modal "Dar de baja"):
+ *   - FIX 1 — Click en el bloque título del header del detalle (nombre + ID del lead) cierra el modal,
+ *     reusando data-action="close-modal" (la misma acción de la X). Así la AF cierra el widget y queda
+ *     viendo el lead en Odoo. Envuelto en .qida-dsh-titleblock (cursor:pointer + hover sutil var(--s100),
+ *     role="button" + tabindex="0"). NO incluye "Volver", el badge de días, el pill de temperatura ni el
+ *     meta: esos hermanos quedan fuera del wrapper y conservan su comportamiento previo.
+ *   - FIX 2 — Limpieza de #f37a28 fuera de .qida-badge: NO-OP. Búsqueda case-insensitive de "f37a28" en el
+ *     archivo: 0 matches. No había nada que remover en esta rama; el caso reportado vive en otra rama no
+ *     mergeada. Item cerrado sin cambios de código (documentado acá para trazabilidad).
+ *   - FIX 3a — Anchos del .qida-detail-body: pane WhatsApp nth-child(1) 28% → 38% (a costa del centro,
+ *     que es flex:1 1 auto y absorbe el delta). pane-ai nth-child(3) queda en 32%. Media query 1200px:
+ *     nth-child(1) 26% → 36% para mantener el ensanche también en pantallas medianas (conserva la relación
+ *     -2pp del breakpoint). Mobile sin cambios (nth-child(3) se oculta a 980px, nth-child(1) a 760px).
+ *   - FIX 3b — Textarea de WhatsApp (.qida-wa-textarea) auto-grow hasta ~12 líneas: max-height 120px → 320px.
+ *     autoResizeTextarea ahora lee el max-height del CSS de cada textarea vía getComputedStyle (cap por
+ *     elemento) en vez del 120 hardcodeado: el de WhatsApp crece a 320px; el del chat IA
+ *     (.qida-aichat-input-field, max-height 120px intacto) NO cambia (Alejandro no lo pidió). El histórico
+ *     (.qida-pane-wa-body, flex:1 + overflow-y:auto) cede el alto y mantiene su scroll interno.
+ *   - FIX 4 — Modal "Dar de baja lead" (SOLO FRONTEND): taxonomía completa en DISMISSAL_TAXONOMY
+ *     (11 motivos + submotivos; "Servicios Puntuales" y "Derivación a empresa del grupo" incluidos). Dropdowns
+ *     en cascada: Motivo (required) → Submotivo (required si el motivo tiene; oculto en "Error operativo" /
+ *     "Faltan datos de contacto") → Detalle adicional / Nivel 3 (dropdown 1-valor "Precio elevado", aparece
+ *     SOLO en los submotivos priceElevated de "Alternativa no At. Dom." y "Competencia At. Dom."). Entrada:
+ *     botón "Dar de baja" en el header del detalle. Submit → stub submitDismissal(payload) que SOLO hace
+ *     console.log + toast "Lead dado de baja" + cierra el modal; la persistencia a Odoo va en una task aparte.
+ *     Reusa el chrome de modales existente (.qida-schedule*).
+ *   - Defaults que tomé: (a) rama claude/funny-rubin-5ii415 (la designada por el entorno) en vez de
+ *     feat/widget-ux-batch-jun17 del brief — flageado en la PR. (b) "Dar de baja" se muestra SIN gate
+ *     (visible en mock/index.html para QA) y coexiste con "Dar por perdido": reconciliar con el PO en una
+ *     task aparte. (c) FILENAME/WIDGET_URL sin cambios (no-breaking, sigue v1).
  *
  * Cambios v1.53.0 (2026-06-11 — selector del asistente: 4 tipos → 3 botones INICIO · SEGUIMIENTO · CIERRE):
  *   - El detalle del lead deja de pintar 4 tipos (operativa/seguimiento/presentacion/reactivar) y pasa
@@ -1932,7 +1963,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.53.0';
+    var VERSION = '1.54.0';
     var CONFIG = null;
 
     // ============================================================
