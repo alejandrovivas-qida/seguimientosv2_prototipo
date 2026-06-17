@@ -10,21 +10,21 @@
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
  *
- * Cambios v1.58.0 (2026-06-17 — "Dar de baja" lead con taxonomía + pane WhatsApp más ancho/auto-grow):
+ * Cambios v1.58.0 (2026-06-17 — pane WhatsApp más ancho/auto-grow; "Dar de baja" DORMIDO tras flag):
  *   Rebase del batch UX de PR #45 (rama claude/funny-rubin-5ii415, era v1.54.0) sobre la línea go-live v1.57.0.
- *   - Modal "Dar de baja lead": dropdowns en cascada Motivo → Submotivo → Detalle (Nivel 3) desde
- *     DISMISSAL_TAXONOMY. Los motivos/submotivos mapean 1:1 a crm.lost.reason / crm.lost.subreason de Odoo.
  *   - FIX 3a — Pane WhatsApp más ancho (.qida-detail-body nth-child(1) 28% → 38%; media query 1200px 26% → 36%;
  *     el centro flex:1 1 auto absorbe el delta; pane-ai nth-child(3) intacto en 32%). FIX 3b — textarea de
  *     WhatsApp auto-grow a 320px (autoResizeTextarea lee el max-height por elemento vía getComputedStyle; el
- *     chat IA queda en 120px).
+ *     chat IA queda en 120px). [ESTO es lo único visible que shipea esta versión.]
+ *   - FIX 4 "Dar de baja" (modal + DISMISSAL_TAXONOMY + catálogo alineado 1:1 a crm.lost.reason /
+ *     crm.lost.subreason de Odoo): queda GATED OFF detrás de DISMISSAL_UI_ENABLED=false. El código vive en
+ *     el archivo pero el botón NO se pinta y NINGÚN usuario llega al modal, porque el submit todavía es STUB
+ *     (submitDismissal = console.log, no persiste a Odoo). Mostrarlo "aparentaría funcionar" sin escribir.
+ *     Se prende en v1.59.0 cuando esté el write real same-origin (ver bloque de tareas v1.59.0 arriba del
+ *     flag, junto a DISMISSAL_TAXONOMY). Mientras tanto el caso lo cubre "Dar por perdido" (flow viejo, intacto).
  *   - DESCARTADO de PR #45: FIX 1 ("click en el título cierra el modal") — colisionaba con el deep-link a
  *     Odoo de v1.55.0 #3 (data-action="open-lead-odoo" → navigateLeadToOdoo), que se mantiene tal cual.
  *     FIX 2 era no-op (0 matches del hex).
- *   - PENDIENTE (PASO B, espera contrato RPC de Odoo): el submit del modal HOY sigue siendo STUB
- *     (submitDismissal = console.log). El write real same-origin (lost_reason_id + lost_subreason_id vía
- *     odooCall, gateado por odooWriteEnabled), el reemplazo de "Dar por perdido" y el ajuste de la taxonomía
- *     se cablean en el commit siguiente.
  *
  * Cambios v1.57.0 (2026-06-16 — hotfix demo: badge Urgente en detalle + scroll WhatsApp en Inicio/Cierre):
  *   - #2 (bug) Badge "Urgente" no aparecía en el header del detalle: el lead del detalle
@@ -2561,6 +2561,27 @@
             yMax: 100
         }
     };
+
+    // ============================================================
+    // v1.58.0: FEATURE FLAG "Dar de baja" (DORMIDO — OFF en prod)
+    // ============================================================
+    // El modal "Dar de baja" + su taxonomía + el catálogo alineado a Odoo VIVEN en este archivo
+    //   (rebase de PR #45), pero el botón de entrada está GATED OFF: con DISMISSAL_UI_ENABLED=false
+    //   NINGÚN usuario llega al modal desde la UI. Razón: el submit todavía es STUB (submitDismissal =
+    //   console.log) — si se mostrara, "aparentaría funcionar" sin escribir a Odoo. Hasta entonces el
+    //   caso lo cubre "Dar por perdido" (flow viejo, intacto). NO borrar este código: se prende en v1.59.0.
+    //
+    // TAREAS v1.59.0 (cuando se prenda — NO implementadas todavía):
+    //   1. Capturar 2 payloads del Network tab de Odoo dando de baja a mano: caso A (motivo+submotivo) y
+    //      caso B (motivo+submotivo+Nivel-3 "Precio elevado") -> fijan el método RPC y el campo del Nivel-3.
+    //   2. Cablear submitDismissal al write real same-origin (mirror de handleLeadLost): resolución name->id
+    //      via search_read, submotivo SCOPEADO por reason_id (hay 'Otro' repetido entre motivos). Gating
+    //      odooWriteEnabled + oculto en impersonación. Optimistic-remove + revert (reusar lostLeadIds).
+    //   3. Reemplazar "Dar por perdido" por "Dar de baja": sacar el botón viejo (lead-lost-open) + sus
+    //      handlers (openLostConfirm/handleLeadLost/setLeadLost/loadLostReasons/render de lostConfirm).
+    //   4. Validar con Tampermonkey sobre un lead de TEST (los 3 escenarios + que no rompe nada).
+    //   5. Poner DISMISSAL_UI_ENABLED = true.
+    var DISMISSAL_UI_ENABLED = false;
 
     // ============================================================
     // v1.58.0 (ex-FIX 4): TAXONOMIA "DAR DE BAJA" un lead
@@ -9932,11 +9953,14 @@
                     && !isImpersonating())
                     ? '<button class="qida-dsh-lost" data-action="lead-lost-open" title="Dar por perdido este lead (irreversible)">' + icon('x-circle', 12) + ' Dar por perdido</button>'
                     : '';
-                // v1.54.0 (FIX 4): "Dar de baja" — abre el modal con la taxonomía de motivos. Submit = stub
-                //   (no persiste; la integración a Odoo va en una task aparte). UNGATED a propósito: debe ser
-                //   visible/demoable también en mock (index.html, odooWriteEnabled=false). Coexiste con "Dar
-                //   por perdido" — a reconciliar con el PO (flageado en la PR).
-                var headerDismissBtn = '<button class="qida-dsh-dismiss" data-action="lead-dismiss-open" title="Dar de baja este lead (registrar motivo)">' + icon('archive', 12) + ' Dar de baja</button>';
+                // v1.58.0: "Dar de baja" — abre el modal con la taxonomía. GATED OFF detrás de
+                //   DISMISSAL_UI_ENABLED (=false hoy): el modal/taxonomía/catálogo quedan en el archivo pero
+                //   NINGÚN usuario llega al modal desde la UI, porque el submit todavía es STUB (no persiste a
+                //   Odoo). Se prende en v1.59.0 cuando esté el write real. Ver el bloque de tareas v1.59.0 y
+                //   el flag arriba de DISMISSAL_TAXONOMY. Mientras tanto "Dar por perdido" cubre el caso.
+                var headerDismissBtn = DISMISSAL_UI_ENABLED
+                    ? '<button class="qida-dsh-dismiss" data-action="lead-dismiss-open" title="Dar de baja este lead (registrar motivo)">' + icon('archive', 12) + ' Dar de baja</button>'
+                    : '';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
                     // v1.55.0 (#3): id+nombre como botón -> deep-link a la ficha del lead en Odoo (same-origin).
