@@ -2563,13 +2563,18 @@
     };
 
     // ============================================================
-    // v1.54.0 (FIX 4): TAXONOMIA "DAR DE BAJA" un lead
+    // v1.58.0 (ex-FIX 4): TAXONOMIA "DAR DE BAJA" un lead
     // ============================================================
-    // Mapa Motivo -> { subreasons: [{ name, priceElevated? }] }. Los strings van EXACTAMENTE como en
-    //   Odoo (son IDs traducibles; aca como strings simples). priceElevated:true habilita el Nivel 3
-    //   "Detalle adicional" (dropdown 1-valor "Precio elevado", modelado como lista para ser extensible).
-    //   Motivos sin submotivos -> subreasons:[] (el campo Submotivo se oculta). SOLO FRONTEND: el submit
-    //   llama al stub submitDismissal(payload); la persistencia a Odoo va en una task aparte.
+    // Mapa Motivo -> { subreasons: [{ name, priceElevated? }] }. Los `name` coinciden EXACTAMENTE con
+    //   el es_ES de los records de Odoo (crm.lost.reason para el motivo; crm.lost.subreason para el
+    //   submotivo, scopeado por reason_id) — verificado contra la réplica. Esa exactitud es REQUISITO
+    //   para la resolución name->id del write real (PASO B): un nombre que no matchea no resuelve.
+    //   v1.58.0: "Servicios Puntuales" -> "Servicio puntual" (id 34) + alta de "Servicio incompatible con
+    //   ayudas" (39) y "Región sin acreditación" (38) en Cobertura Qida, y "No show tras derivación
+    //   coordinación" (40) en No localizable — catálogo intencional (no era un gap).
+    //   priceElevated:true habilita el Nivel 3 "Detalle adicional" (dropdown 1-valor "Precio elevado",
+    //   modelado como lista para ser extensible). Motivos sin submotivos -> subreasons:[] (el campo
+    //   Submotivo se oculta). El submit HOY sigue siendo stub submitDismissal(); el write real va en PASO B.
     var DISMISSAL_TAXONOMY = {
         'Alternativa no At. Dom.': { subreasons: [
             { name: 'Ingreso en centro de día', priceElevated: true },
@@ -2585,10 +2590,12 @@
             { name: 'Complejidad sociosanitaria' },
             { name: 'Cuidados otros colectivos (p.e.: Niños)' },
             { name: 'Horarios' },
-            { name: 'Servicios Puntuales' },
+            { name: 'Servicio puntual' },
+            { name: 'Servicio incompatible con ayudas' },
             { name: 'Otras necesidades (p.e.: Limpieza)' },
             { name: 'Región cubierta' },
             { name: 'Región no cubierta' },
+            { name: 'Región sin acreditación' },
             { name: 'Derivación a empresa del grupo' }
         ] },
         'Competencia At. Dom.': { subreasons: [
@@ -2612,7 +2619,8 @@
         ] },
         'No localizable': { subreasons: [
             { name: 'Comunicación aún no establecida' },
-            { name: 'Comunicación establecida' }
+            { name: 'Comunicación establecida' },
+            { name: 'No show tras derivación coordinación' }
         ] },
         'Requisitos no éticos': { subreasons: [
             { name: 'Falta adaptación domicilio a interno/a' },

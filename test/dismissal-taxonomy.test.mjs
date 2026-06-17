@@ -55,11 +55,22 @@ test('11 motivos, en orden, y ORDER == keys del mapa', () => {
     assert.equal(Object.keys(mod.TAX).length, 11);
 });
 
-test('Cobertura Qida incluye los 2 submotivos nuevos', () => {
+test('Cobertura Qida: catalogo completo v1.58.0 (10 submotivos, nombres exactos de Odoo)', () => {
     const names = mod.TAX['Cobertura Qida'].subreasons.map((s) => s.name);
-    assert.ok(names.includes('Servicios Puntuales'), 'falta Servicios Puntuales');
+    // v1.58.0: "Servicio puntual" (NO "Servicios Puntuales" — debe matchear el es_ES de Odoo, id 34).
+    assert.ok(names.includes('Servicio puntual'), 'falta Servicio puntual (Odoo id 34)');
+    assert.ok(!names.includes('Servicios Puntuales'), 'quedó el nombre viejo "Servicios Puntuales" (no matchea Odoo)');
     assert.ok(names.includes('Derivación a empresa del grupo'), 'falta Derivación a empresa del grupo');
-    assert.equal(names.length, 8);
+    // v1.58.0: altas de catálogo (no eran gap).
+    assert.ok(names.includes('Servicio incompatible con ayudas'), 'falta Servicio incompatible con ayudas (id 39)');
+    assert.ok(names.includes('Región sin acreditación'), 'falta Región sin acreditación (id 38)');
+    assert.equal(names.length, 10);
+});
+
+test('No localizable incluye "No show tras derivación coordinación" (v1.58.0, id 40)', () => {
+    const names = mod.TAX['No localizable'].subreasons.map((s) => s.name);
+    assert.ok(names.includes('No show tras derivación coordinación'), 'falta No show tras derivación coordinación');
+    assert.equal(names.length, 3);
 });
 
 test('Error operativo y Faltan datos no tienen submotivos', () => {
