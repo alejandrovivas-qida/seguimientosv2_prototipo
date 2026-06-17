@@ -10,3 +10,6 @@ Thumbs.db
 
 .vercel
 .env*.local
+
+# QA artifacts (Playwright screenshots, generados localmente — no se versionan)
+.qa-shots/
