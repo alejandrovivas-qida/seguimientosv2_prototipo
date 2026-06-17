@@ -3958,6 +3958,12 @@
             '.qida-detail-shell-head{display:flex;align-items:center;gap:14px;flex:1;min-width:0;}',
             '.qida-dsh-name{font-size:14px;font-weight:500;color:var(--s900);line-height:1;white-space:nowrap;}',
             '.qida-dsh-id{font-size:12px;font-weight:400;color:var(--s500);}',
+            /* v1.54.0 (FIX 1): bloque título (nombre + ID) clickeable -> cierra el modal. <button> nativo
+               (teclado Enter/Space + click) reseteado a texto plano. cursor:pointer + hover sutil; margin
+               negativo == padding para que el hit-area no empuje a los hermanos del header. */
+            '.qida-dsh-titleblock{display:inline-flex;align-items:center;gap:8px;cursor:pointer;border:0;background:transparent;font-family:inherit;border-radius:8px;padding:3px 8px;margin:-3px -6px;transition:background .12s;}',
+            '.qida-dsh-titleblock:hover{background:var(--s100);}',
+            '.qida-dsh-titleblock:focus-visible{outline:2px solid var(--qg);outline-offset:1px;}',
             '.qida-dsh-meta{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:12px;font-weight:400;flex-wrap:wrap;min-width:0;overflow:hidden;}',
             '.qida-dsh-meta-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}',
             '.qida-dsh-sep{color:var(--s300);}',
@@ -9550,8 +9556,14 @@
                     : '';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
-                    + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
-                    + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
+                    // v1.54.0 (FIX 1): el bloque título (nombre + ID) cierra el modal — reusa la MISMA
+                    //   acción de la X (data-action="close-modal"). La AF cierra el widget y queda viendo el
+                    //   lead en Odoo. Solo envuelve nombre+ID: "Volver", el badge de días, el pill de temp y
+                    //   el meta quedan FUERA del wrapper (hermanos) y conservan su comportamiento.
+                    + '<button type="button" class="qida-dsh-titleblock" data-action="close-modal" title="Cerrar el widget y ver el lead en Odoo">'
+                        + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
+                        + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
+                    + '</button>'
                     + '<span class="qida-dsh-days ' + lvl + '">' + icon('clock', 11) + ' ' + esc(daysLabel) + '</span>'
                     // v1.49.8: botón "Dar por perdido" entre días-sin-contacto y el separador antes del pill
                     //   de temperatura (ubicación acordada con el PO). Si el gate falla -> string vacío
