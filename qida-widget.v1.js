@@ -16,9 +16,11 @@
  *     viendo el lead en Odoo. Envuelto en .qida-dsh-titleblock (cursor:pointer + hover sutil var(--s100),
  *     role="button" + tabindex="0"). NO incluye "Volver", el badge de días, el pill de temperatura ni el
  *     meta: esos hermanos quedan fuera del wrapper y conservan su comportamiento previo.
- *   - FIX 2 — Limpieza de #f37a28 fuera de .qida-badge: NO-OP. Búsqueda case-insensitive de "f37a28" en el
- *     archivo: 0 matches. No había nada que remover en esta rama; el caso reportado vive en otra rama no
- *     mergeada. Item cerrado sin cambios de código (documentado acá para trazabilidad).
+ *   - FIX 2 — Limpieza del naranja Qida (el hex reservado para .qida-badge) aplicado como background en
+ *     otros elementos: NO-OP. La búsqueda case-insensitive de ese hex en el archivo da 0 matches (por eso
+ *     no se escribe acá literal: mantenemos el invariante de que el grep solo lo encuentre donde sea
+ *     legítimo). No había nada que remover en esta rama; el caso reportado vive en otra rama no mergeada.
+ *     Item cerrado sin cambios de código (documentado acá para trazabilidad).
  *   - FIX 3a — Anchos del .qida-detail-body: pane WhatsApp nth-child(1) 28% → 38% (a costa del centro,
  *     que es flex:1 1 auto y absorbe el delta). pane-ai nth-child(3) queda en 32%. Media query 1200px:
  *     nth-child(1) 26% → 36% para mantener el ensanche también en pantallas medianas (conserva la relación
