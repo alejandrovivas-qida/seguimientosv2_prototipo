@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.53.0
+ * QIDA ASSISTANT v1.54.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,39 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.54.0 (2026-06-17 — batch UX: header cierra modal · pane WA más ancho + auto-grow · modal "Dar de baja"):
+ *   - FIX 1 — Click en el bloque título del header del detalle (nombre + ID del lead) cierra el modal,
+ *     reusando data-action="close-modal" (la misma acción de la X). Así la AF cierra el widget y queda
+ *     viendo el lead en Odoo. Envuelto en .qida-dsh-titleblock (cursor:pointer + hover sutil var(--s100),
+ *     role="button" + tabindex="0"). NO incluye "Volver", el badge de días, el pill de temperatura ni el
+ *     meta: esos hermanos quedan fuera del wrapper y conservan su comportamiento previo.
+ *   - FIX 2 — Limpieza del naranja Qida (el hex reservado para .qida-badge) aplicado como background en
+ *     otros elementos: NO-OP. La búsqueda case-insensitive de ese hex en el archivo da 0 matches (por eso
+ *     no se escribe acá literal: mantenemos el invariante de que el grep solo lo encuentre donde sea
+ *     legítimo). No había nada que remover en esta rama; el caso reportado vive en otra rama no mergeada.
+ *     Item cerrado sin cambios de código (documentado acá para trazabilidad).
+ *   - FIX 3a — Anchos del .qida-detail-body: pane WhatsApp nth-child(1) 28% → 38% (a costa del centro,
+ *     que es flex:1 1 auto y absorbe el delta). pane-ai nth-child(3) queda en 32%. Media query 1200px:
+ *     nth-child(1) 26% → 36% para mantener el ensanche también en pantallas medianas (conserva la relación
+ *     -2pp del breakpoint). Mobile sin cambios (nth-child(3) se oculta a 980px, nth-child(1) a 760px).
+ *   - FIX 3b — Textarea de WhatsApp (.qida-wa-textarea) auto-grow hasta ~12 líneas: max-height 120px → 320px.
+ *     autoResizeTextarea ahora lee el max-height del CSS de cada textarea vía getComputedStyle (cap por
+ *     elemento) en vez del 120 hardcodeado: el de WhatsApp crece a 320px; el del chat IA
+ *     (.qida-aichat-input-field, max-height 120px intacto) NO cambia (Alejandro no lo pidió). El histórico
+ *     (.qida-pane-wa-body, flex:1 + overflow-y:auto) cede el alto y mantiene su scroll interno.
+ *   - FIX 4 — Modal "Dar de baja lead" (SOLO FRONTEND): taxonomía completa en DISMISSAL_TAXONOMY
+ *     (11 motivos + submotivos; "Servicios Puntuales" y "Derivación a empresa del grupo" incluidos). Dropdowns
+ *     en cascada: Motivo (required) → Submotivo (required si el motivo tiene; oculto en "Error operativo" /
+ *     "Faltan datos de contacto") → Detalle adicional / Nivel 3 (dropdown 1-valor "Precio elevado", aparece
+ *     SOLO en los submotivos priceElevated de "Alternativa no At. Dom." y "Competencia At. Dom."). Entrada:
+ *     botón "Dar de baja" en el header del detalle. Submit → stub submitDismissal(payload) que SOLO hace
+ *     console.log + toast "Lead dado de baja" + cierra el modal; la persistencia a Odoo va en una task aparte.
+ *     Reusa el chrome de modales existente (.qida-schedule*).
+ *   - Defaults que tomé: (a) rama claude/funny-rubin-5ii415 (la designada por el entorno) en vez de
+ *     feat/widget-ux-batch-jun17 del brief — flageado en la PR. (b) "Dar de baja" se muestra SIN gate
+ *     (visible en mock/index.html para QA) y coexiste con "Dar por perdido": reconciliar con el PO en una
+ *     task aparte. (c) FILENAME/WIDGET_URL sin cambios (no-breaking, sigue v1).
  *
  * Cambios v1.53.0 (2026-06-11 — selector del asistente: 4 tipos → 3 botones INICIO · SEGUIMIENTO · CIERRE):
  *   - El detalle del lead deja de pintar 4 tipos (operativa/seguimiento/presentacion/reactivar) y pasa
@@ -1932,7 +1965,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.53.0';
+    var VERSION = '1.54.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2477,6 +2510,82 @@
     };
 
     // ============================================================
+    // v1.54.0 (FIX 4): TAXONOMIA "DAR DE BAJA" un lead
+    // ============================================================
+    // Mapa Motivo -> { subreasons: [{ name, priceElevated? }] }. Los strings van EXACTAMENTE como en
+    //   Odoo (son IDs traducibles; aca como strings simples). priceElevated:true habilita el Nivel 3
+    //   "Detalle adicional" (dropdown 1-valor "Precio elevado", modelado como lista para ser extensible).
+    //   Motivos sin submotivos -> subreasons:[] (el campo Submotivo se oculta). SOLO FRONTEND: el submit
+    //   llama al stub submitDismissal(payload); la persistencia a Odoo va en una task aparte.
+    var DISMISSAL_TAXONOMY = {
+        'Alternativa no At. Dom.': { subreasons: [
+            { name: 'Ingreso en centro de día', priceElevated: true },
+            { name: 'Ingreso en residencia privada', priceElevated: true },
+            { name: 'Ingreso en residencia pública', priceElevated: true }
+        ] },
+        'Cambio del estado del usuario': { subreasons: [
+            { name: 'Exitus del usuario' },
+            { name: 'Ingreso en centro sanitario' },
+            { name: 'Mejora del estado del usuario' }
+        ] },
+        'Cobertura Qida': { subreasons: [
+            { name: 'Complejidad sociosanitaria' },
+            { name: 'Cuidados otros colectivos (p.e.: Niños)' },
+            { name: 'Horarios' },
+            { name: 'Servicios Puntuales' },
+            { name: 'Otras necesidades (p.e.: Limpieza)' },
+            { name: 'Región cubierta' },
+            { name: 'Región no cubierta' },
+            { name: 'Derivación a empresa del grupo' }
+        ] },
+        'Competencia At. Dom.': { subreasons: [
+            { name: 'Contratación legal cuidador sin intermediario', priceElevated: true },
+            { name: 'Mercado negro', priceElevated: true },
+            { name: 'Otra empresa', priceElevated: true },
+            { name: 'Solución familiar', priceElevated: true }
+        ] },
+        'Desacuerdo familiar': { subreasons: [
+            { name: 'Discrepancias familiares' },
+            { name: 'Usuario no acepta el servicio' }
+        ] },
+        'Duplicado': { subreasons: [
+            { name: 'Doble contacto misma familia' }
+        ] },
+        'Error operativo': { subreasons: [] },
+        'Faltan datos de contacto': { subreasons: [] },
+        'No familia': { subreasons: [
+            { name: 'Cuidador' },
+            { name: 'Otro' }
+        ] },
+        'No localizable': { subreasons: [
+            { name: 'Comunicación aún no establecida' },
+            { name: 'Comunicación establecida' }
+        ] },
+        'Requisitos no éticos': { subreasons: [
+            { name: 'Falta adaptación domicilio a interno/a' },
+            { name: 'No respeto del descanso laboral' },
+            { name: 'Requisitos raciales' },
+            { name: 'Otro' }
+        ] }
+    };
+    // Orden explícito de motivos para el dropdown (no dependemos del iteration order del objeto).
+    var DISMISSAL_REASON_ORDER = [
+        'Alternativa no At. Dom.',
+        'Cambio del estado del usuario',
+        'Cobertura Qida',
+        'Competencia At. Dom.',
+        'Desacuerdo familiar',
+        'Duplicado',
+        'Error operativo',
+        'Faltan datos de contacto',
+        'No familia',
+        'No localizable',
+        'Requisitos no éticos'
+    ];
+    // Valores del Nivel 3 hoy (único). Lista para que agregar más sea trivial (no es checkbox).
+    var DISMISSAL_DETAIL_VALUES = ['Precio elevado'];
+
+    // ============================================================
     // STATE
     // ============================================================
     var state = {
@@ -2642,6 +2751,12 @@
         //     reversible (Deshacer) y "perdido" NO lo es desde el widget -> conceptos distintos.
         lostConfirm: null,
         lostLeadIds: new Set(),
+        // v1.54.0 (FIX 4): "Dar de baja" un lead (modal con taxonomía). SOLO FRONTEND.
+        //   dismissModal: null | { leadId, leadName, reason, subreason, detail } -> dropdowns en cascada.
+        //     reason = dismissal_reason_name ('' sin elegir). subreason = dismissal_subreason_name ('' /
+        //     N/A si el motivo no tiene). detail = Nivel 3 ('' | 'Precio elevado'). El submit (dismiss-
+        //     confirm) arma el payload y llama al stub submitDismissal (console.log + toast); NO persiste.
+        dismissModal: null,
 
         // Toast
         toast: null,                    // { msg, ts }
@@ -3835,7 +3950,9 @@
         // v1.50.0: lucide Handshake - tipo "Seguimiento" en el panel ASISTENTE IA.
         'handshake':'<path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/>',
         // v1.50.0: lucide FileText - tipo "Presentación" en el panel ASISTENTE IA.
-        'file-text':'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>'
+        'file-text':'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
+        // v1.54.0 (FIX 4): lucide Archive - icono del botón "Dar de baja" en el header del detalle.
+        'archive':'<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -3927,6 +4044,12 @@
             '.qida-detail-shell-head{display:flex;align-items:center;gap:14px;flex:1;min-width:0;}',
             '.qida-dsh-name{font-size:14px;font-weight:500;color:var(--s900);line-height:1;white-space:nowrap;}',
             '.qida-dsh-id{font-size:12px;font-weight:400;color:var(--s500);}',
+            /* v1.54.0 (FIX 1): bloque título (nombre + ID) clickeable -> cierra el modal. <button> nativo
+               (teclado Enter/Space + click) reseteado a texto plano. cursor:pointer + hover sutil; margin
+               negativo == padding para que el hit-area no empuje a los hermanos del header. */
+            '.qida-dsh-titleblock{display:inline-flex;align-items:center;gap:8px;cursor:pointer;border:0;background:transparent;font-family:inherit;border-radius:8px;padding:3px 8px;margin:-3px -6px;transition:background .12s;}',
+            '.qida-dsh-titleblock:hover{background:var(--s100);}',
+            '.qida-dsh-titleblock:focus-visible{outline:2px solid var(--qg);outline-offset:1px;}',
             '.qida-dsh-meta{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:12px;font-weight:400;flex-wrap:wrap;min-width:0;overflow:hidden;}',
             '.qida-dsh-meta-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}',
             '.qida-dsh-sep{color:var(--s300);}',
@@ -3983,7 +4106,9 @@
             '.qida-wa-clip:hover:not(:disabled),.qida-wa-mic:hover:not(:disabled){color:var(--s900);}',
             '.qida-wa-clip:disabled,.qida-wa-mic:disabled{color:var(--s300);cursor:not-allowed;}',
             '.qida-wa-mic.active{color:#b91c1c;}',
-            '.qida-wa-textarea{flex:1;min-height:24px;max-height:120px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
+            /* v1.54.0 (FIX 3b): max-height 120px -> 320px (~12 lineas). Auto-grow para ver mensajes largos
+               sin scroll interno; el alto lo cede .qida-pane-wa-body (flex:1+overflow-y:auto). min 24px. */
+            '.qida-wa-textarea{flex:1;min-height:24px;max-height:320px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
             '.qida-wa-textarea::placeholder{color:var(--s400);}',
             '.qida-wa-send{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:#0F6E56;color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s;}',
             '.qida-wa-send:hover:not(:disabled){background:var(--qgH);}',
@@ -4090,8 +4215,10 @@
 
             /* v1.7: Chat IA - columna dedicada */
             '.qida-pane-ai{background:#fff;display:flex;flex-direction:column;min-height:0;min-width:0;}',
-            /* v1.9: anchos por posicion estructural (siempre col 1 = pane-wa). El swap intercambia col 2 / col 3. */
-            '.qida-detail-body > *:nth-child(1){flex:0 0 28%;min-width:0;}',
+            /* v1.9: anchos por posicion estructural (siempre col 1 = pane-wa). El swap se removio en v1.17. */
+            /* v1.54.0 (FIX 3a): pane-wa nth-child(1) 28% -> 38% (~10pp mas ancho), a costa del centro
+               (flex:1 1 auto absorbe el delta). pane-ai nth-child(3) queda en 32%. */
+            '.qida-detail-body > *:nth-child(1){flex:0 0 38%;min-width:0;}',
             '.qida-detail-body > *:nth-child(2){flex:1 1 auto;min-width:0;}',
             '.qida-detail-body > *:nth-child(3){flex:0 0 32%;min-width:0;}',
             '.qida-pane-ai-head{background:#F7FAF8;border-bottom:0.5px solid var(--s200);padding:10px 14px;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:#0F6E56;display:flex;align-items:center;gap:6px;flex-shrink:0;}',
@@ -4394,6 +4521,11 @@
             '.qida-activity-modal{max-width:480px;}',
             '.qida-actv-confirm{max-width:420px;}',
             '.qida-actv-confirm-preview{margin:0;padding:10px 12px;background:var(--s50);border-left:3px solid var(--qg);border-radius:4px;font-size:13px;color:var(--s700);font-style:italic;}',
+            /* v1.54.0 (FIX 4): modal "Dar de baja". Reusa el chrome .qida-schedule* + .qida-actv-confirm-preview;
+               selects full-width (los labels de la taxonomía son largos, evitamos el cap de 240px). */
+            '.qida-dismiss-modal{max-width:460px;}',
+            '.qida-dismiss-modal .qida-leader-select{max-width:none;width:100%;box-sizing:border-box;}',
+            '.qida-dismiss-hint{font-size:11.5px;color:var(--s500);margin:8px 0 0;line-height:1.45;}',
             /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
                FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
                distinto los fr y se desalinearían. */
@@ -4454,6 +4586,11 @@
             '.qida-dsh-lost{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--red600);cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
             '.qida-dsh-lost:hover{border-color:var(--red600);background:var(--red50);}',
             '.qida-dsh-lost:focus-visible{outline:2px solid var(--red600);outline-offset:2px;}',
+            /* v1.54.0 (FIX 4): "Dar de baja" — acento NEUTRO (gris) para diferenciarlo del rojo de "Dar por
+               perdido". Mismo radio/padding/font-size que .qida-dsh-lost para coherencia del header. */
+            '.qida-dsh-dismiss{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--s600);cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
+            '.qida-dsh-dismiss:hover{border-color:var(--s400);background:var(--s50);color:var(--s900);}',
+            '.qida-dsh-dismiss:focus-visible{outline:2px solid var(--s400);outline-offset:2px;}',
             /* v1.49.7: "+ Crear actividad" en el header del detalle. Mismo verde Qida (#0F6E56)
                que el botón al fondo del panel "Próximas actividades" (.qida-act-new-btn), con el
                padding/font-size del resto del header (.qida-dsh-markdone) para coherencia. */
@@ -4504,7 +4641,9 @@
 
             /* Responsive */
             /* Detalle: anchos por posicion estructural. En 760px se oculta la 1ra columna (WA). */
-            '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 26%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
+            /* v1.54.0 (FIX 3a): 1200px nth-child(1) 26% -> 36% para mantener el ensanche del pane-wa en
+               pantallas medianas (conserva la relacion -2pp vs el default de 38%). nth-child(3) intacto. */
+            '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 36%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
             '@media (max-width:980px){.qida-detail-body > *:nth-child(3){display:none;}}',
             '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}}',
             /* v1.14 dashboard AF responsive: a 1100px se oculta "Tipo" (6 cols); a 980px se oculta
@@ -8886,6 +9025,133 @@
     }
 
     // ============================================================
+    // v1.54.0 (FIX 4): MODAL "DAR DE BAJA" un lead (taxonomía en cascada)
+    // ============================================================
+    // SOLO FRONTEND. El submit arma el payload y llama al stub submitDismissal(); la persistencia a Odoo
+    //   va en una task aparte. Reusa el chrome de modales existente (.qida-schedule* / .qida-actv-confirm-*).
+    function reasonHasSubreasons(reason) {
+        var def = DISMISSAL_TAXONOMY[reason];
+        return !!(def && def.subreasons && def.subreasons.length);
+    }
+    function findDismissSubreason(reason, subName) {
+        var def = DISMISSAL_TAXONOMY[reason];
+        if (!def || !def.subreasons) return null;
+        for (var i = 0; i < def.subreasons.length; i++) {
+            if (def.subreasons[i].name === subName) return def.subreasons[i];
+        }
+        return null;
+    }
+    // Nivel 3 "Detalle adicional" visible SOLO si el submotivo elegido es priceElevated.
+    function dismissShowsDetail(reason, subName) {
+        var sr = findDismissSubreason(reason, subName);
+        return !!(sr && sr.priceElevated);
+    }
+
+    function renderDismissModal() {
+        var d = state.dismissModal;
+        if (!d) return '';
+
+        // Campo 1: Motivo (required). Orden explícito vía DISMISSAL_REASON_ORDER.
+        var reasonOpts = '<option value="">Seleccionar motivo…</option>';
+        for (var i = 0; i < DISMISSAL_REASON_ORDER.length; i++) {
+            var rn = DISMISSAL_REASON_ORDER[i];
+            reasonOpts += '<option value="' + esc(rn) + '"' + (d.reason === rn ? ' selected' : '') + '>' + esc(rn) + '</option>';
+        }
+
+        // Campo 2: Submotivo (required si el motivo lo tiene). Oculto si el motivo no tiene submotivos.
+        var subField = '';
+        if (d.reason && reasonHasSubreasons(d.reason)) {
+            var subs = DISMISSAL_TAXONOMY[d.reason].subreasons;
+            var subOpts = '<option value="">Seleccionar submotivo…</option>';
+            for (var j = 0; j < subs.length; j++) {
+                subOpts += '<option value="' + esc(subs[j].name) + '"' + (d.subreason === subs[j].name ? ' selected' : '') + '>' + esc(subs[j].name) + '</option>';
+            }
+            subField = '<div class="qida-sb-section">'
+                + '<div class="qida-sb-label">Submotivo *</div>'
+                + '<select class="qida-leader-select qida-actv-input" data-input="dismiss-subreason">' + subOpts + '</select>'
+            + '</div>';
+        }
+
+        // Campo 3: Detalle adicional / Nivel 3 (opcional). Solo cuando (Motivo, Submotivo) es priceElevated.
+        var detailField = '';
+        if (dismissShowsDetail(d.reason, d.subreason)) {
+            var detailOpts = '<option value="">Seleccionar detalle…</option>';
+            for (var k = 0; k < DISMISSAL_DETAIL_VALUES.length; k++) {
+                var dv = DISMISSAL_DETAIL_VALUES[k];
+                detailOpts += '<option value="' + esc(dv) + '"' + (d.detail === dv ? ' selected' : '') + '>' + esc(dv) + '</option>';
+            }
+            detailField = '<div class="qida-sb-section">'
+                + '<div class="qida-sb-label">Detalle adicional</div>'
+                + '<select class="qida-leader-select qida-actv-input" data-input="dismiss-detail">' + detailOpts + '</select>'
+            + '</div>';
+        }
+
+        // Confirmar habilitado: motivo elegido + (submotivo elegido si el motivo lo requiere).
+        var canConfirm = !!d.reason && (!reasonHasSubreasons(d.reason) || !!d.subreason);
+        var confirmDisabled = canConfirm ? '' : ' disabled';
+        var preview = d.leadName ? '<p class="qida-actv-confirm-preview">&ldquo;' + esc(d.leadName) + '&rdquo;</p>' : '';
+
+        return '<div class="qida-schedule-bg" data-action="dismiss-bg">'
+            + '<div class="qida-schedule qida-dismiss-modal">'
+                + '<div class="qida-schedule-head">'
+                    + '<h3 class="qida-schedule-title">Dar de baja lead</h3>'
+                    + '<p class="qida-schedule-sub">Registrá el motivo de baja. <strong>No es un mensaje al lead</strong> — es una clasificación interna.</p>'
+                + '</div>'
+                + '<div class="qida-schedule-body">'
+                    + preview
+                    + '<div class="qida-sb-section">'
+                        + '<div class="qida-sb-label">Motivo *</div>'
+                        + '<select class="qida-leader-select qida-actv-input" data-input="dismiss-reason">' + reasonOpts + '</select>'
+                    + '</div>'
+                    + subField
+                    + detailField
+                + '</div>'
+                + '<div class="qida-schedule-foot">'
+                    + '<div class="qida-sb-actions">'
+                        + '<button class="qida-sb-cancel" data-action="dismiss-cancel">Cancelar</button>'
+                        + '<button class="qida-btn-primary" data-action="dismiss-confirm"' + confirmDisabled + '>' + icon('archive', 13) + ' Confirmar baja</button>'
+                    + '</div>'
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    function openDismissModal() {
+        var leadId = state.currentLeadId;
+        var lead = currentLead(leadId);
+        setState({ dismissModal: {
+            leadId: leadId,
+            leadName: (lead && lead.name) || ('Lead ' + leadId),
+            reason: '',
+            subreason: '',
+            detail: ''
+        } });
+    }
+
+    // v1.54.0 (FIX 4): STUB. NO persiste al backend (eso va en una task aparte). Solo loguea el payload
+    //   + feedback visual. El cierre del modal + toast los maneja handleDismissSubmit.
+    function submitDismissal(payload) {
+        console.log('[QidaAssistant] submitDismissal (stub, sin persistencia):', payload);
+    }
+
+    function handleDismissSubmit() {
+        var d = state.dismissModal;
+        if (!d) return;
+        if (!d.reason) { showToast('Elegí un motivo para continuar.', 'error'); return; }
+        if (reasonHasSubreasons(d.reason) && !d.subreason) { showToast('Elegí un submotivo para continuar.', 'error'); return; }
+        var payload = {
+            leadId: d.leadId,
+            dismissal_reason_name: d.reason,
+            dismissal_subreason_name: reasonHasSubreasons(d.reason) ? (d.subreason || null) : null,
+            dismissal_detail_name: (dismissShowsDetail(d.reason, d.subreason) && d.detail) ? d.detail : null
+        };
+        submitDismissal(payload);
+        state.dismissModal = null;
+        rerenderContent();
+        showToast('Lead dado de baja');
+    }
+
+    // ============================================================
     // RENDER: PANEL DE LIDERES (v1.12)
     // ============================================================
     // Devuelve las iniciales (1-2 letras) para el avatar de la tabla.
@@ -9517,15 +9783,28 @@
                     && !isImpersonating())
                     ? '<button class="qida-dsh-lost" data-action="lead-lost-open" title="Dar por perdido este lead (irreversible)">' + icon('x-circle', 12) + ' Dar por perdido</button>'
                     : '';
+                // v1.54.0 (FIX 4): "Dar de baja" — abre el modal con la taxonomía de motivos. Submit = stub
+                //   (no persiste; la integración a Odoo va en una task aparte). UNGATED a propósito: debe ser
+                //   visible/demoable también en mock (index.html, odooWriteEnabled=false). Coexiste con "Dar
+                //   por perdido" — a reconciliar con el PO (flageado en la PR).
+                var headerDismissBtn = '<button class="qida-dsh-dismiss" data-action="lead-dismiss-open" title="Dar de baja este lead (registrar motivo)">' + icon('archive', 12) + ' Dar de baja</button>';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
-                    + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
-                    + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
+                    // v1.54.0 (FIX 1): el bloque título (nombre + ID) cierra el modal — reusa la MISMA
+                    //   acción de la X (data-action="close-modal"). La AF cierra el widget y queda viendo el
+                    //   lead en Odoo. Solo envuelve nombre+ID: "Volver", el badge de días, el pill de temp y
+                    //   el meta quedan FUERA del wrapper (hermanos) y conservan su comportamiento.
+                    + '<button type="button" class="qida-dsh-titleblock" data-action="close-modal" title="Cerrar el widget y ver el lead en Odoo">'
+                        + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
+                        + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
+                    + '</button>'
                     + '<span class="qida-dsh-days ' + lvl + '">' + icon('clock', 11) + ' ' + esc(daysLabel) + '</span>'
                     // v1.49.8: botón "Dar por perdido" entre días-sin-contacto y el separador antes del pill
                     //   de temperatura (ubicación acordada con el PO). Si el gate falla -> string vacío
                     //   (sin separador colgante porque el separador siguiente sigue presente para tempPill).
                     + headerLostBtn
+                    // v1.54.0 (FIX 4): "Dar de baja" junto a "Dar por perdido" (ambas acciones de cierre del lead).
+                    + headerDismissBtn
                     + '<span class="qida-dsh-sep">&middot;</span>'
                     // v1.17: pill de temperatura como hijo directo del head (NO dentro de .qida-dsh-meta,
                     //   que tiene overflow:hidden y cliparía el dropdown). Queda alineado con las referencias.
@@ -9656,6 +9935,15 @@
             divl.id = 'qida-lost-confirm-root';
             divl.innerHTML = renderLostConfirm();
             shell.appendChild(divl);
+        }
+        // v1.54.0 (FIX 4): modal "Dar de baja" (taxonomía en cascada). Mismo patrón de mount.
+        var existingD = document.getElementById('qida-dismiss-root');
+        if (existingD) existingD.parentNode.removeChild(existingD);
+        if (state.dismissModal) {
+            var divd = document.createElement('div');
+            divd.id = 'qida-dismiss-root';
+            divd.innerHTML = renderDismissModal();
+            shell.appendChild(divd);
         }
     }
 
@@ -10267,6 +10555,20 @@
             case 'lost-confirm-yes':
                 handleLeadLost();
                 return;
+
+            // --- v1.54.0 (FIX 4): "Dar de baja" un lead (modal con taxonomía; submit = stub) ---
+            case 'lead-dismiss-open':
+                openDismissModal();
+                return;
+            case 'dismiss-cancel':
+                setState({ dismissModal: null });
+                return;
+            case 'dismiss-bg':
+                if (e.target === target) setState({ dismissModal: null });
+                return;
+            case 'dismiss-confirm':
+                handleDismissSubmit();
+                return;
         }
     }
 
@@ -10738,6 +11040,29 @@
                     else yesBtn.setAttribute('disabled', '');
                 }
             }
+        } else if (input === 'dismiss-reason') {
+            // v1.54.0 (FIX 4): cambia el Motivo -> resetea Submotivo + Detalle y re-renderiza (la cascada
+            //   cambia qué campos se muestran y habilita/deshabilita "Confirmar baja").
+            if (state.dismissModal) {
+                state.dismissModal.reason = node.value || '';
+                state.dismissModal.subreason = '';
+                state.dismissModal.detail = '';
+                rerenderContent();
+            }
+        } else if (input === 'dismiss-subreason') {
+            // v1.54.0 (FIX 4): cambia el Submotivo -> si el nuevo no es priceElevated, limpia el Detalle.
+            //   Re-render para mostrar/ocultar el Nivel 3 y habilitar "Confirmar baja".
+            if (state.dismissModal) {
+                state.dismissModal.subreason = node.value || '';
+                if (!dismissShowsDetail(state.dismissModal.reason, state.dismissModal.subreason)) {
+                    state.dismissModal.detail = '';
+                }
+                rerenderContent();
+            }
+        } else if (input === 'dismiss-detail') {
+            // v1.54.0 (FIX 4): Nivel 3 (opcional). Store sin rerender (no afecta a otros campos; el select
+            //   nativo mantiene su valor).
+            if (state.dismissModal) state.dismissModal.detail = node.value || '';
         } else if (input === 'wa-draft') {
             // v1.6: textarea de WhatsApp. Sin rerender completo: solo togglear send + auto-resize.
             state.draftMessage = node.value;
@@ -10821,11 +11146,18 @@
         }
     }
 
-    // v1.6: auto-resize del textarea de WhatsApp (1-5 lineas).
+    // v1.6: auto-resize del textarea. v1.54.0 (FIX 3b): el cap se lee del max-height del CSS de CADA
+    //   textarea via getComputedStyle, en vez del 120 hardcodeado. Asi el de WhatsApp
+    //   (.qida-wa-textarea = 320px, ~12 lineas) crece mas y el del chat IA (.qida-aichat-input-field =
+    //   120px) queda INTACTO. Fallback 320 si no se puede leer. min-height lo maneja el CSS (24px).
     function autoResizeTextarea(ta) {
         if (!ta) return;
         ta.style.height = 'auto';
-        var max = 120;
+        var max = 320;
+        if (window.getComputedStyle) {
+            var cssMax = parseInt(window.getComputedStyle(ta).maxHeight, 10);
+            if (cssMax && !isNaN(cssMax)) max = cssMax;
+        }
         var newH = Math.min(ta.scrollHeight, max);
         ta.style.height = newH + 'px';
     }
@@ -11445,6 +11777,8 @@
             // v1.49.8: el confirm de "Dar por perdido" sigue la misma política (Esc cierra el modal,
             //   no el widget). NO usa setState para preservar la posible carga async de motivos.
             if (state.lostConfirm) { setState({ lostConfirm: null }); return; }
+            // v1.54.0 (FIX 4): Esc cierra el modal "Dar de baja" (no el widget).
+            if (state.dismissModal) { setState({ dismissModal: null }); return; }
             if (state.activityConfirm) { setState({ activityConfirm: null }); return; }
             if (state.activityModal) { setState({ activityModal: null }); return; }
             if (state.rescheduleModal) { setState({ rescheduleModal: null }); return; }
@@ -11514,6 +11848,8 @@
         //   del page load (igual política que completedTodayIds): los leads marcados perdidos no
         //   reaparecen al cerrar/reabrir el modal; sólo al hacer reload (que trae estado real del backend).
         state.lostConfirm = null;
+        // v1.54.0 (FIX 4): cerrar el modal "Dar de baja" al cerrar el widget.
+        state.dismissModal = null;
         // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
         //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
         state.agentBuilderConfirmDiscard = false;
