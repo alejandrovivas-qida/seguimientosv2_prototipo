@@ -4020,7 +4020,9 @@
             '.qida-wa-clip:hover:not(:disabled),.qida-wa-mic:hover:not(:disabled){color:var(--s900);}',
             '.qida-wa-clip:disabled,.qida-wa-mic:disabled{color:var(--s300);cursor:not-allowed;}',
             '.qida-wa-mic.active{color:#b91c1c;}',
-            '.qida-wa-textarea{flex:1;min-height:24px;max-height:120px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
+            /* v1.54.0 (FIX 3b): max-height 120px -> 320px (~12 lineas). Auto-grow para ver mensajes largos
+               sin scroll interno; el alto lo cede .qida-pane-wa-body (flex:1+overflow-y:auto). min 24px. */
+            '.qida-wa-textarea{flex:1;min-height:24px;max-height:320px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
             '.qida-wa-textarea::placeholder{color:var(--s400);}',
             '.qida-wa-send{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:#0F6E56;color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s;}',
             '.qida-wa-send:hover:not(:disabled){background:var(--qgH);}',
@@ -4127,8 +4129,10 @@
 
             /* v1.7: Chat IA - columna dedicada */
             '.qida-pane-ai{background:#fff;display:flex;flex-direction:column;min-height:0;min-width:0;}',
-            /* v1.9: anchos por posicion estructural (siempre col 1 = pane-wa). El swap intercambia col 2 / col 3. */
-            '.qida-detail-body > *:nth-child(1){flex:0 0 28%;min-width:0;}',
+            /* v1.9: anchos por posicion estructural (siempre col 1 = pane-wa). El swap se removio en v1.17. */
+            /* v1.54.0 (FIX 3a): pane-wa nth-child(1) 28% -> 38% (~10pp mas ancho), a costa del centro
+               (flex:1 1 auto absorbe el delta). pane-ai nth-child(3) queda en 32%. */
+            '.qida-detail-body > *:nth-child(1){flex:0 0 38%;min-width:0;}',
             '.qida-detail-body > *:nth-child(2){flex:1 1 auto;min-width:0;}',
             '.qida-detail-body > *:nth-child(3){flex:0 0 32%;min-width:0;}',
             '.qida-pane-ai-head{background:#F7FAF8;border-bottom:0.5px solid var(--s200);padding:10px 14px;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:#0F6E56;display:flex;align-items:center;gap:6px;flex-shrink:0;}',
@@ -4541,7 +4545,9 @@
 
             /* Responsive */
             /* Detalle: anchos por posicion estructural. En 760px se oculta la 1ra columna (WA). */
-            '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 26%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
+            /* v1.54.0 (FIX 3a): 1200px nth-child(1) 26% -> 36% para mantener el ensanche del pane-wa en
+               pantallas medianas (conserva la relacion -2pp vs el default de 38%). nth-child(3) intacto. */
+            '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 36%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
             '@media (max-width:980px){.qida-detail-body > *:nth-child(3){display:none;}}',
             '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}}',
             /* v1.14 dashboard AF responsive: a 1100px se oculta "Tipo" (6 cols); a 980px se oculta
@@ -10864,11 +10870,18 @@
         }
     }
 
-    // v1.6: auto-resize del textarea de WhatsApp (1-5 lineas).
+    // v1.6: auto-resize del textarea. v1.54.0 (FIX 3b): el cap se lee del max-height del CSS de CADA
+    //   textarea via getComputedStyle, en vez del 120 hardcodeado. Asi el de WhatsApp
+    //   (.qida-wa-textarea = 320px, ~12 lineas) crece mas y el del chat IA (.qida-aichat-input-field =
+    //   120px) queda INTACTO. Fallback 320 si no se puede leer. min-height lo maneja el CSS (24px).
     function autoResizeTextarea(ta) {
         if (!ta) return;
         ta.style.height = 'auto';
-        var max = 120;
+        var max = 320;
+        if (window.getComputedStyle) {
+            var cssMax = parseInt(window.getComputedStyle(ta).maxHeight, 10);
+            if (cssMax && !isNaN(cssMax)) max = cssMax;
+        }
         var newH = Math.min(ta.scrollHeight, max);
         ta.style.height = newH + 'px';
     }
