@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.53.0
+ * QIDA ASSISTANT v1.58.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,92 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.58.0 (2026-06-17 — pane WhatsApp más ancho/auto-grow; "Dar de baja" DORMIDO tras flag):
+ *   Rebase del batch UX de PR #45 (rama claude/funny-rubin-5ii415, era v1.54.0) sobre la línea go-live v1.57.0.
+ *   - FIX 3a — Pane WhatsApp más ancho (.qida-detail-body nth-child(1) 28% → 38%; media query 1200px 26% → 36%;
+ *     el centro flex:1 1 auto absorbe el delta; pane-ai nth-child(3) intacto en 32%). FIX 3b — textarea de
+ *     WhatsApp auto-grow a 320px (autoResizeTextarea lee el max-height por elemento vía getComputedStyle; el
+ *     chat IA queda en 120px). [ESTO es lo único visible que shipea esta versión.]
+ *   - FIX 4 "Dar de baja" (modal + DISMISSAL_TAXONOMY + catálogo alineado 1:1 a crm.lost.reason /
+ *     crm.lost.subreason de Odoo): queda GATED OFF detrás de DISMISSAL_UI_ENABLED=false. El código vive en
+ *     el archivo pero el botón NO se pinta y NINGÚN usuario llega al modal, porque el submit todavía es STUB
+ *     (submitDismissal = console.log, no persiste a Odoo). Mostrarlo "aparentaría funcionar" sin escribir.
+ *     Se prende en v1.59.0 cuando esté el write real same-origin (ver bloque de tareas v1.59.0 arriba del
+ *     flag, junto a DISMISSAL_TAXONOMY). Mientras tanto el caso lo cubre "Dar por perdido" (flow viejo, intacto).
+ *   - DESCARTADO de PR #45: FIX 1 ("click en el título cierra el modal") — colisionaba con el deep-link a
+ *     Odoo de v1.55.0 #3 (data-action="open-lead-odoo" → navigateLeadToOdoo), que se mantiene tal cual.
+ *     FIX 2 era no-op (0 matches del hex).
+ *
+ * Cambios v1.57.0 (2026-06-16 — hotfix demo: badge Urgente en detalle + scroll WhatsApp en Inicio/Cierre):
+ *   - #2 (bug) Badge "Urgente" no aparecía en el header del detalle: el lead del detalle
+ *     (crm.lead.read) no siempre trae `urgency` poblado, así que normalizeUrgency(lead.urgency) daba
+ *     null. Fix: fallback a la urgency de la cartera (state.leadById[toNumericLeadId(lead.id)].urgency),
+ *     donde el dashboard SÍ la tiene. Mismo umbral ('alta') y clases que el dashboard.
+ *   - #3 (bug) Al tocar Inicio/Cierre, el pane de WhatsApp saltaba al tope: handleAiTemplateClick
+ *     seteaba __aiNeedsScroll (pane IA) pero NO __waNeedsScroll, y el re-render reseteaba el scroll de
+ *     WhatsApp. Fix: setear __waNeedsScroll en los 3 re-renders de handleAiTemplateClick -> el pane de
+ *     WhatsApp se re-ancla a su último mensaje (no salta arriba).
+ *   - (Backend, fuera de esta branch) El 500 de Inicio/Cierre en /template-draft se arregló server-side
+ *     (event_type 'template_personalized' faltaba en el allowlist + CHECK; ya deployado).
+ *   - Sin tocar WIDGET_URL/loaders/publish.mjs. SIN publicar al Blob (lo hace Alejandro tras testear).
+ *
+ * Cambios v1.56.0 (2026-06-15 — go-live demo: combina plantillas+personalización (v1.54.0) y los 6 fixes (v1.55.0)):
+ *   - Branch de integración para la demo: v1.54.0 + v1.55.0 juntos sobre v1.53.0. Sin cambios de
+ *     comportamiento más allá de la suma de ambas features. Detalle de cada una en sus bloques debajo.
+ *
+ * Cambios v1.54.0 (2026-06-15 — plantillas Inicio/Cierre EDITABLES por AF + personalización ligera al lead):
+ *   - "Armá tu asistente" deja de editar draft-variants (length/tone, muertos con el writer de 2 pasos)
+ *     y pasa a ser el EDITOR de las 2 plantillas de la AF: textareas Inicio + Cierre (apiladas) con
+ *     chips de variables ({nombre}, {nombre_af}, {telefono_af}) y "Restaurar genérica" por plantilla.
+ *     Carga GET /api/me/templates?raw=true (CRUDO: no interpola {nombre_af}, así no se hornea el
+ *     placeholder al guardar) y guarda con PUT /api/me/templates (preserva la metadata del AfTemplate,
+ *     solo pisa el texto). openAgentBuilder/renderAgentBuilder/agentBuilderDirty/ab-save repurposados.
+ *   - Inicio/Cierre dejan de rellenar la plantilla en el cliente: ahora pegan a
+ *     POST /api/leads/{id}/template-draft (handleAiTemplateClick -> fetchTemplateDraft), que devuelve
+ *     la plantilla PERSONALIZADA ligero al lead (nombre del contacto + ≤1 guiño a lo hablado, sin
+ *     reescribir). Mismo flujo async que Seguimiento: burbuja loading -> card editable+copiable
+ *     (kind:'variants', source:'template') -> pick-variant -> "Copiar al WhatsApp", sin envío.
+ *   - Mock (flag-off): el editor lee/escribe MOCK_AF_TEMPLATES; los botones Inicio/Cierre derivan el
+ *     draft de MOCK_AF_TEMPLATES con {nombre} relleno (fallback:true). index.html anda sin backend.
+ *   - Si el personalizador del backend está apagado o el LLM falla, el endpoint devuelve la plantilla
+ *     con el nombre puesto (degrada al comportamiento de v1.53, sin error). Principio rector intacto:
+ *     el widget NO envía; la AF edita y copia.
+ *   - Defaults que tomé: textareas apiladas (no pestañas) + chips de variables + "Restaurar genérica"
+ *     desde la plantilla genérica (MOCK_AF_TEMPLATES); Guardar requiere ambas plantillas no vacías;
+ *     length='medium'/tone='neutral' en el draft de plantilla; "Restaurar genérica" resetea al texto
+ *     genérico de Qida; al guardar se invalida templatesCache. FILENAME y WIDGET_URL sin cambios
+ *     (no-breaking, sigue v1). SIN publicar al Blob (lo hace el orquestador). Código muerto de
+ *     draft-variants (validateVariants/renderVariantRow/DraftService.*DraftVariants) queda sin uso.
+ *
+ * Cambios v1.55.0 (2026-06-15 — batch de 6 fixes; v1.54.0 reservado para la feature de plantillas, otra branch):
+ *   - #1 (bug) SCROLL conversación WhatsApp: el auto-scroll al fondo (scrollWaToBottom, flag
+ *     state.__waNeedsScroll) se perdía cuando los loads ASYNC del Resumen/Análisis IA re-renderizaban
+ *     sin setear el flag. Ahora loadRecommendation, loadRecommendationPlan y LeadDetailService.fetchAll
+ *     (rerender que puebla `analysis`) setean __waNeedsScroll=true antes del rerender (dentro del
+ *     race-guard currentLeadId===leadId). La conversación queda anclada al último mensaje tras cada load.
+ *   - #3 (feature) ID+NOMBRE del lead = BOTÓN deep-link a Odoo: en el header del detalle el id+nombre
+ *     pasa a ser un <button class="qida-dsh-idname" data-action="open-lead-odoo"> (fondo+borde). Click ->
+ *     navigateLeadToOdoo(leadId): setea window.location.hash reusando cids/menu_id/action del hash actual
+ *     y swapeando id (toNumericLeadId)/model=crm.lead/view_type=form (inverso de parseOdooLeadDeepLink).
+ *   - #4 (UI) Modal "+ Nueva actividad": "Fecha límite" pasa a la DERECHA de "Tipo" (fila de 2 columnas,
+ *     nueva clase .qida-sb-row2 grid 1fr 1fr); antes quedaba escondida debajo de Resumen/Nota. Solo layout.
+ *   - #5 (bug) "Marcar hecho" del HEADER no hacía nada: state.completedTodayIds mezclaba formatos de id
+ *     (fila=display_id "L#####", header=currentLeadId numérico). Normalizado TODO a clave canónica
+ *     toNumericLeadId (markFollowupDone/undoFollowupDone/persist* + renderDetailMarkDoneBtn + liveDashRows).
+ *     Ahora el header marca hecho idéntico a la fila (flip "Hecho hoy" + fila filtrada + POST done_today),
+ *     desde cualquier entrada (dashboard/Actividades/deep-link).
+ *   - #6 (feature) Badge "Urgente" en el header del detalle cuando normalizeUrgency(lead.urgency)==='alta'
+ *     (mismo umbral/clases .qida-dash-badge-urgent + .qida-dash-badge-dot que el dashboard). Sin backend.
+ *   - #7 (bug) Lead no abría desde deep-link si NO estaba en la cartera activa (state.leadById): antes
+ *     rebotaba al dashboard en silencio. Ahora se intenta abrir igual (openLeadDetail); el detalle lo lee
+ *     Odoo (crm.lead.read) y los paneles del backend validan pertenencia (403 -> degradan). Si Odoo tampoco
+ *     deja leerlo, fetchAll.catch muestra mensaje claro ("no está en tu cartera activa o no tenés acceso")
+ *     vía state.deepLinkAttemptId. Así se abren convertidos/fuera-de-cartera que SÍ son de la AF.
+ *   - Defaults que tomé: badge "Urgente" junto a la IDENTIDAD del lead (en el header NO hay badge
+ *     "Mensaje nuevo" — vive solo en filas del dashboard); #7 usa el ACL de Odoo sobre crm.lead.read como
+ *     gate del "abrir" (el 403 del backend solo afecta los paneles, que ya degradan); #5 clave canónica
+ *     numérica. FILENAME y WIDGET_URL sin cambios (no-breaking, sigue v1). SIN publicar al Blob.
  *
  * Cambios v1.53.0 (2026-06-11 — selector del asistente: 4 tipos → 3 botones INICIO · SEGUIMIENTO · CIERRE):
  *   - El detalle del lead deja de pintar 4 tipos (operativa/seguimiento/presentacion/reactivar) y pasa
@@ -1932,7 +2018,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.53.0';
+    var VERSION = '1.58.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2477,6 +2563,111 @@
     };
 
     // ============================================================
+    // v1.58.0: FEATURE FLAG "Dar de baja" (DORMIDO — OFF en prod)
+    // ============================================================
+    // El modal "Dar de baja" + su taxonomía + el catálogo alineado a Odoo VIVEN en este archivo
+    //   (rebase de PR #45), pero el botón de entrada está GATED OFF: con DISMISSAL_UI_ENABLED=false
+    //   NINGÚN usuario llega al modal desde la UI. Razón: el submit todavía es STUB (submitDismissal =
+    //   console.log) — si se mostrara, "aparentaría funcionar" sin escribir a Odoo. Hasta entonces el
+    //   caso lo cubre "Dar por perdido" (flow viejo, intacto). NO borrar este código: se prende en v1.59.0.
+    //
+    // TAREAS v1.59.0 (cuando se prenda — NO implementadas todavía):
+    //   1. Capturar 2 payloads del Network tab de Odoo dando de baja a mano: caso A (motivo+submotivo) y
+    //      caso B (motivo+submotivo+Nivel-3 "Precio elevado") -> fijan el método RPC y el campo del Nivel-3.
+    //   2. Cablear submitDismissal al write real same-origin (mirror de handleLeadLost): resolución name->id
+    //      via search_read, submotivo SCOPEADO por reason_id (hay 'Otro' repetido entre motivos). Gating
+    //      odooWriteEnabled + oculto en impersonación. Optimistic-remove + revert (reusar lostLeadIds).
+    //   3. Reemplazar "Dar por perdido" por "Dar de baja": sacar el botón viejo (lead-lost-open) + sus
+    //      handlers (openLostConfirm/handleLeadLost/setLeadLost/loadLostReasons/render de lostConfirm).
+    //   4. Validar con Tampermonkey sobre un lead de TEST (los 3 escenarios + que no rompe nada).
+    //   5. Poner DISMISSAL_UI_ENABLED = true.
+    var DISMISSAL_UI_ENABLED = false;
+
+    // ============================================================
+    // v1.58.0 (ex-FIX 4): TAXONOMIA "DAR DE BAJA" un lead
+    // ============================================================
+    // Mapa Motivo -> { subreasons: [{ name, priceElevated? }] }. Los `name` coinciden EXACTAMENTE con
+    //   el es_ES de los records de Odoo (crm.lost.reason para el motivo; crm.lost.subreason para el
+    //   submotivo, scopeado por reason_id) — verificado contra la réplica. Esa exactitud es REQUISITO
+    //   para la resolución name->id del write real (PASO B): un nombre que no matchea no resuelve.
+    //   v1.58.0: "Servicios Puntuales" -> "Servicio puntual" (id 34) + alta de "Servicio incompatible con
+    //   ayudas" (39) y "Región sin acreditación" (38) en Cobertura Qida, y "No show tras derivación
+    //   coordinación" (40) en No localizable — catálogo intencional (no era un gap).
+    //   priceElevated:true habilita el Nivel 3 "Detalle adicional" (dropdown 1-valor "Precio elevado",
+    //   modelado como lista para ser extensible). Motivos sin submotivos -> subreasons:[] (el campo
+    //   Submotivo se oculta). El submit HOY sigue siendo stub submitDismissal(); el write real va en PASO B.
+    var DISMISSAL_TAXONOMY = {
+        'Alternativa no At. Dom.': { subreasons: [
+            { name: 'Ingreso en centro de día', priceElevated: true },
+            { name: 'Ingreso en residencia privada', priceElevated: true },
+            { name: 'Ingreso en residencia pública', priceElevated: true }
+        ] },
+        'Cambio del estado del usuario': { subreasons: [
+            { name: 'Exitus del usuario' },
+            { name: 'Ingreso en centro sanitario' },
+            { name: 'Mejora del estado del usuario' }
+        ] },
+        'Cobertura Qida': { subreasons: [
+            { name: 'Complejidad sociosanitaria' },
+            { name: 'Cuidados otros colectivos (p.e.: Niños)' },
+            { name: 'Horarios' },
+            { name: 'Servicio puntual' },
+            { name: 'Servicio incompatible con ayudas' },
+            { name: 'Otras necesidades (p.e.: Limpieza)' },
+            { name: 'Región cubierta' },
+            { name: 'Región no cubierta' },
+            { name: 'Región sin acreditación' },
+            { name: 'Derivación a empresa del grupo' }
+        ] },
+        'Competencia At. Dom.': { subreasons: [
+            { name: 'Contratación legal cuidador sin intermediario', priceElevated: true },
+            { name: 'Mercado negro', priceElevated: true },
+            { name: 'Otra empresa', priceElevated: true },
+            { name: 'Solución familiar', priceElevated: true }
+        ] },
+        'Desacuerdo familiar': { subreasons: [
+            { name: 'Discrepancias familiares' },
+            { name: 'Usuario no acepta el servicio' }
+        ] },
+        'Duplicado': { subreasons: [
+            { name: 'Doble contacto misma familia' }
+        ] },
+        'Error operativo': { subreasons: [] },
+        'Faltan datos de contacto': { subreasons: [] },
+        'No familia': { subreasons: [
+            { name: 'Cuidador' },
+            { name: 'Otro' }
+        ] },
+        'No localizable': { subreasons: [
+            { name: 'Comunicación aún no establecida' },
+            { name: 'Comunicación establecida' },
+            { name: 'No show tras derivación coordinación' }
+        ] },
+        'Requisitos no éticos': { subreasons: [
+            { name: 'Falta adaptación domicilio a interno/a' },
+            { name: 'No respeto del descanso laboral' },
+            { name: 'Requisitos raciales' },
+            { name: 'Otro' }
+        ] }
+    };
+    // Orden explícito de motivos para el dropdown (no dependemos del iteration order del objeto).
+    var DISMISSAL_REASON_ORDER = [
+        'Alternativa no At. Dom.',
+        'Cambio del estado del usuario',
+        'Cobertura Qida',
+        'Competencia At. Dom.',
+        'Desacuerdo familiar',
+        'Duplicado',
+        'Error operativo',
+        'Faltan datos de contacto',
+        'No familia',
+        'No localizable',
+        'Requisitos no éticos'
+    ];
+    // Valores del Nivel 3 hoy (único). Lista para que agregar más sea trivial (no es checkbox).
+    var DISMISSAL_DETAIL_VALUES = ['Precio elevado'];
+
+    // ============================================================
     // STATE
     // ============================================================
     var state = {
@@ -2487,6 +2678,10 @@
         //   o a dashboard). Doble función: race-guard del fetch async + trigger del skeleton en
         //   renderDetail durante la validación. Se limpia en closeModal y en back-to-dashboard.
         deepLinkLeadId: null,
+        // v1.55.0 (#7): id (canónico numérico) de un deep-link a un lead FUERA de la cartera activa
+        //   que igual intentamos abrir. Si Odoo no deja leerlo, fetchAll.catch muestra el mensaje
+        //   claro "no está en tu cartera activa". Se limpia al resolver (éxito/fallo) y al volver.
+        deepLinkAttemptId: null,
 
         // v1.10: dashboard "lista de leads enfriandose".
         //   completedTodayIds: Set<leadId>. Filas que la AF marco como hechas en esta sesion.
@@ -2573,6 +2768,14 @@
         agentBuilderLoading: false,
         agentBuilderError: null,
         agentBuilderSaving: false,
+        // v1.54.0: editor de plantillas Inicio/Cierre (repurposa "Armá tu asistente").
+        //   tplDraft: copia de trabajo {inicial,cierre} (solo texto). tplSaved: snapshot guardado
+        //   (dirty-check). tplFull: objetos AfTemplate completos del GET ?raw=true (preserva
+        //   metadata al guardar). tplLoaded: lazy. Plantillas por af_key -> se invalidan en setViewingAs.
+        tplDraft: { inicial: '', cierre: '' },
+        tplSaved: { inicial: '', cierre: '' },
+        tplFull: { inicial: null, cierre: null },
+        tplLoaded: false,
         recommendationCache: {},
 
         // v1.50.0: chat agent sprint 2 — planner + draft separados (lazy generation).
@@ -2642,6 +2845,12 @@
         //     reversible (Deshacer) y "perdido" NO lo es desde el widget -> conceptos distintos.
         lostConfirm: null,
         lostLeadIds: new Set(),
+        // v1.54.0 (FIX 4): "Dar de baja" un lead (modal con taxonomía). SOLO FRONTEND.
+        //   dismissModal: null | { leadId, leadName, reason, subreason, detail } -> dropdowns en cascada.
+        //     reason = dismissal_reason_name ('' sin elegir). subreason = dismissal_subreason_name ('' /
+        //     N/A si el motivo no tiene). detail = Nivel 3 ('' | 'Precio elevado'). El submit (dismiss-
+        //     confirm) arma el payload y llama al stub submitDismissal (console.log + toast); NO persiste.
+        dismissModal: null,
 
         // Toast
         toast: null,                    // { msg, ts }
@@ -3629,8 +3838,11 @@
                         _error: null
                     };
 
+                    // v1.55.0 (#7): el lead abrió OK (Odoo lo dejó leer) -> ya no es un intento pendiente.
+                    state.deepLinkAttemptId = null;
                     // Race-guard: solo rerender si el lead activo sigue siendo este.
                     if (state.currentLeadId === leadId) {
+                        state.__waNeedsScroll = true;  // v1.55.0 (#1): re-anclar al fondo tras poblar el detalle (Resumen/Análisis IA)
                         rerenderContent();
                     }
                     return state.leadDetailCache[cacheKey];
@@ -3650,10 +3862,17 @@
                     _error: err && err.message ? err.message : String(err),
                     _errors: [null, null, null, null, null]
                 };
+                // v1.55.0 (#7): si era un deep-link a un lead fuera de la cartera y Odoo no lo deja
+                //   leer -> mensaje claro en vez del genérico. Limpiamos el flag igual (resolvió).
+                var wasDeepLinkAttempt = state.deepLinkAttemptId
+                    && state.deepLinkAttemptId === (toNumericLeadId(leadId) || String(leadId));
+                state.deepLinkAttemptId = null;
                 if (state.currentLeadId === leadId) {
                     rerenderContent();
                     var msg = err && err.message ? err.message : 'Error desconocido';
-                    if (msg.indexOf('session expired') >= 0 || msg.indexOf('sesion expirada') >= 0) {
+                    if (wasDeepLinkAttempt) {
+                        showToast('Este lead no está en tu cartera activa o no tenés acceso.');
+                    } else if (msg.indexOf('session expired') >= 0 || msg.indexOf('sesion expirada') >= 0) {
                         showToast('Sesion expirada en Odoo. Recarga la pagina.');
                     } else if (msg.indexOf('Lead not found') >= 0) {
                         showToast('Lead no encontrado en Odoo');
@@ -3835,7 +4054,9 @@
         // v1.50.0: lucide Handshake - tipo "Seguimiento" en el panel ASISTENTE IA.
         'handshake':'<path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/>',
         // v1.50.0: lucide FileText - tipo "Presentación" en el panel ASISTENTE IA.
-        'file-text':'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>'
+        'file-text':'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
+        // v1.54.0 (FIX 4): lucide Archive - icono del botón "Dar de baja" en el header del detalle.
+        'archive':'<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -3927,6 +4148,9 @@
             '.qida-detail-shell-head{display:flex;align-items:center;gap:14px;flex:1;min-width:0;}',
             '.qida-dsh-name{font-size:14px;font-weight:500;color:var(--s900);line-height:1;white-space:nowrap;}',
             '.qida-dsh-id{font-size:12px;font-weight:400;color:var(--s500);}',
+            /* v1.55.0 (#3): id+nombre clickeable -> deep-link a Odoo */
+            '.qida-dsh-idname{display:inline-flex;align-items:center;gap:6px;background:var(--s100);border:0.5px solid var(--s200);border-radius:8px;padding:3px 10px;cursor:pointer;font-family:inherit;line-height:1;transition:background .12s,border-color .12s;}',
+            '.qida-dsh-idname:hover{background:var(--qg-soft);border-color:var(--qg);}',
             '.qida-dsh-meta{display:flex;align-items:center;gap:8px;color:var(--s600);font-size:12px;font-weight:400;flex-wrap:wrap;min-width:0;overflow:hidden;}',
             '.qida-dsh-meta-item{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}',
             '.qida-dsh-sep{color:var(--s300);}',
@@ -3983,7 +4207,9 @@
             '.qida-wa-clip:hover:not(:disabled),.qida-wa-mic:hover:not(:disabled){color:var(--s900);}',
             '.qida-wa-clip:disabled,.qida-wa-mic:disabled{color:var(--s300);cursor:not-allowed;}',
             '.qida-wa-mic.active{color:#b91c1c;}',
-            '.qida-wa-textarea{flex:1;min-height:24px;max-height:120px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
+            /* v1.54.0 (FIX 3b): max-height 120px -> 320px (~12 lineas). Auto-grow para ver mensajes largos
+               sin scroll interno; el alto lo cede .qida-pane-wa-body (flex:1+overflow-y:auto). min 24px. */
+            '.qida-wa-textarea{flex:1;min-height:24px;max-height:320px;padding:6px 4px;border:0;outline:none;background:transparent;font-family:inherit;font-size:12.5px;font-weight:400;line-height:1.4;color:var(--s900);resize:none;overflow-y:auto;}',
             '.qida-wa-textarea::placeholder{color:var(--s400);}',
             '.qida-wa-send{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:#0F6E56;color:#fff;border:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background .12s;}',
             '.qida-wa-send:hover:not(:disabled){background:var(--qgH);}',
@@ -4090,8 +4316,10 @@
 
             /* v1.7: Chat IA - columna dedicada */
             '.qida-pane-ai{background:#fff;display:flex;flex-direction:column;min-height:0;min-width:0;}',
-            /* v1.9: anchos por posicion estructural (siempre col 1 = pane-wa). El swap intercambia col 2 / col 3. */
-            '.qida-detail-body > *:nth-child(1){flex:0 0 28%;min-width:0;}',
+            /* v1.9: anchos por posicion estructural (siempre col 1 = pane-wa). El swap se removio en v1.17. */
+            /* v1.54.0 (FIX 3a): pane-wa nth-child(1) 28% -> 38% (~10pp mas ancho), a costa del centro
+               (flex:1 1 auto absorbe el delta). pane-ai nth-child(3) queda en 32%. */
+            '.qida-detail-body > *:nth-child(1){flex:0 0 38%;min-width:0;}',
             '.qida-detail-body > *:nth-child(2){flex:1 1 auto;min-width:0;}',
             '.qida-detail-body > *:nth-child(3){flex:0 0 32%;min-width:0;}',
             '.qida-pane-ai-head{background:#F7FAF8;border-bottom:0.5px solid var(--s200);padding:10px 14px;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:#0F6E56;display:flex;align-items:center;gap:6px;flex-shrink:0;}',
@@ -4203,6 +4431,8 @@
             '.qida-schedule-sub{font-size:12px;color:var(--s600);margin:4px 0 0;}',
             '.qida-schedule-body{padding:16px 20px;overflow-y:auto;}',
             '.qida-sb-section{margin-bottom:18px;}',
+            /* v1.55.0 (#4): fila de 2 columnas (Tipo | Fecha límite) en el modal de actividad */
+            '.qida-sb-row2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px;}',
             '.qida-sb-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--s600);margin-bottom:8px;}',
             '.qida-sb-shortcuts{display:flex;gap:6px;flex-wrap:wrap;}',
             '.qida-sb-short{padding:6px 12px;border:1px solid var(--s200);border-radius:6px;font-size:12px;background:#fff;cursor:pointer;font-family:inherit;color:var(--s700);transition:border-color .15s,background .15s;}',
@@ -4394,6 +4624,11 @@
             '.qida-activity-modal{max-width:480px;}',
             '.qida-actv-confirm{max-width:420px;}',
             '.qida-actv-confirm-preview{margin:0;padding:10px 12px;background:var(--s50);border-left:3px solid var(--qg);border-radius:4px;font-size:13px;color:var(--s700);font-style:italic;}',
+            /* v1.54.0 (FIX 4): modal "Dar de baja". Reusa el chrome .qida-schedule* + .qida-actv-confirm-preview;
+               selects full-width (los labels de la taxonomía son largos, evitamos el cap de 240px). */
+            '.qida-dismiss-modal{max-width:460px;}',
+            '.qida-dismiss-modal .qida-leader-select{max-width:none;width:100%;box-sizing:border-box;}',
+            '.qida-dismiss-hint{font-size:11.5px;color:var(--s500);margin:8px 0 0;line-height:1.45;}',
             /* IMPORTANTE: grid-template IDENTICO en header y fila. La ultima columna (Acción) es
                FIJA (no auto): si fuera auto, el header (vacío=0) y la fila (botón) repartirían
                distinto los fr y se desalinearían. */
@@ -4454,6 +4689,11 @@
             '.qida-dsh-lost{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--red600);cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
             '.qida-dsh-lost:hover{border-color:var(--red600);background:var(--red50);}',
             '.qida-dsh-lost:focus-visible{outline:2px solid var(--red600);outline-offset:2px;}',
+            /* v1.54.0 (FIX 4): "Dar de baja" — acento NEUTRO (gris) para diferenciarlo del rojo de "Dar por
+               perdido". Mismo radio/padding/font-size que .qida-dsh-lost para coherencia del header. */
+            '.qida-dsh-dismiss{background:#fff;border:0.5px solid var(--s200);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--s600);cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;white-space:nowrap;flex-shrink:0;}',
+            '.qida-dsh-dismiss:hover{border-color:var(--s400);background:var(--s50);color:var(--s900);}',
+            '.qida-dsh-dismiss:focus-visible{outline:2px solid var(--s400);outline-offset:2px;}',
             /* v1.49.7: "+ Crear actividad" en el header del detalle. Mismo verde Qida (#0F6E56)
                que el botón al fondo del panel "Próximas actividades" (.qida-act-new-btn), con el
                padding/font-size del resto del header (.qida-dsh-markdone) para coherencia. */
@@ -4504,7 +4744,9 @@
 
             /* Responsive */
             /* Detalle: anchos por posicion estructural. En 760px se oculta la 1ra columna (WA). */
-            '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 26%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
+            /* v1.54.0 (FIX 3a): 1200px nth-child(1) 26% -> 36% para mantener el ensanche del pane-wa en
+               pantallas medianas (conserva la relacion -2pp vs el default de 38%). nth-child(3) intacto. */
+            '@media (max-width:1200px){.qida-detail-body > *:nth-child(1){flex:0 0 36%;}.qida-detail-body > *:nth-child(3){flex:0 0 30%;}}',
             '@media (max-width:980px){.qida-detail-body > *:nth-child(3){display:none;}}',
             '@media (max-width:760px){.qida-detail-body > *:nth-child(1){display:none;}.qida-context-grid{grid-template-columns:1fr;}.qida-dsh-meta{display:none;}}',
             /* v1.14 dashboard AF responsive: a 1100px se oculta "Tipo" (6 cols); a 980px se oculta
@@ -4629,6 +4871,16 @@
             '.qida-ab-add[disabled]{opacity:.5;cursor:not-allowed;}',
             '.qida-ab-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;padding-top:16px;border-top:0.5px solid var(--s100);}',
             '.qida-btn-primary[disabled]{opacity:.5;cursor:not-allowed;}',
+            /* v1.54.0: editor de plantillas Inicio/Cierre */
+            '.qida-tpl-row{border:0.5px solid var(--s200);border-radius:10px;padding:12px;background:#fff;margin-bottom:12px;}',
+            '.qida-tpl-row.has-error{border-color:#fca5a5;}',
+            '.qida-tpl-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}',
+            '.qida-tpl-restore{background:transparent;border:0;color:var(--qg);font-size:11.5px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:2px 4px;}',
+            '.qida-tpl-restore:hover{text-decoration:underline;}',
+            '.qida-tpl-input{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:9px 11px;font-family:inherit;font-size:13px;line-height:1.5;color:var(--s900);outline:none;width:100%;box-sizing:border-box;resize:vertical;min-height:96px;}',
+            '.qida-tpl-input:focus{border-color:var(--qg);}',
+            '.qida-tpl-vars{font-size:11px;color:var(--s500);margin:6px 0 0;}',
+            '.qida-tpl-chip{background:var(--s100);border:0.5px solid var(--s200);border-radius:5px;padding:1px 5px;font-size:11px;color:var(--s700);font-family:ui-monospace,Menlo,Consolas,monospace;}',
             /* Confirm "¿Descartar cambios?" */
             '.qida-ab-confirm-overlay{position:absolute;inset:0;background:rgba(28,25,23,.35);display:flex;align-items:center;justify-content:center;z-index:20;}',
             '.qida-ab-confirm{background:#fff;border-radius:12px;padding:20px;max-width:320px;width:90%;box-shadow:0 16px 40px rgba(0,0,0,.25);}',
@@ -4700,7 +4952,7 @@
         var out = [];
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i];
-            if (state.completedTodayIds && state.completedTodayIds.has(r.id)) continue;
+            if (state.completedTodayIds && state.completedTodayIds.has(toNumericLeadId(r.id) || String(r.id))) continue;  // v1.55.0 (#5): clave canónica numérica
             // v1.49.8: leads marcados como perdidos en esta sesión desaparecen del dashboard
             //   (mismo patrón que completedTodayIds). El Set guarda ids en múltiples formatos
             //   (display 'L#####', numérico string, numérico int) -> chequeamos por r.id directo y
@@ -5831,7 +6083,8 @@
     //   (undo-mark-done con data-id, para poder deshacer aunque el toast de 4s ya haya expirado).
     function renderDetailMarkDoneBtn(leadId) {
         if (leadId == null || leadId === '') return '';
-        var done = state.completedTodayIds && state.completedTodayIds.has(leadId);
+        // v1.55.0 (#5): chequeo por clave canónica numérica (igual que markFollowupDone/liveDashRows).
+        var done = state.completedTodayIds && state.completedTodayIds.has(toNumericLeadId(leadId) || String(leadId));
         if (done) {
             return '<button class="qida-dsh-markdone is-done" data-action="undo-mark-done" data-id="'
                 + esc(leadId) + '" title="Marcado hecho hoy — clic para deshacer">'
@@ -6776,6 +7029,7 @@
         state.recommendationCache = {};
         state.templatesCache = {};   // v1.53.0: plantillas Inicio/Cierre son por af_key.
         state.draftVariantsLoaded = false;
+        state.tplLoaded = false;     // v1.54.0: el editor recarga las plantillas de la nueva AF.
         // v1.25 (ISSUE A): cambiar de AF cambia X-AF-Email -> los datos del dashboard son de OTRO AF.
         //   1) Si hay un lead abierto, cerrarlo (no tiene sentido bajo otro AF).
         //   2) Forzar loading (dashRows=null + dashMetrics=null) y re-fetch del view activo:
@@ -6897,6 +7151,29 @@
         if (!m) return null;
         var id = parseInt(m[1], 10);
         return (id > 0) ? id : null;
+    }
+    // v1.55.0 (#3): navega a la ficha del lead en Odoo (same-origin) seteando window.location.hash.
+    //   Reusa cids/menu_id/action del hash ACTUAL y swapea id/model/view_type. Inverso de
+    //   parseOdooLeadDeepLink. Defaults sensatos si falta algún param (cids->'1'; menu_id/action se
+    //   omiten si no están). No-op defensivo si window.location es inaccesible.
+    function navigateLeadToOdoo(leadId) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return;
+        var cur = '';
+        try { cur = (window.location && window.location.hash) || ''; } catch (e) { return; }
+        var s = cur.charAt(0) === '#' ? cur.slice(1) : cur;
+        function param(name) {
+            var mm = s.match(new RegExp('(?:^|[?&#/])' + name + '=([^&#/]+)'));
+            return mm ? mm[1] : null;
+        }
+        var cids = param('cids') || '1';
+        var menuId = param('menu_id');
+        var action = param('action');
+        var parts = ['id=' + numericId, 'cids=' + cids];
+        if (menuId) parts.push('menu_id=' + menuId);
+        if (action) parts.push('action=' + action);
+        parts.push('model=crm.lead', 'view_type=form');
+        try { window.location.hash = '#' + parts.join('&'); } catch (e) { /* noop */ }
     }
     // Error tipado para la UI: .userMessage (texto claro), .code, .status.
     function makeApiError(userMessage, code, status) {
@@ -7334,25 +7611,33 @@
     //   (solo estado local de sesión, como siempre).
     function markFollowupDone(id) {
         if (!id) return;
+        // v1.55.0 (#5): clave CANONICA numérica. El botón de fila pasa display_id ("L#####") y el
+        //   del header pasa state.currentLeadId (numérico si entró por Actividades/deep-link). Sin
+        //   normalizar, el header agregaba "124260" pero el chequeo has() comparaba contra el número
+        //   124260 -> nunca matcheaba -> "no hacía nada". toNumericLeadId colapsa ambos a "124260".
+        var key = toNumericLeadId(id) || String(id);
         // (1) optimistic local + toast Deshacer 4s (sobreescribe un undo previo de otra fila).
-        state.completedTodayIds.add(id);
-        state.undoToast = { leadId: id, expiresAt: Date.now() + 4000 };
+        state.completedTodayIds.add(key);
+        state.undoToast = { leadId: key, expiresAt: Date.now() + 4000 };
         if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
         state.undoTimeoutId = setTimeout(function () {
             state.undoToast = null;
             state.undoTimeoutId = null;
             rerenderContent();
         }, 4000);
-        // (2) persistir (solo real); revert en fallo.
-        persistFollowupDone(id);
+        // (2) persistir (solo real); revert en fallo. Pasa la clave normalizada -> el revert toca
+        //   el MISMO key del Set.
+        persistFollowupDone(key);
         rerenderContent();
     }
 
     // Deshacer "Marcar hecho". explicitId = el data-id del botón "Hecho hoy" del detalle (deshace
     //   ese lead aunque el toast ya expiró); sin explicitId usa el lead del toast (botón Deshacer).
     function undoFollowupDone(explicitId) {
-        var id = explicitId || (state.undoToast && state.undoToast.leadId);
-        if (!id) { rerenderContent(); return; }
+        var raw = explicitId || (state.undoToast && state.undoToast.leadId);
+        if (!raw) { rerenderContent(); return; }
+        // v1.55.0 (#5): misma clave canónica numérica que markFollowupDone.
+        var id = toNumericLeadId(raw) || String(raw);
         // (1) optimistic: vuelve a mostrar la fila + cierra el toast si es de este lead.
         state.completedTodayIds["delete"](id);
         if (state.undoToast && String(state.undoToast.leadId) === String(id)) {
@@ -8310,11 +8595,13 @@
         fetchRecommendation(leadId).then(function (rec) {
             state.recommendationCache[leadId] = rec;  // rec.lead_analysis_long lo lee renderIaAnalysis
             if (state.currentLeadId !== leadId) return;  // race-guard
+            state.__waNeedsScroll = true;  // v1.55.0 (#1): re-anclar la conversación al fondo tras poblar Análisis IA
             rerenderContent();
         }).catch(function (err) {
             log('loadRecommendation failed', err && (err.code || err.message));
             state.recommendationCache[leadId] = { _error: (err && err.userMessage) || 'No se pudo cargar el análisis.' };
             if (state.currentLeadId !== leadId) return;
+            state.__waNeedsScroll = true;  // v1.55.0 (#1)
             rerenderContent();
         });
     }
@@ -8352,11 +8639,13 @@
         fetchRecommendationPlan(leadId).then(function (plan) {
             state.recommendationPlan[leadId] = plan;
             if (state.currentLeadId !== leadId) return;
+            state.__waNeedsScroll = true;  // v1.55.0 (#1): re-anclar la conversación al fondo tras cargar la sugerencia
             rerenderContent();
         }).catch(function (err) {
             log('loadRecommendationPlan failed', err && (err.code || err.message));
             state.recommendationPlan[leadId] = { _error: (err && err.userMessage) || 'No se pudo cargar la sugerencia.' };
             if (state.currentLeadId !== leadId) return;
+            state.__waNeedsScroll = true;  // v1.55.0 (#1)
             rerenderContent();
         });
     }
@@ -8753,9 +9042,17 @@
                     + '<p class="qida-schedule-sub">Para <strong>' + esc(m.leadName) + '</strong> &middot; se crea en Odoo. <strong>No es un mensaje al lead</strong>, es una tarea interna tuya.</p>'
                 + '</div>'
                 + '<div class="qida-schedule-body">'
-                    + '<div class="qida-sb-section">'
-                        + '<div class="qida-sb-label">Tipo</div>'
-                        + '<select class="qida-leader-select qida-actv-input" data-input="activity-type">' + typeOpts + '</select>'
+                    // v1.55.0 (#4): Tipo + Fecha límite en una fila (2 columnas) -> la fecha deja de quedar
+                    //   escondida abajo de Resumen/Nota.
+                    + '<div class="qida-sb-row2">'
+                        + '<div class="qida-sb-section">'
+                            + '<div class="qida-sb-label">Tipo</div>'
+                            + '<select class="qida-leader-select qida-actv-input" data-input="activity-type">' + typeOpts + '</select>'
+                        + '</div>'
+                        + '<div class="qida-sb-section">'
+                            + '<div class="qida-sb-label">Fecha límite</div>'
+                            + '<input type="date" class="qida-actv-input" data-input="activity-deadline" value="' + esc(m.deadline || '') + '" min="' + esc(todayISO()) + '" max="' + esc(addDaysISO(30)) + '" />'
+                        + '</div>'
                     + '</div>'
                     + '<div class="qida-sb-section">'
                         + '<div class="qida-sb-label">Resumen *</div>'
@@ -8764,10 +9061,6 @@
                     + '<div class="qida-sb-section">'
                         + '<div class="qida-sb-label">Nota (opcional)</div>'
                         + '<textarea class="qida-sb-note" data-input="activity-note" placeholder="Detalle interno para vos o la AF que tome el lead…">' + esc(m.note) + '</textarea>'
-                    + '</div>'
-                    + '<div class="qida-sb-section">'
-                        + '<div class="qida-sb-label">Fecha límite</div>'
-                        + '<input type="date" class="qida-actv-input" data-input="activity-deadline" value="' + esc(m.deadline || '') + '" min="' + esc(todayISO()) + '" max="' + esc(addDaysISO(30)) + '" />'
                     + '</div>'
                     + '<div class="qida-sb-section qida-actv-meta">'
                         + '<span>' + icon('check', 11) + ' Asignada a vos</span>'
@@ -8883,6 +9176,133 @@
                 + '</div>'
             + '</div>'
         + '</div>';
+    }
+
+    // ============================================================
+    // v1.54.0 (FIX 4): MODAL "DAR DE BAJA" un lead (taxonomía en cascada)
+    // ============================================================
+    // SOLO FRONTEND. El submit arma el payload y llama al stub submitDismissal(); la persistencia a Odoo
+    //   va en una task aparte. Reusa el chrome de modales existente (.qida-schedule* / .qida-actv-confirm-*).
+    function reasonHasSubreasons(reason) {
+        var def = DISMISSAL_TAXONOMY[reason];
+        return !!(def && def.subreasons && def.subreasons.length);
+    }
+    function findDismissSubreason(reason, subName) {
+        var def = DISMISSAL_TAXONOMY[reason];
+        if (!def || !def.subreasons) return null;
+        for (var i = 0; i < def.subreasons.length; i++) {
+            if (def.subreasons[i].name === subName) return def.subreasons[i];
+        }
+        return null;
+    }
+    // Nivel 3 "Detalle adicional" visible SOLO si el submotivo elegido es priceElevated.
+    function dismissShowsDetail(reason, subName) {
+        var sr = findDismissSubreason(reason, subName);
+        return !!(sr && sr.priceElevated);
+    }
+
+    function renderDismissModal() {
+        var d = state.dismissModal;
+        if (!d) return '';
+
+        // Campo 1: Motivo (required). Orden explícito vía DISMISSAL_REASON_ORDER.
+        var reasonOpts = '<option value="">Seleccionar motivo…</option>';
+        for (var i = 0; i < DISMISSAL_REASON_ORDER.length; i++) {
+            var rn = DISMISSAL_REASON_ORDER[i];
+            reasonOpts += '<option value="' + esc(rn) + '"' + (d.reason === rn ? ' selected' : '') + '>' + esc(rn) + '</option>';
+        }
+
+        // Campo 2: Submotivo (required si el motivo lo tiene). Oculto si el motivo no tiene submotivos.
+        var subField = '';
+        if (d.reason && reasonHasSubreasons(d.reason)) {
+            var subs = DISMISSAL_TAXONOMY[d.reason].subreasons;
+            var subOpts = '<option value="">Seleccionar submotivo…</option>';
+            for (var j = 0; j < subs.length; j++) {
+                subOpts += '<option value="' + esc(subs[j].name) + '"' + (d.subreason === subs[j].name ? ' selected' : '') + '>' + esc(subs[j].name) + '</option>';
+            }
+            subField = '<div class="qida-sb-section">'
+                + '<div class="qida-sb-label">Submotivo *</div>'
+                + '<select class="qida-leader-select qida-actv-input" data-input="dismiss-subreason">' + subOpts + '</select>'
+            + '</div>';
+        }
+
+        // Campo 3: Detalle adicional / Nivel 3 (opcional). Solo cuando (Motivo, Submotivo) es priceElevated.
+        var detailField = '';
+        if (dismissShowsDetail(d.reason, d.subreason)) {
+            var detailOpts = '<option value="">Seleccionar detalle…</option>';
+            for (var k = 0; k < DISMISSAL_DETAIL_VALUES.length; k++) {
+                var dv = DISMISSAL_DETAIL_VALUES[k];
+                detailOpts += '<option value="' + esc(dv) + '"' + (d.detail === dv ? ' selected' : '') + '>' + esc(dv) + '</option>';
+            }
+            detailField = '<div class="qida-sb-section">'
+                + '<div class="qida-sb-label">Detalle adicional</div>'
+                + '<select class="qida-leader-select qida-actv-input" data-input="dismiss-detail">' + detailOpts + '</select>'
+            + '</div>';
+        }
+
+        // Confirmar habilitado: motivo elegido + (submotivo elegido si el motivo lo requiere).
+        var canConfirm = !!d.reason && (!reasonHasSubreasons(d.reason) || !!d.subreason);
+        var confirmDisabled = canConfirm ? '' : ' disabled';
+        var preview = d.leadName ? '<p class="qida-actv-confirm-preview">&ldquo;' + esc(d.leadName) + '&rdquo;</p>' : '';
+
+        return '<div class="qida-schedule-bg" data-action="dismiss-bg">'
+            + '<div class="qida-schedule qida-dismiss-modal">'
+                + '<div class="qida-schedule-head">'
+                    + '<h3 class="qida-schedule-title">Dar de baja lead</h3>'
+                    + '<p class="qida-schedule-sub">Registrá el motivo de baja. <strong>No es un mensaje al lead</strong> — es una clasificación interna.</p>'
+                + '</div>'
+                + '<div class="qida-schedule-body">'
+                    + preview
+                    + '<div class="qida-sb-section">'
+                        + '<div class="qida-sb-label">Motivo *</div>'
+                        + '<select class="qida-leader-select qida-actv-input" data-input="dismiss-reason">' + reasonOpts + '</select>'
+                    + '</div>'
+                    + subField
+                    + detailField
+                + '</div>'
+                + '<div class="qida-schedule-foot">'
+                    + '<div class="qida-sb-actions">'
+                        + '<button class="qida-sb-cancel" data-action="dismiss-cancel">Cancelar</button>'
+                        + '<button class="qida-btn-primary" data-action="dismiss-confirm"' + confirmDisabled + '>' + icon('archive', 13) + ' Confirmar baja</button>'
+                    + '</div>'
+                + '</div>'
+            + '</div>'
+        + '</div>';
+    }
+
+    function openDismissModal() {
+        var leadId = state.currentLeadId;
+        var lead = currentLead(leadId);
+        setState({ dismissModal: {
+            leadId: leadId,
+            leadName: (lead && lead.name) || ('Lead ' + leadId),
+            reason: '',
+            subreason: '',
+            detail: ''
+        } });
+    }
+
+    // v1.54.0 (FIX 4): STUB. NO persiste al backend (eso va en una task aparte). Solo loguea el payload
+    //   + feedback visual. El cierre del modal + toast los maneja handleDismissSubmit.
+    function submitDismissal(payload) {
+        console.log('[QidaAssistant] submitDismissal (stub, sin persistencia):', payload);
+    }
+
+    function handleDismissSubmit() {
+        var d = state.dismissModal;
+        if (!d) return;
+        if (!d.reason) { showToast('Elegí un motivo para continuar.', 'error'); return; }
+        if (reasonHasSubreasons(d.reason) && !d.subreason) { showToast('Elegí un submotivo para continuar.', 'error'); return; }
+        var payload = {
+            leadId: d.leadId,
+            dismissal_reason_name: d.reason,
+            dismissal_subreason_name: reasonHasSubreasons(d.reason) ? (d.subreason || null) : null,
+            dismissal_detail_name: (dismissShowsDetail(d.reason, d.subreason) && d.detail) ? d.detail : null
+        };
+        submitDismissal(payload);
+        state.dismissModal = null;
+        rerenderContent();
+        showToast('Lead dado de baja');
     }
 
     // ============================================================
@@ -9190,14 +9610,16 @@
         return out;
     }
     function agentBuilderDirty() {
-        return JSON.stringify(state.draftVariants) !== JSON.stringify(state.draftVariantsSaved);
+        // v1.54.0: dirty del editor de plantillas (texto Inicio/Cierre vs último guardado).
+        return state.tplDraft.inicial !== state.tplSaved.inicial
+            || state.tplDraft.cierre !== state.tplSaved.cierre;
     }
 
     function renderAgentBuilder() {
         // v1.21: estados async del GET de configuración.
         if (state.agentBuilderLoading) {
             return '<div class="qida-ab"><div class="qida-ab-inner">'
-                + '<div class="qida-ab-loading">' + icon('refresh-cw', 14) + ' Cargando tu configuración…</div>'
+                + '<div class="qida-ab-loading">' + icon('refresh-cw', 14) + ' Cargando tus plantillas…</div>'
             + '</div></div>';
         }
         if (state.agentBuilderError) {
@@ -9209,31 +9631,45 @@
             + '</div></div>';
         }
 
-        var variants = state.draftVariants || [];
-        var v = validateVariants(variants);
+        // v1.54.0: editor de las 2 plantillas (Inicio/Cierre). Las textareas son requeridas.
         var dirty = agentBuilderDirty();
         var saving = !!state.agentBuilderSaving;
-        var saveDisabled = (!v.ok || !dirty || saving) ? ' disabled' : '';
-
-        var rowsHtml = '';
-        for (var i = 0; i < variants.length; i++) rowsHtml += renderVariantRow(variants[i], i, v.errors[i]);
-
-        var addDisabled = (variants.length >= 3) ? ' disabled' : '';
-        var generalErr = v.general ? '<p class="qida-ab-general-error">' + esc(v.general) + '</p>' : '';
+        var iniText = state.tplDraft.inicial || '';
+        var cieText = state.tplDraft.cierre || '';
+        var iniEmpty = !iniText.replace(/\s/g, '');
+        var cieEmpty = !cieText.replace(/\s/g, '');
+        var saveDisabled = (iniEmpty || cieEmpty || !dirty || saving) ? ' disabled' : '';
         var saveLabel = saving ? (icon('refresh-cw', 13) + ' Guardando…') : (icon('check', 13) + ' Guardar');
 
         return '<div class="qida-ab">'
             + '<div class="qida-ab-inner">'
-                + '<p class="qida-ab-lead">Configurá de 1 a 3 variantes de borrador. Cuando uses "Sugerir mensaje" en un lead, el asistente propondrá una opción por cada variante. La IA propone; vos editás y enviás.</p>'
-                + '<div class="qida-ab-list">' + rowsHtml + '</div>'
-                + generalErr
-                + '<button class="qida-btn-ghost qida-ab-add" data-action="ab-add-variant"' + addDisabled + '>' + icon('plus', 13) + ' Agregar variante</button>'
+                + '<p class="qida-ab-lead">Editá tus plantillas de <strong>Inicio</strong> y <strong>Cierre</strong>. Cuando las uses en un lead, se personalizan solas (nombre del contacto + un guiño a lo hablado) manteniendo tu estructura y tu voz. La IA propone; vos editás y copiás.</p>'
+                + renderTemplateEditorRow('inicial', 'Inicio', iniText, iniEmpty)
+                + renderTemplateEditorRow('cierre', 'Cierre', cieText, cieEmpty)
                 + '<div class="qida-ab-foot">'
                     + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
                     + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + saveLabel + '</button>'
                 + '</div>'
             + '</div>'
             + (state.agentBuilderConfirmDiscard ? renderDiscardConfirm() : '')
+        + '</div>';
+    }
+
+    // v1.54.0: una fila del editor de plantillas (textarea + chips de variables + restaurar genérica).
+    var TEMPLATE_VARS = ['{nombre}', '{nombre_af}', '{telefono_af}'];
+    function renderTemplateEditorRow(which, label, text, isEmpty) {
+        var chips = '';
+        for (var i = 0; i < TEMPLATE_VARS.length; i++) {
+            chips += '<code class="qida-tpl-chip">' + esc(TEMPLATE_VARS[i]) + '</code>' + (i < TEMPLATE_VARS.length - 1 ? ' ' : '');
+        }
+        return '<div class="qida-tpl-row' + (isEmpty ? ' has-error' : '') + '">'
+            + '<div class="qida-tpl-head">'
+                + '<label class="qida-ab-label">' + esc(label) + '</label>'
+                + '<button class="qida-tpl-restore" data-action="tpl-restore" data-which="' + esc(which) + '">' + icon('refresh-cw', 11) + ' Restaurar genérica</button>'
+            + '</div>'
+            + '<textarea class="qida-tpl-input" data-input="tpl-text" data-which="' + esc(which) + '" rows="5" placeholder="Escribí tu plantilla de ' + esc(label.toLowerCase()) + '…">' + esc(text) + '</textarea>'
+            + '<p class="qida-tpl-vars">Variables: ' + chips + '. {nombre} y el guiño los completa el asistente; el resto los completás vos.</p>'
+            + (isEmpty ? '<p class="qida-ab-error">No puede quedar vacía.</p>' : '')
         + '</div>';
     }
 
@@ -9517,15 +9953,41 @@
                     && !isImpersonating())
                     ? '<button class="qida-dsh-lost" data-action="lead-lost-open" title="Dar por perdido este lead (irreversible)">' + icon('x-circle', 12) + ' Dar por perdido</button>'
                     : '';
+                // v1.58.0: "Dar de baja" — abre el modal con la taxonomía. GATED OFF detrás de
+                //   DISMISSAL_UI_ENABLED (=false hoy): el modal/taxonomía/catálogo quedan en el archivo pero
+                //   NINGÚN usuario llega al modal desde la UI, porque el submit todavía es STUB (no persiste a
+                //   Odoo). Se prende en v1.59.0 cuando esté el write real. Ver el bloque de tareas v1.59.0 y
+                //   el flag arriba de DISMISSAL_TAXONOMY. Mientras tanto "Dar por perdido" cubre el caso.
+                var headerDismissBtn = DISMISSAL_UI_ENABLED
+                    ? '<button class="qida-dsh-dismiss" data-action="lead-dismiss-open" title="Dar de baja este lead (registrar motivo)">' + icon('archive', 12) + ' Dar de baja</button>'
+                    : '';
                 titleHtml = '<div class="qida-detail-shell-head">'
                     + '<button class="qida-back" data-action="back-to-dashboard" aria-label="Volver al listado">' + icon('arrowLeft', 12) + ' Volver</button>'
-                    + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
-                    + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
+                    // v1.55.0 (#3): id+nombre como botón -> deep-link a la ficha del lead en Odoo (same-origin).
+                    + '<button class="qida-dsh-idname" data-action="open-lead-odoo" data-id="' + esc(lead.id) + '" title="Abrir la ficha del lead en Odoo">'
+                        + '<span class="qida-dsh-name">' + esc(lead.name) + '</span>'
+                        + '<span class="qida-dsh-id">' + esc(lead.id) + '</span>'
+                    + '</button>'
+                    // v1.55.0 (#6) + v1.57.0 (#2): badge "Urgente" si la urgencia es alta. El lead del
+                    //   DETALLE (crm.lead.read) no siempre trae `urgency` poblado -> caemos a la urgency
+                    //   de la cartera (state.leadById, donde el dashboard SÍ la tiene). Mismo umbral/clases.
+                    + ((function () {
+                        var u = lead.urgency;
+                        if (normalizeUrgency(u) !== 'alta') {
+                            var row = state.leadById && state.leadById[toNumericLeadId(lead.id)];
+                            if (row && row.urgency) u = row.urgency;
+                        }
+                        return normalizeUrgency(u) === 'alta'
+                            ? '<span class="qida-dash-badge qida-dash-badge-urgent"><span class="qida-dash-badge-dot"></span>Urgente</span>'
+                            : '';
+                    })())
                     + '<span class="qida-dsh-days ' + lvl + '">' + icon('clock', 11) + ' ' + esc(daysLabel) + '</span>'
                     // v1.49.8: botón "Dar por perdido" entre días-sin-contacto y el separador antes del pill
                     //   de temperatura (ubicación acordada con el PO). Si el gate falla -> string vacío
                     //   (sin separador colgante porque el separador siguiente sigue presente para tempPill).
                     + headerLostBtn
+                    // v1.54.0 (FIX 4): "Dar de baja" junto a "Dar por perdido" (ambas acciones de cierre del lead).
+                    + headerDismissBtn
                     + '<span class="qida-dsh-sep">&middot;</span>'
                     // v1.17: pill de temperatura como hijo directo del head (NO dentro de .qida-dsh-meta,
                     //   que tiene overflow:hidden y cliparía el dropdown). Queda alineado con las referencias.
@@ -9657,6 +10119,15 @@
             divl.innerHTML = renderLostConfirm();
             shell.appendChild(divl);
         }
+        // v1.54.0 (FIX 4): modal "Dar de baja" (taxonomía en cascada). Mismo patrón de mount.
+        var existingD = document.getElementById('qida-dismiss-root');
+        if (existingD) existingD.parentNode.removeChild(existingD);
+        if (state.dismissModal) {
+            var divd = document.createElement('div');
+            divd.id = 'qida-dismiss-root';
+            divd.innerHTML = renderDismissModal();
+            shell.appendChild(divd);
+        }
     }
 
     function syncToast() {
@@ -9758,27 +10229,40 @@
                 }
                 return;
             }
+            // v1.54.0: guarda las 2 plantillas (PUT /api/me/templates; mock con flag off).
             case 'ab-save': {
-                var val = validateVariants(state.draftVariants);
-                if (!val.ok || state.agentBuilderSaving) { rerenderContent(); return; }
-                var afKey = resolveAfKey();
-                var working = deepCopyVariants(state.draftVariants);
-                state.agentBuilderSaving = true;   // v1.21: loading del PUT (real con flag on)
+                if (state.agentBuilderSaving) return;
+                var iniT = (state.tplDraft.inicial || '').replace(/\s/g, '');
+                var cieT = (state.tplDraft.cierre || '').replace(/\s/g, '');
+                if (!iniT || !cieT) { rerenderContent(); return; }  // ambas requeridas (min_length=1)
+                state.agentBuilderSaving = true;
                 rerenderContent();
-                DraftService.saveDraftVariants(afKey, working).then(function (res) {
+                var tplPayload = buildTemplatesPayload();
+                saveEditorTemplates(tplPayload).then(function (res) {
                     state.agentBuilderSaving = false;
                     if (res && res.ok) {
-                        state.draftVariantsSaved = deepCopyVariants(working);
-                        showToast('Asistente guardado.');
+                        state.tplSaved = { inicial: state.tplDraft.inicial, cierre: state.tplDraft.cierre };
+                        state.templatesCache = {};  // invalida la cache de lectura de Inicio/Cierre
+                        showToast('Plantillas guardadas.');
                     } else {
-                        showToast((res && res.userMessage) || 'No se pudo guardar (revisá los campos).');
+                        showToast((res && res.userMessage) || 'No se pudieron guardar las plantillas.');
                     }
                     rerenderContent();
                 }).catch(function (err) {
                     state.agentBuilderSaving = false;
-                    showToast((err && err.userMessage) || 'No se pudo guardar tu configuración.');
+                    showToast((err && err.userMessage) || 'No se pudieron guardar las plantillas.');
                     rerenderContent();
                 });
+                return;
+            }
+            // v1.54.0: restaura una plantilla al texto genérico de Qida (MOCK_AF_TEMPLATES).
+            case 'tpl-restore': {
+                var rWhich = target.getAttribute('data-which');
+                if (rWhich === 'inicial' || rWhich === 'cierre') {
+                    var gen = MOCK_AF_TEMPLATES[rWhich];
+                    state.tplDraft[rWhich] = (gen && gen.text) ? String(gen.text) : '';
+                    rerenderContent();
+                }
                 return;
             }
             // v1.21: reintentar la carga del form tras un error de GET.
@@ -9856,12 +10340,17 @@
                 // v1.49.1: deepLinkLeadId:null aborta cualquier validación de deep-link en vuelo (si la
                 //   AF toca "Volver" durante el skeleton, el .then de fetchLeadsForCrossRef no reabre).
                 resetWaVoiceState(true);
-                setState({ view: 'dashboard', currentLeadId: null, deepLinkLeadId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
+                setState({ view: 'dashboard', currentLeadId: null, deepLinkLeadId: null, deepLinkAttemptId: null, draftMessage: '', waSending: false, waUploading: false, waSendError: null, pendingAttachments: [], attachmentsExpanded: false, editingIaSummary: false, addingNote: false, tempEditorOpen: false });
                 // v1.43.3: NO re-fetch al volver (revierte FIX B de v1.43.2). El re-fetch traía
                 //   has_unread fresco y, por el orden "nuevos al tope" + slice MAX_VISIBLE de
                 //   buildDashFeed, el lead recién leído caía fuera de la lista (DESAPARECÍA). El badge
                 //   ya se apaga vía leadsLeidosEnSesion sin re-fetch; tras F5 la persistencia la da el
                 //   POST /read (has_unread=false al recargar). El refresh manual sigue disponible.
+                return;
+
+            // v1.55.0 (#3): id+nombre del header -> abre la ficha del lead en Odoo (same-origin).
+            case 'open-lead-odoo':
+                navigateLeadToOdoo(id);
                 return;
 
             // --- v1.10: dashboard de leads enfriandose. v1.43: persistencia en backend ---
@@ -10266,6 +10755,20 @@
                 return;
             case 'lost-confirm-yes':
                 handleLeadLost();
+                return;
+
+            // --- v1.54.0 (FIX 4): "Dar de baja" un lead (modal con taxonomía; submit = stub) ---
+            case 'lead-dismiss-open':
+                openDismissModal();
+                return;
+            case 'dismiss-cancel':
+                setState({ dismissModal: null });
+                return;
+            case 'dismiss-bg':
+                if (e.target === target) setState({ dismissModal: null });
+                return;
+            case 'dismiss-confirm':
+                handleDismissSubmit();
                 return;
         }
     }
@@ -10738,6 +11241,29 @@
                     else yesBtn.setAttribute('disabled', '');
                 }
             }
+        } else if (input === 'dismiss-reason') {
+            // v1.54.0 (FIX 4): cambia el Motivo -> resetea Submotivo + Detalle y re-renderiza (la cascada
+            //   cambia qué campos se muestran y habilita/deshabilita "Confirmar baja").
+            if (state.dismissModal) {
+                state.dismissModal.reason = node.value || '';
+                state.dismissModal.subreason = '';
+                state.dismissModal.detail = '';
+                rerenderContent();
+            }
+        } else if (input === 'dismiss-subreason') {
+            // v1.54.0 (FIX 4): cambia el Submotivo -> si el nuevo no es priceElevated, limpia el Detalle.
+            //   Re-render para mostrar/ocultar el Nivel 3 y habilitar "Confirmar baja".
+            if (state.dismissModal) {
+                state.dismissModal.subreason = node.value || '';
+                if (!dismissShowsDetail(state.dismissModal.reason, state.dismissModal.subreason)) {
+                    state.dismissModal.detail = '';
+                }
+                rerenderContent();
+            }
+        } else if (input === 'dismiss-detail') {
+            // v1.54.0 (FIX 4): Nivel 3 (opcional). Store sin rerender (no afecta a otros campos; el select
+            //   nativo mantiene su valor).
+            if (state.dismissModal) state.dismissModal.detail = node.value || '';
         } else if (input === 'wa-draft') {
             // v1.6: textarea de WhatsApp. Sin rerender completo: solo togglear send + auto-resize.
             state.draftMessage = node.value;
@@ -10801,6 +11327,12 @@
             //   global del equipo) pero el rerender la re-mounta con la misma metrica activa.
             state.leaderDash.locFilter = node.value || 'all';
             rerenderContent();
+        } else if (input === 'tpl-text') {
+            // v1.54.0: textarea de plantilla. Update en cada keystroke SIN rerender (no perder
+            //   foco/caret); rerender en 'change' (blur) para refrescar dirty/vacío/Guardar.
+            var tWhich = node.getAttribute('data-which');
+            if (tWhich === 'inicial' || tWhich === 'cierre') state.tplDraft[tWhich] = node.value;
+            if (e.type === 'change') rerenderContent();
         } else if (input === 'ab-name') {
             // v1.15: nombre de variante. Update en cada keystroke SIN rerender (no perder foco);
             //   rerender solo en 'change' (blur) para refrescar validación/errores/Guardar.
@@ -10821,11 +11353,18 @@
         }
     }
 
-    // v1.6: auto-resize del textarea de WhatsApp (1-5 lineas).
+    // v1.6: auto-resize del textarea. v1.54.0 (FIX 3b): el cap se lee del max-height del CSS de CADA
+    //   textarea via getComputedStyle, en vez del 120 hardcodeado. Asi el de WhatsApp
+    //   (.qida-wa-textarea = 320px, ~12 lineas) crece mas y el del chat IA (.qida-aichat-input-field =
+    //   120px) queda INTACTO. Fallback 320 si no se puede leer. min-height lo maneja el CSS (24px).
     function autoResizeTextarea(ta) {
         if (!ta) return;
         ta.style.height = 'auto';
-        var max = 120;
+        var max = 320;
+        if (window.getComputedStyle) {
+            var cssMax = parseInt(window.getComputedStyle(ta).maxHeight, 10);
+            if (cssMax && !isNaN(cssMax)) max = cssMax;
+        }
         var newH = Math.min(ta.scrollHeight, max);
         ta.style.height = newH + 'px';
     }
@@ -11097,11 +11636,75 @@
         });
     }
 
-    // v1.53.0: handler de los botones de plantilla (Inicio/Cierre). NO llama al LLM: trae la
-    //   plantilla destilada de la AF, rellena {nombre} con el primer nombre del contacto y la
-    //   muestra en el MISMO card editable+copiable de los drafts (kind:'variants', source:'template'
-    //   -> pick-variant -> refine -> "Copiar al WhatsApp", sin envío). Placeholders no resueltos
-    //   ({telefono_af}, {nombre_af} si no vino del backend, otros) quedan visibles para la AF.
+    // v1.54.0: POST /api/leads/{id}/template-draft -> personaliza ligero la plantilla Inicio/Cierre
+    //   de la AF al lead (nombre del contacto + ≤1 guiño). Mismo shape de respuesta que
+    //   /recommendation/draft (drafts[]). Flag off -> mock derivado de MOCK_AF_TEMPLATES con {nombre}
+    //   relleno (fallback:true). NO envía: el resultado es un card editable+copiable.
+    function fetchTemplateDraft(leadId, which) {
+        if (!useRealApi()) {
+            return simulateLatency(120, 280).then(function () {
+                var lead = currentLead(leadId) || {};
+                var gen = MOCK_AF_TEMPLATES[which] || { text: '' };
+                var filled = fillTemplateName(String(gen.text || ''), lead);  // {nombre} -> contacto
+                return { type: which, drafts: [{ name: which, text: filled, length: 'medium', tone_style: 'neutral' }], fallback: true };
+            });
+        }
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) {
+            return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        }
+        var headers = afEmailHeaders();
+        headers['Content-Type'] = 'application/json';
+        if (!headers['X-AF-Email']) {
+            return Promise.reject(makeApiError('No hay email de AF en sesión para autenticar la petición.', 'NO_AF_EMAIL', 0));
+        }
+        var url = apiBaseUrl() + '/api/leads/' + numericId + '/template-draft';
+        var t0 = Date.now();
+        return fetch(url, { method: 'POST', headers: headers, body: JSON.stringify(withLeadIaSummary(leadId, { type: which })) }).then(function (res) {
+            return res.text().then(function (raw) {
+                var data = null;
+                try { data = raw ? JSON.parse(raw) : null; } catch (e) { data = null; }
+                if (res.ok) {
+                    log('template-draft ok', { lead: numericId, type: which, ms: Date.now() - t0 });
+                    return { type: which, drafts: (data && data.drafts) || [], fallback: !!(data && data.fallback) };
+                }
+                var code = (data && data.error && data.error.code) || ('HTTP_' + res.status);
+                var serverMsg = (data && data.error && data.error.message)
+                        || (data && data.detail && data.detail[0] && data.detail[0].msg)
+                        || null;
+                log('template-draft error', { lead: numericId, type: which, status: res.status, code: code, ms: Date.now() - t0 });
+                throw makeApiError(httpErrorCopy(res.status, serverMsg), code, res.status);
+            });
+        });
+    }
+
+    // v1.54.0: convierte la respuesta de /template-draft a payload kind:'variants' (card
+    //   editable+copiable). source:'template' (no emite telemetría draft_copied, igual que v1.53).
+    //   Los placeholders que sigan ({telefono_af}, etc.) los resuelve renderAiPayload contra el lead.
+    function templateDraftPayload(resp, meta) {
+        var drafts = (resp && resp.drafts) || [];
+        var variants = [];
+        for (var i = 0; i < drafts.length; i++) {
+            var d = drafts[i];
+            if (!d || !d.text) continue;
+            variants.push({ label: meta.label, text: d.text });
+        }
+        if (!variants.length) {
+            return { kind: 'free', text: 'No hay plantilla disponible para este caso. Redactá el mensaje manualmente.' };
+        }
+        return {
+            kind: 'variants',
+            source: 'template',
+            intro: 'Plantilla de ' + meta.label.toLowerCase() + ' personalizada (editá lo que necesites antes de copiar):',
+            variants: variants
+        };
+    }
+
+    // v1.54.0: handler de los botones de plantilla (Inicio/Cierre). Antes rellenaba la plantilla en
+    //   el cliente (fetchTemplates + {nombre}); ahora pega a POST /api/leads/{id}/template-draft, que
+    //   la PERSONALIZA al lead (nombre + ≤1 guiño, sin reescribir). Mismo flujo async que Seguimiento:
+    //   burbuja loading -> card editable+copiable (kind:'variants', source:'template') -> pick-variant
+    //   -> "Copiar al WhatsApp", sin envío. Mantiene el principio rector: el widget NO envía.
     function handleAiTemplateClick(which) {
         var lead = currentLead();
         if (!lead) return;
@@ -11112,40 +11715,31 @@
         if (!state.templateBusy[leadId]) state.templateBusy[leadId] = {};
         if (state.templateBusy[leadId][which]) return;  // ya en vuelo, ignorar doble-click
 
-        pushAiChat(leadId, meta.label, { kind: 'loading', text: 'Preparando ' + meta.label.toLowerCase() + '…' });
+        pushAiChat(leadId, meta.label, { kind: 'loading', text: 'Personalizando ' + meta.label.toLowerCase() + '…' });
         state.templateBusy[leadId][which] = true;
         state.aiChatDraft = '';
         var hist = state.aiChatHistory[leadId];
         var bubble = hist[hist.length - 1];
         state.__aiNeedsScroll = true;
+        // v1.57.0 (#3): el botón Inicio/Cierre re-renderiza y, sin esto, el pane de WhatsApp saltaba
+        //   al tope. Re-anclamos también el pane de WhatsApp a su último mensaje (no salta arriba).
+        state.__waNeedsScroll = true;
         rerenderContent();
 
-        fetchTemplates().then(function (tpls) {
+        fetchTemplateDraft(leadId, which).then(function (resp) {
             if (state.templateBusy[leadId]) state.templateBusy[leadId][which] = false;
             if (state.currentLeadId !== leadId) return;
-            var tpl = tpls && tpls[which];
-            var text = (tpl && tpl.text) ? String(tpl.text) : '';
-            if (!text) {
-                bubble.payload = { kind: 'free', text: 'No hay plantilla disponible para este caso. Redactá el mensaje manualmente.' };
-                state.__aiNeedsScroll = true;
-                rerenderContent();
-                return;
-            }
-            var filled = fillTemplateName(text, lead);  // {nombre} -> primer nombre del contacto
-            bubble.payload = {
-                kind: 'variants',
-                source: 'template',
-                intro: 'Plantilla de ' + meta.label.toLowerCase() + ' (editá lo que necesites antes de copiar):',
-                variants: [{ label: meta.label, text: filled }]
-            };
+            bubble.payload = templateDraftPayload(resp, meta);
             state.__aiNeedsScroll = true;
+            state.__waNeedsScroll = true;  // v1.57.0 (#3)
             rerenderContent();
         }).catch(function (err) {
-            log('fetchTemplates failed', err && (err.code || err.message));
+            log('fetchTemplateDraft failed', err && (err.code || err.message));
             if (state.templateBusy[leadId]) state.templateBusy[leadId][which] = false;
             if (state.currentLeadId !== leadId) return;
             bubble.payload = { kind: 'error', text: suggestErrorCopy(err), retry: 'template', _which: which };
             state.__aiNeedsScroll = true;
+            state.__waNeedsScroll = true;  // v1.57.0 (#3)
             rerenderContent();
         });
     }
@@ -11390,25 +11984,66 @@
         log('openLeadersDashboard()');
     }
 
-    // v1.15: abre "Armá tu asistente". Carga la config (lazy) en la copia de trabajo + snapshot.
+    // v1.54.0: trae las plantillas CRUDAS para el editor (sin interpolar {nombre_af} — el editor
+    //   necesita el placeholder, si no se "hornea" al guardar). Real -> GET /api/me/templates?raw=true;
+    //   flag off -> MOCK_AF_TEMPLATES. Devuelve objetos AfTemplate completos (se preservan al guardar).
+    function fetchEditorTemplates() {
+        var p = useRealApi()
+            ? apiFetchJson('GET', '/api/me/templates?raw=true', { noun: 'plantillas' })
+            : simulateLatency(80, 180).then(function () { return MOCK_AF_TEMPLATES; });
+        return p.then(function (tpls) {
+            return { inicial: (tpls && tpls.inicial) || null, cierre: (tpls && tpls.cierre) || null };
+        });
+    }
+
+    // Arma el body del PUT preservando la metadata del AfTemplate (variables/lang/flags) y pisando
+    //   solo el texto editado.
+    function buildTemplatesPayload() {
+        function merge(full, text) {
+            var obj = full ? JSON.parse(JSON.stringify(full)) : {};
+            obj.text = text;
+            return obj;
+        }
+        return {
+            inicial: merge(state.tplFull.inicial, state.tplDraft.inicial),
+            cierre: merge(state.tplFull.cierre, state.tplDraft.cierre)
+        };
+    }
+
+    // PUT /api/me/templates (real) o mock (persiste en MOCK_AF_TEMPLATES para que reabrir el editor
+    //   muestre la edición en index.html). Devuelve { ok }.
+    function saveEditorTemplates(templatesPayload) {
+        if (!useRealApi()) {
+            if (templatesPayload.inicial) MOCK_AF_TEMPLATES.inicial = { text: templatesPayload.inicial.text };
+            if (templatesPayload.cierre) MOCK_AF_TEMPLATES.cierre = { text: templatesPayload.cierre.text };
+            return simulateLatency(80, 180).then(function () { return { ok: true }; });
+        }
+        return apiFetchJson('PUT', '/api/me/templates', { body: { templates: templatesPayload }, noun: 'plantillas' })
+            .then(function () { return { ok: true }; });
+    }
+
+    // v1.54.0: abre "Armá tu asistente" (editor de plantillas). Carga (lazy) las plantillas crudas
+    //   en la copia de trabajo + snapshot. tplLoaded cachea por sesión; setViewingAs lo invalida.
     function openAgentBuilder() {
         state.agentBuilderConfirmDiscard = false;
         state.agentBuilderError = null;
         state.view = 'agentBuilder';
-        if (state.draftVariantsLoaded) { rerenderContent(); log('openAgentBuilder() [cache]'); return; }
-        // v1.21: cargar la config via GET (real con flag on; mock async con flag off) + loading/error.
+        if (state.tplLoaded) { rerenderContent(); log('openAgentBuilder() [cache]'); return; }
         state.agentBuilderLoading = true;
         rerenderContent();
-        DraftService.getDraftVariants(resolveAfKey()).then(function (cfg) {
-            state.draftVariantsSaved = deepCopyVariants(cfg.variants);
-            state.draftVariants = deepCopyVariants(cfg.variants);
-            state.draftVariantsLoaded = true;
+        fetchEditorTemplates().then(function (tpls) {
+            state.tplFull = { inicial: tpls.inicial || null, cierre: tpls.cierre || null };
+            var ini = (tpls.inicial && tpls.inicial.text) ? String(tpls.inicial.text) : '';
+            var cie = (tpls.cierre && tpls.cierre.text) ? String(tpls.cierre.text) : '';
+            state.tplSaved = { inicial: ini, cierre: cie };
+            state.tplDraft = { inicial: ini, cierre: cie };
+            state.tplLoaded = true;
             state.agentBuilderLoading = false;
             rerenderContent();
         }).catch(function (err) {
             state.agentBuilderLoading = false;
-            state.agentBuilderError = (err && err.userMessage) || 'No se pudo cargar tu configuración del asistente.';
-            log('getDraftVariants failed', err && (err.code || err.message));
+            state.agentBuilderError = (err && err.userMessage) || 'No se pudieron cargar tus plantillas.';
+            log('fetchEditorTemplates failed', err && (err.code || err.message));
             rerenderContent();
         });
         log('openAgentBuilder()');
@@ -11425,7 +12060,8 @@
         rerenderContent();
     }
     function abDiscardAndLeave() {
-        state.draftVariants = deepCopyVariants(state.draftVariantsSaved);
+        // v1.54.0: descartar la edición de plantillas -> volver al último snapshot guardado.
+        state.tplDraft = { inicial: state.tplSaved.inicial, cierre: state.tplSaved.cierre };
         state.agentBuilderConfirmDiscard = false;
         state.view = 'dashboard';
         rerenderContent();
@@ -11445,6 +12081,8 @@
             // v1.49.8: el confirm de "Dar por perdido" sigue la misma política (Esc cierra el modal,
             //   no el widget). NO usa setState para preservar la posible carga async de motivos.
             if (state.lostConfirm) { setState({ lostConfirm: null }); return; }
+            // v1.54.0 (FIX 4): Esc cierra el modal "Dar de baja" (no el widget).
+            if (state.dismissModal) { setState({ dismissModal: null }); return; }
             if (state.activityConfirm) { setState({ activityConfirm: null }); return; }
             if (state.activityModal) { setState({ activityModal: null }); return; }
             if (state.rescheduleModal) { setState({ rescheduleModal: null }); return; }
@@ -11514,6 +12152,8 @@
         //   del page load (igual política que completedTodayIds): los leads marcados perdidos no
         //   reaparecen al cerrar/reabrir el modal; sólo al hacer reload (que trae estado real del backend).
         state.lostConfirm = null;
+        // v1.54.0 (FIX 4): cerrar el modal "Dar de baja" al cerrar el widget.
+        state.dismissModal = null;
         // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
         //   recommendationCache PERSISTEN en sesión (igual política que aiChatHistory).
         state.agentBuilderConfirmDiscard = false;
@@ -11602,10 +12242,16 @@
         var owned = !!(state.leadById && state.leadById[toNumericLeadId(leadId)]);
         if (owned) {
             log('deep-link: lead ' + leadId + ' es de la AF -> abriendo detalle');
+            state.deepLinkAttemptId = null;
             openLeadDetail(leadId);
         } else {
-            log('deep-link: lead ' + leadId + ' NO es de la AF -> dashboard silencioso');
-            if (state.view === 'detail') setState({ view: 'dashboard', currentLeadId: null });
+            // v1.55.0 (#7): NO rebotar al dashboard en silencio. Intentamos abrir igual — el detalle se
+            //   lee de Odoo (crm.lead.read) y los paneles del backend validan pertenencia por su cuenta
+            //   (403 -> degradan). Así se abren convertidos / fuera-de-cartera que SÍ son de la AF. Si
+            //   Odoo tampoco deja leerlo, fetchAll.catch usa deepLinkAttemptId para el mensaje claro.
+            log('deep-link: lead ' + leadId + ' no está en la cartera activa -> intento abrir igual');
+            state.deepLinkAttemptId = toNumericLeadId(leadId) || String(leadId);
+            openLeadDetail(leadId);
         }
     }
 
