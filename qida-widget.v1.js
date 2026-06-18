@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.58.0
+ * QIDA ASSISTANT v1.58.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,20 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.58.1 (2026-06-18 — el chat con el asistente ya no se corta a los 10s):
+ *   - BUG (reportado): al pedirle algo al chat (/assistant/chat) con sesión nueva, el
+ *     widget abortaba la request a los 10s (API_FETCH_TIMEOUT_MS) y la reintentaba 2 veces.
+ *     El backend encadena planner + writer + orquestador (15-60s), así que se veían 2
+ *     requests "(canceled)" a ~10s y recién la 3ra traía respuesta. Además, reintentar un
+ *     turno lento duplicaba sesiones/turnos en el backend.
+ *   - FIX: apiFetchJson acepta opts.timeoutMs y opts.maxRetries (default = 10s / 2 retries,
+ *     comportamiento previo intacto para el resto de endpoints). fetchAssistantChat pasa
+ *     timeoutMs=API_FETCH_TIMEOUT_LLM_MS (300s, alineado con maxDuration del backend) y
+ *     maxRetries=0: esperamos la respuesta del LLM sin cortar y sin reintentar.
+ *   - NOTA: los fetchers de /recommendation/draft, /plan, /materials y /template-draft usan
+ *     fetch directo SIN timeout de cliente — ya "esperaban"; sin cambios. El arreglo de idioma
+ *     (catalán en seguimiento/inicio/cierre y en el chat) es server-side (qida-followup-api).
  *
  * Cambios v1.58.0 (2026-06-17 — pane WhatsApp más ancho/auto-grow; "Dar de baja" DORMIDO tras flag):
  *   Rebase del batch UX de PR #45 (rama claude/funny-rubin-5ii415, era v1.54.0) sobre la línea go-live v1.57.0.
@@ -2018,7 +2032,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.58.0';
+    var VERSION = '1.58.1';
     var CONFIG = null;
 
     // ============================================================
@@ -7482,12 +7496,24 @@
     var API_FETCH_TIMEOUT_MS = 10000;
     var API_FETCH_MAX_RETRIES = 2;
     var API_FETCH_RETRY_BACKOFF_MS = [500, 1500];
+    // v1.58.1: timeout LARGO para endpoints que invocan al LLM (chat con el asistente).
+    //   El backend encadena planner + writer + orquestador con tools y, en una sesión
+    //   nueva, tarda fácil 15-60s. Su techo es maxDuration=300s en Vercel, así que el
+    //   propio backend devuelve algo (incluido un 504) antes de este límite. El cliente
+    //   NO debe cortar una respuesta válida: espera hasta el techo del backend. Los
+    //   endpoints rápidos (dashboard, read, etc.) siguen con los 10s por defecto.
+    var API_FETCH_TIMEOUT_LLM_MS = 300000;
 
     // Fetch JSON genérico contra qida-followup-api. Mismo manejo de error que fetchRecommendation:
     //   200 -> data; 4xx/5xx/red -> rechaza con Error tipado (.userMessage). opts:
     //   { afEmail:bool (default true), body:obj|null, noun:string }.
     function apiFetchJson(method, path, opts) {
         opts = opts || {};
+        // v1.58.1: timeout/retries configurables por llamada. Default = comportamiento
+        //   previo (10s, 2 retries). El chat pasa timeoutMs largo + maxRetries:0 para
+        //   "esperar, no cortar" (y no duplicar sesiones reintentando un turno lento).
+        var timeoutMs = opts.timeoutMs || API_FETCH_TIMEOUT_MS;
+        var maxRetries = (opts.maxRetries != null) ? opts.maxRetries : API_FETCH_MAX_RETRIES;
         var headers = {};
         if (opts.afEmail !== false) {
             headers = afEmailHeaders();
@@ -7509,7 +7535,7 @@
             var timer = setTimeout(function () {
                 aborted = true;
                 if (ac) { try { ac.abort(); } catch (e) { /* noop */ } }
-            }, API_FETCH_TIMEOUT_MS);
+            }, timeoutMs);
             var init = { method: method, headers: headers, body: bodyStr };
             if (ac) init.signal = ac.signal;
             return fetch(url, init).then(function (res) {
@@ -7561,7 +7587,7 @@
                 log('api retry', {
                     method: method, path: path,
                     attempt: attemptIdx + 1,
-                    of: API_FETCH_MAX_RETRIES,
+                    of: maxRetries,
                     backoffMs: backoff,
                     reason: (err.code || err.status || 'unknown')
                 });
@@ -7570,7 +7596,7 @@
             });
         }
 
-        return runWithRetries(API_FETCH_MAX_RETRIES, 0);
+        return runWithRetries(maxRetries, 0);
     }
 
     // v1.43.2: marca un lead como leído al abrir su detalle. Se llama desde select-lead, que es el
@@ -7850,8 +7876,16 @@
     function fetchAssistantChat(leadId, message, sessionId) {
         var numericId = toNumericLeadId(leadId);
         if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
+        // v1.58.1: chat = endpoint LLM lento. Timeout largo (esperamos al backend, no
+        //   cortamos a los 10s) y SIN retries (un turno lento no debe reintentarse:
+        //   duplicaría sesiones/turnos en el backend). El backend ya tiene su techo (300s).
         return apiFetchJson('POST', '/api/leads/' + numericId + '/assistant/chat',
-            { body: withLeadIaSummary(leadId, { message: message, session_id: sessionId || null }), noun: 'el asistente de este lead' }
+            {
+                body: withLeadIaSummary(leadId, { message: message, session_id: sessionId || null }),
+                noun: 'el asistente de este lead',
+                timeoutMs: API_FETCH_TIMEOUT_LLM_MS,
+                maxRetries: 0
+            }
         );
     }
 
