@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.58.0
+ * QIDA ASSISTANT v1.58.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,19 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.58.1 (2026-06-18 — alta de la AF Maylan Almeida en los 2 hardcodes de identidad):
+ *   El backend (qida-followup-api) ya estaba 100% listo para Maylan: ACTIVE_AFS_JSON + AF_WHITELIST +
+ *   recompute + style_profile/plantillas en producción. Lo único que faltaba era sumarla a los dos
+ *   hardcodes de identidad del widget (TODO[afs] pendiente: hoy se duplican sin nada que lo enforce):
+ *   - MOCK_ACTIVE_AFS (espejo de ACTIVE_AFS_JSON, mapping email->af_key que usa resolveAfKey):
+ *     'maylan.almeida@qida.es' -> 'maylan_almeida'. Sin esto caía al fallback (patricia_vega) -> 404,
+ *     igual que el bug de Paloma en v1.40. Ahora Maylan ve SUS leads al loguearse.
+ *   - IMPERSONATABLE_AFS (lista del switcher "Ver como" + odoo_user_id para fetchOdooActivities en modo
+ *     admin): { key:'maylan_almeida', email:'maylan.almeida@qida.es', display_name:'Maylan Almeida',
+ *     odoo_user_id: 685 }. Ahora los admins pueden "Ver como Maylan".
+ *   - Cambio aditivo y chico: NO se bumpea el filename (se reusa qida-widget.v1.js, mismo URL) -> NO se
+ *     tocan gtm-loader.html ni tempermonkey.js. NO se tocó useRealAPI ni nada del backend.
  *
  * Cambios v1.58.0 (2026-06-17 — pane WhatsApp más ancho/auto-grow; "Dar de baja" DORMIDO tras flag):
  *   Rebase del batch UX de PR #45 (rama claude/funny-rubin-5ii415, era v1.54.0) sobre la línea go-live v1.57.0.
@@ -2018,7 +2031,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.58.0';
+    var VERSION = '1.58.1';
     var CONFIG = null;
 
     // ============================================================
@@ -2442,7 +2455,8 @@
         'alejandro.vivas@qida.es':  'alejandro_vivas',
         'eva.martin@qida.es':       'eva_martin',
         'ana.pinilla@qida.es':      'ana_pinilla',
-        'paloma.galvez@qida.es':    'paloma_galvez'  // v1.40: faltaba el mapping (v1.38 la agregó a IMPERSONATABLE_AFS pero no acá) -> caía a fallback (patricia_vega) -> 404
+        'paloma.galvez@qida.es':    'paloma_galvez', // v1.40: faltaba el mapping (v1.38 la agregó a IMPERSONATABLE_AFS pero no acá) -> caía a fallback (patricia_vega) -> 404
+        'maylan.almeida@qida.es':   'maylan_almeida' // v1.58.1: alta nueva AF (backend ACTIVE_AFS_JSON/AF_WHITELIST/recompute/style_profile ya listos)
     };
 
     // ============================================================
@@ -2465,7 +2479,8 @@
     //   migrar a GET /api/admin/afs cuando exista. Marina/Alba (viewers) NO estan aca -> sin uid.
     var IMPERSONATABLE_AFS = [
         { key: 'ana_pinilla', email: 'ana.pinilla@qida.es', display_name: 'Ana Pinilla', odoo_user_id: 557 },
-        { key: 'paloma_galvez', email: 'paloma.galvez@qida.es', display_name: 'Paloma Gálvez', odoo_user_id: 66 }  // v1.38
+        { key: 'paloma_galvez', email: 'paloma.galvez@qida.es', display_name: 'Paloma Gálvez', odoo_user_id: 66 }, // v1.38
+        { key: 'maylan_almeida', email: 'maylan.almeida@qida.es', display_name: 'Maylan Almeida', odoo_user_id: 685 } // v1.58.1: alta nueva AF (backend ya listo)
     ];
     var AF_SWITCH_STORAGE_KEY = 'qida_viewing_as';
 
