@@ -10,6 +10,36 @@
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
  *
+ * Cambios v1.60.0 (2026-06-22 — detección de WhatsApp desconectado + CTA de reconexión):
+ *   Cuando la sesión de WhatsApp de la AF se cae en TimelinesAI, el widget lo muestra VISIBLE en
+ *   3 placements (mismo ícono wifi-off + mismo texto + mismos colores rojos) y ofrece un CTA a
+ *   https://app.timelines.ai/whatsapp. Antes fallaba en silencio (la AF enviaba y recibía un error
+ *   genérico sin entender qué pasó). Salta de v1.58.0 a v1.60.0: v1.59.0 queda RESERVADO para
+ *   "Dar de baja" (write real same-origin, ver flag DISMISSAL_UI_ENABLED).
+ *   - Fuente de verdad: GET /api/me/whatsapp-connection-status (backend nuevo) -> { connected,
+ *     reconnect_url, last_seen_at:null, disconnected_since:null }. Estado en state.whatsappConn.
+ *   - PLACEMENT 1 (pane WhatsApp del detalle): banner entre el header del pane y el body; el input
+ *     completo (clip/mic/textarea/enviar) queda DISABLED + tooltip "WhatsApp desconectado" +
+ *     placeholder swap (no se borra nada — enviar igual fallaría).
+ *   - PLACEMENT 2 (header del dashboard): banner centrado arriba del contenido (en renderContent,
+ *     cubre todas las sub-vistas: today/activities/suggestions/leads), visible sin scroll.
+ *   - PLACEMENT 3 (badge flotante): glyph rojo wifi-off (.qida-badge-disc) que REEMPLAZA el count
+ *     naranja mientras está desconectada (la desconexión gana al count: "no podés enviar" pesa más
+ *     que "tenés N pendientes"). Se sincroniza aparte del render (el badge vive fuera de #qida-content).
+ *   - Cadencia: on-mount (openModal) + slow poll cada 5 min (WA_STATUS_POLL_MS, alineado al TTL=300s
+ *     del cache del backend, cero costo extra contra TimelinesAI) + reactivo (un send de texto o voz
+ *     que falla con WHATSAPP_ACCOUNT_DISCONNECTED / AF_HAS_NO_WHATSAPP_ACCOUNT prende el banner y
+ *     re-chequea). Reconexión: el botón "Reintentar" del banner manda ?refresh=true (busta el cache
+ *     del backend) o el próximo poll devuelve connected=true y oculta todo.
+ *   Defaults que tomé (no estaban explícitos en el brief):
+ *     - FAIL-OPEN: cualquier error del endpoint -> connected=true (nunca bloquear envíos por un fallo
+ *       de esta feature). En modo mock/demo (useRealApi=false) no se consulta y se asume conectado.
+ *     - Constante única WA_DISCONNECT (ícono+texto+URL) reusada en los 3 placements; cero copy/paste.
+ *     - QA: CONFIG.forceWhatsappDisconnected (SOLO del loader Tampermonkey; NO query param, NO
+ *       localStorage) fuerza la UI desconectada sin tocar las cuentas reales ni el backend.
+ *     - Placement 1: elegí banner-entre-header-y-body (no overlay sobre el input) por prominencia;
+ *       el input deshabilitado + tooltip ya comunica el estado en la zona de envío.
+ *
  * Cambios v1.58.0 (2026-06-17 — pane WhatsApp más ancho/auto-grow; "Dar de baja" DORMIDO tras flag):
  *   Rebase del batch UX de PR #45 (rama claude/funny-rubin-5ii415, era v1.54.0) sobre la línea go-live v1.57.0.
  *   - FIX 3a — Pane WhatsApp más ancho (.qida-detail-body nth-child(1) 28% → 38%; media query 1200px 26% → 36%;
@@ -2018,7 +2048,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.58.0';
+    var VERSION = '1.60.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2036,6 +2066,17 @@
     // Base URL del backend. Override via CONFIG.apiBaseUrl. Sin barra final.
     var API_BASE_URL_DEFAULT = 'https://qida-followup-api.vercel.app';
     var API_BASE_URL = API_BASE_URL_DEFAULT;
+    // v1.60.0: señal única "WhatsApp desconectado" reusada en los 3 placements
+    //   (pane del detalle, header del dashboard, badge flotante). MISMO ícono +
+    //   texto + URL en todos para que la AF reconozca la señal donde sea. Tuteo
+    //   (AFs españolas). NO copies/pegues estos strings: salen siempre de acá.
+    var WA_DISCONNECT = {
+        reconnectUrl: 'https://app.timelines.ai/whatsapp',
+        bannerText: 'Reconecta tu WhatsApp para volver a enviar mensajes.',
+        ctaLabel: 'Conectar',
+        inputTooltip: 'WhatsApp desconectado',
+        inputPlaceholder: 'WhatsApp desconectado — reconecta para enviar'
+    };
     // v1.11: feature flag automatico por host. true SOLO cuando el widget corre dentro
     //   de Odoo real (Tampermonkey/GTM sobre erp.qida.es). En index.html / dev local
     //   queda false y el detalle se hidrata via mockHydrate. Se setea en init() y puede
@@ -2673,6 +2714,10 @@
     var state = {
         view: 'dashboard',              // 'dashboard' | 'detail'
         currentLeadId: null,
+        // v1.60.0: estado de conexión WhatsApp (TimelinesAI). connected=true por
+        //   defecto (fail-open: nunca bloquear envíos por esta feature). Lo refresca
+        //   fetchWhatsAppStatus(); lo lee isWhatsAppDisconnected().
+        whatsappConn: { connected: true, checkedAt: null, reconnectUrl: null },
         // v1.49.1: lead candidato de deep-link (Odoo form view) cuya pertenencia se está validando.
         //   Number mientras esperamos la cartera (state.leadById); null cuando se resolvió (a detalle
         //   o a dashboard). Doble función: race-guard del fetch async + trigger del skeleton en
@@ -4056,7 +4101,9 @@
         // v1.50.0: lucide FileText - tipo "Presentación" en el panel ASISTENTE IA.
         'file-text':'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
         // v1.54.0 (FIX 4): lucide Archive - icono del botón "Dar de baja" en el header del detalle.
-        'archive':'<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'
+        'archive':'<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+        // v1.60.0: lucide WifiOff - señal única "WhatsApp desconectado" (3 placements).
+        'wifi-off':'<line x1="2" x2="22" y1="2" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><line x1="12" x2="12.01" y1="20" y2="20"/>'
     };
     function icon(name, size) {
         var path = I[name] || '';
@@ -4092,6 +4139,19 @@
             '.qida-badge:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(15,61,58,.22),0 4px 8px rgba(15,61,58,.1);}',
             '.qida-badge img{width:47px;height:auto;display:block;pointer-events:none;}',
             '.qida-badge-count{position:absolute;top:-4px;right:-4px;min-width:22px;height:22px;padding:0 7px;border-radius:11px;background:#f97316;color:#fff;font-size:12px;font-weight:700;line-height:22px;text-align:center;box-shadow:0 2px 6px rgba(249,115,22,.4);pointer-events:none;}',
+            /* v1.60.0: glyph rojo de "WhatsApp desconectado" sobre el badge (gana al count). */
+            '.qida-badge-disc{position:absolute;top:-5px;right:-5px;width:26px;height:26px;border-radius:50%;background:var(--red600);color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(220,38,38,.45);pointer-events:none;}',
+            '.qida-badge-disc .qa-icon{width:15px;height:15px;}',
+            /* v1.60.0: banner "WhatsApp desconectado" — mismo markup en pane y dashboard. */
+            '.qida-wa-disc{display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--red600);border-radius:8px;background:var(--red50);color:var(--red600);font-size:13px;font-weight:600;line-height:1.35;}',
+            '.qida-wa-disc .qa-icon{flex:0 0 auto;}',
+            '.qida-wa-disc-text{flex:1 1 auto;}',
+            '.qida-wa-disc-cta{flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;padding:6px 12px;border-radius:6px;background:var(--red600);color:#fff;font-weight:700;text-decoration:none;white-space:nowrap;}',
+            '.qida-wa-disc-cta:hover{background:#b91c1c;}',
+            '.qida-wa-disc .qida-btn-ghost{flex:0 0 auto;color:var(--red600);}',
+            '.qida-wa-disc-pane{margin:8px 10px 0;}',
+            '.qida-wa-disc-dashboard{margin:0 0 12px;justify-content:center;}',
+            '.qida-wa-disc-dashboard .qida-wa-disc-text{flex:0 1 auto;}',
 
             /* overlay + shell */
             '.qida-overlay{position:fixed;inset:0;z-index:2147483001;display:none;align-items:center;justify-content:center;background:rgba(28,25,23,.55);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);font-family:"Manrope",system-ui,sans-serif;color:var(--s900);padding:16px;box-sizing:border-box;}',
@@ -6770,6 +6830,9 @@
             showToast('Audio enviado');
         }).catch(function (err) {
             log('voice message failed', err && (err.code || err.message));
+            // v1.60.0 reactivo: mismo hook que el send de texto (antes del early return,
+            //   la desconexión es global, no depende del lead actual).
+            maybeMarkWhatsAppDisconnected(err);
             if (state.currentLeadId !== leadId) return;
             state.waVoiceSending = false;
             state.waVoiceError = (err && err.userMessage) || 'No se pudo enviar el audio. Reintenta.';
@@ -6823,6 +6886,8 @@
             showToast('Mensaje enviado');
         }).catch(function (err) {
             log('wa send failed', err && (err.code || err.message));
+            // v1.60.0 reactivo: si el envío falló por desconexión, prender el banner + re-check.
+            maybeMarkWhatsAppDisconnected(err);
             state.waSending = false;
             state.waSendError = (err && err.userMessage) || 'No se pudo enviar el mensaje. Reintentá.';
             state.draftMessage = text;   // dejar el texto tipeado; los chips quedan para reintentar
@@ -7110,6 +7175,113 @@
     function useRealApi() {
         if (CONFIG && typeof CONFIG.useRealAPI === 'boolean') return CONFIG.useRealAPI;
         return !!FEATURE_FLAG.useRealAPI;
+    }
+
+    // ============================================================
+    // v1.60.0: estado de conexión WhatsApp (TimelinesAI)
+    // ============================================================
+    // El estado viene de GET /api/me/whatsapp-connection-status. FAIL-OPEN: ante
+    //   cualquier error asumimos connected=true para NO bloquear envíos por un
+    //   fallo de esta feature. Cadencia: on-mount (openModal) + slow poll 5 min +
+    //   reactivo (un send que falla con código de desconexión).
+    var _waStatusPollId = null;
+    var WA_STATUS_POLL_MS = 300000;   // 5 min — alineado al TTL cache del backend.
+
+    function isWhatsAppDisconnected() {
+        // QA: SOLO desde el CONFIG del loader (Tampermonkey). Nunca query param,
+        //   nunca localStorage -> un link compartido no puede falsear el banner a
+        //   una AF real, y al cerrar el browser el flag se va.
+        if (CONFIG && CONFIG.forceWhatsappDisconnected === true) return true;
+        return !!(state.whatsappConn && state.whatsappConn.connected === false);
+    }
+
+    function waReconnectUrl() {
+        return (state.whatsappConn && state.whatsappConn.reconnectUrl) || WA_DISCONNECT.reconnectUrl;
+    }
+
+    // Banner compartido. variant: 'pane' | 'dashboard'. Mismo markup en ambos.
+    function renderWaDisconnectBanner(variant) {
+        return '<div class="qida-wa-disc qida-wa-disc-' + variant + '">'
+            + icon('wifi-off', 16)
+            + '<span class="qida-wa-disc-text">' + esc(WA_DISCONNECT.bannerText) + '</span>'
+            + '<a class="qida-wa-disc-cta" href="' + esc(waReconnectUrl()) + '" target="_blank" rel="noopener noreferrer">' + esc(WA_DISCONNECT.ctaLabel) + '</a>'
+            + '<button class="qida-btn-ghost" data-action="wa-status-refresh">' + icon('refresh-cw', 11) + ' Reintentar</button>'
+        + '</div>';
+    }
+
+    // Glyph rojo de desconexión sobre el badge flotante (reemplaza el count). El
+    //   badge vive fuera de #qida-content, así que se sincroniza aparte del render.
+    function syncBadgeDisconnect() {
+        var badge = document.querySelector('.qida-badge');
+        if (!badge) return;
+        var disc = badge.querySelector('.qida-badge-disc');
+        var count = badge.querySelector('.qida-badge-count');
+        if (isWhatsAppDisconnected()) {
+            if (count) count.style.display = 'none';   // la desconexión gana al count
+            if (!disc) {
+                disc = document.createElement('span');
+                disc.className = 'qida-badge-disc';
+                disc.setAttribute('aria-label', WA_DISCONNECT.inputTooltip);
+                disc.title = WA_DISCONNECT.inputTooltip;
+                disc.innerHTML = icon('wifi-off', 15);
+                badge.appendChild(disc);
+            }
+        } else {
+            if (disc && disc.parentNode) disc.parentNode.removeChild(disc);
+            if (count) count.style.display = '';
+        }
+    }
+
+    // Reactivo: si un send falla por desconexión, marcar el estado + confirmar.
+    //   Reusado por el send de texto y el de voz. Devuelve true si actuó.
+    function maybeMarkWhatsAppDisconnected(err) {
+        var code = err && err.code;
+        if (code === 'WHATSAPP_ACCOUNT_DISCONNECTED' || code === 'AF_HAS_NO_WHATSAPP_ACCOUNT') {
+            if (!state.whatsappConn) state.whatsappConn = { connected: true, checkedAt: null, reconnectUrl: null };
+            state.whatsappConn.connected = false;
+            syncBadgeDisconnect();
+            fetchWhatsAppStatus();   // confirma contra el backend (y limpia si ya reconectó)
+            return true;
+        }
+        return false;
+    }
+
+    // Consulta el estado. FAIL-OPEN ante cualquier error. opts.force=true ->
+    //   ?refresh=true (busta el cache del backend; lo manda el botón "Reintentar").
+    function fetchWhatsAppStatus(opts) {
+        // QA: el flag del loader fuerza la UI sin pegarle al backend.
+        if (CONFIG && CONFIG.forceWhatsappDisconnected === true) {
+            rerenderContent();
+            syncBadgeDisconnect();
+            return;
+        }
+        if (!useRealApi()) return;   // modo mock/demo: asumimos conectado.
+        var path = '/api/me/whatsapp-connection-status' + (opts && opts.force ? '?refresh=true' : '');
+        apiFetchJson('GET', path, { noun: 'el estado de WhatsApp' }).then(function (data) {
+            state.whatsappConn = {
+                connected: !(data && data.connected === false),
+                checkedAt: Date.now(),
+                reconnectUrl: (data && data.reconnect_url) || null
+            };
+            rerenderContent();
+            syncBadgeDisconnect();
+        }).catch(function (err) {
+            // FAIL-OPEN: no bloquear envíos por un fallo de esta feature.
+            log('wa status check failed', err && (err.code || err.message));
+            state.whatsappConn = { connected: true, checkedAt: Date.now(), reconnectUrl: null };
+            syncBadgeDisconnect();
+        });
+    }
+
+    function startWhatsAppStatusPoll() {
+        if (_waStatusPollId) return;
+        _waStatusPollId = window.setInterval(fetchWhatsAppStatus, WA_STATUS_POLL_MS);
+    }
+
+    function stopWhatsAppStatusPoll() {
+        if (!_waStatusPollId) return;
+        window.clearInterval(_waStatusPollId);
+        _waStatusPollId = null;
     }
     // 'L122581' -> '122581'. En Odoo real el id ya es numerico (no-op). '' si no hay digitos.
     //   TODO[leadid]: confirmar con Odoo que el id de display mapea 1:1 al lead_id del backend.
@@ -8709,17 +8881,21 @@
         }
 
         var draft = state.draftMessage || '';
+        // v1.60.0: WhatsApp desconectado -> deshabilitar TODO el input (clip/mic/textarea/
+        //   enviar) porque un envío en este estado va a fallar igual. No se borra nada,
+        //   solo se deshabilita visualmente + tooltip; el banner explica por qué.
+        var waDisc = isWhatsAppDisconnected();
         // v1.23: durante el envio real, deshabilitar Enviar + spinner. Banner de error con Reintentar.
         var sending = !!state.waSending;
         var voiceBusy = !!(state.waRecording || state.waVoiceSending || state.waVoicePreview);
         // v1.26: habilitar Enviar si hay texto O al menos un attachment (chip-only permitido).
         var hasAtt = !!(state.pendingAttachments && state.pendingAttachments.length);
-        var sendDisabled = (sending || voiceBusy || (!draft.trim() && !hasAtt)) ? ' disabled' : '';
+        var sendDisabled = (sending || voiceBusy || waDisc || (!draft.trim() && !hasAtt)) ? ' disabled' : '';
         var sendInner = sending
             ? '<span class="qida-spinner" aria-hidden="true"></span>'
             : icon('send', 14);
         var support = waRecordSupport();
-        var micDisabled = (!support.ok || state.waUploading || sending || state.waVoiceSending || !!state.waVoicePreview) ? ' disabled' : '';
+        var micDisabled = (!support.ok || state.waUploading || sending || state.waVoiceSending || !!state.waVoicePreview || waDisc) ? ' disabled' : '';
         var micAction = state.waRecording ? 'wa-record-stop' : 'wa-record-start';
         var micTitle = state.waRecording ? 'Detener grabacion'
             : (!support.ok ? support.reason : (state.waVoicePreview ? 'Envia o descarta el audio actual' : 'Grabar audio'));
@@ -8734,6 +8910,8 @@
 
         return ''
             + '<div class="qida-pane-wa-head">' + icon('msg', 12) + ' Conversacion</div>'
+            // PLACEMENT 1 — banner entre el header del pane y el body de mensajes.
+            + (waDisc ? renderWaDisconnectBanner('pane') : '')
             + '<div class="qida-pane-wa-body" id="qida-wa-body">' + msgsHtml + '</div>'
             + '<div class="qida-wa-input-wrap">'
                 + errBanner
@@ -8744,12 +8922,12 @@
                     //   picker oculto -> POST /api/leads/{id}/attachments (multipart) -> chip file_upload con file_uid.
                     //   Mock -> toast + chip falso. Durante el upload, spinner + disabled (state.waUploading).
                     + '<input type="file" id="qida-wa-file-picker" data-input="wa-file" accept=".pdf,.doc,.docx,image/*,audio/*" hidden />'
-                    + '<button class="qida-wa-clip" data-action="wa-clip"' + ((state.waUploading || voiceBusy) ? ' disabled' : '') + ' aria-label="Adjuntar archivo">'
+                    + '<button class="qida-wa-clip" data-action="wa-clip"' + ((state.waUploading || voiceBusy || waDisc) ? ' disabled' : '') + ' aria-label="Adjuntar archivo">'
                         + (state.waUploading ? '<span class="qida-spinner" aria-hidden="true"></span>' : icon('paperclip', 16))
                     + '</button>'
                     + '<button class="' + micClass + '" data-action="' + micAction + '"' + micDisabled + ' aria-label="' + esc(micTitle) + '" title="' + esc(micTitle) + '">' + micInner + '</button>'
-                    + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1" placeholder="Escribe un mensaje...">' + esc(draft) + '</textarea>'
-                    + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + ' aria-label="Enviar">' + sendInner + '</button>'
+                    + '<textarea class="qida-wa-textarea" id="qida-wa-textarea" data-input="wa-draft" rows="1"' + (waDisc ? ' disabled title="' + esc(WA_DISCONNECT.inputTooltip) + '"' : '') + ' placeholder="' + (waDisc ? esc(WA_DISCONNECT.inputPlaceholder) : 'Escribe un mensaje...') + '">' + esc(draft) + '</textarea>'
+                    + '<button class="qida-wa-send" data-action="wa-send"' + sendDisabled + (waDisc ? ' title="' + esc(WA_DISCONNECT.inputTooltip) + '"' : '') + ' aria-label="Enviar">' + sendInner + '</button>'
                 + '</div>'
             + '</div>';
     }
@@ -9719,7 +9897,12 @@
     function renderContent() {
         if (state.view === 'leadersDashboard') return renderLeadersDashboard();
         if (state.view === 'agentBuilder') return renderAgentBuilder();
-        return state.view === 'detail' ? renderDetail() : renderDashboard();
+        if (state.view === 'detail') return renderDetail();
+        // Dashboard (cualquier sub-vista: today/activities/suggestions/leads).
+        //   PLACEMENT 2 — banner "WhatsApp desconectado" centrado arriba del
+        //   contenido, visible inmediatamente al abrir el widget (antes de scroll).
+        return (isWhatsAppDisconnected() ? renderWaDisconnectBanner('dashboard') : '')
+            + renderDashboard();
     }
 
     // ============================================================
@@ -10470,6 +10653,11 @@
                 if (waTaR) state.draftMessage = waTaR.value;
                 state.waSendError = null;
                 sendWhatsAppMock(state.currentLeadId, state.draftMessage);
+                return;
+            // v1.60.0: botón "Reintentar" del banner de desconexión -> re-check forzado
+            //   (?refresh=true busta el cache del backend para reflejar una reconexión).
+            case 'wa-status-refresh':
+                fetchWhatsAppStatus({ force: true });
                 return;
             case 'wa-record-start':
                 startWaRecording();
@@ -11824,6 +12012,7 @@
         badge.innerHTML = '<img src="' + QIDA_LOGO_URL + '" alt="Qida">';
         badge.addEventListener('click', handleClick);
         document.body.appendChild(badge);
+        syncBadgeDisconnect();   // v1.60.0: glyph de desconexión si ya sabemos que está caída
 
         // v1.49.5: contador real (modo Odoo: actividades hoy/atrasadas + sugerencias filtradas
         //   por AI-861; modo mock: countLeadsUrgent sobre MOCK_LEADS). Async para no bloquear el
@@ -11843,6 +12032,7 @@
                 span.textContent = String(count);
                 live.appendChild(span);
             }
+            syncBadgeDisconnect();   // v1.60.0: si está desconectada, el glyph oculta el count
         });
     }
 
@@ -12124,11 +12314,15 @@
         //   Se evalúa en CADA apertura (lee el hash vivo): así reabrir el widget tras navegar a
         //   otro lead en Odoo reevalúa contra el lead actual.
         maybeDeepLinkToDetail();
+        // v1.60.0: estado WhatsApp on-mount + slow poll (5 min) mientras esté abierto.
+        fetchWhatsAppStatus();
+        startWhatsAppStatusPoll();
     }
 
     function closeModal() {
         var overlay = document.querySelector('.qida-overlay');
         if (overlay) overlay.className = 'qida-overlay';
+        stopWhatsAppStatusPoll();   // v1.60.0: cortar el poll de estado WhatsApp al cerrar
         resetWaVoiceState(true);
         // Reset transient state.
         state.view = 'dashboard';
