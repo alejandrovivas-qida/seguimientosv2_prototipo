@@ -2048,7 +2048,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.60.0';
+    var VERSION = '1.61.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2819,6 +2819,9 @@
         //   metadata al guardar). tplLoaded: lazy. Plantillas por af_key -> se invalidan en setViewingAs.
         tplDraft: { inicial: '', cierre: '' },
         tplSaved: { inicial: '', cierre: '' },
+        tplAgencyDraft: { inicial: 5, cierre: 5 },
+        tplAgencySaved: { inicial: 5, cierre: 5 },
+        tplVarMenu: null,
         tplFull: { inicial: null, cierre: null },
         tplLoaded: false,
         recommendationCache: {},
@@ -4941,6 +4944,26 @@
             '.qida-tpl-input:focus{border-color:var(--qg);}',
             '.qida-tpl-vars{font-size:11px;color:var(--s500);margin:6px 0 0;}',
             '.qida-tpl-chip{background:var(--s100);border:0.5px solid var(--s200);border-radius:5px;padding:1px 5px;font-size:11px;color:var(--s700);font-family:ui-monospace,Menlo,Consolas,monospace;}',
+            '.qida-tpl-editor{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:9px 11px;font-family:inherit;font-size:13px;line-height:1.55;color:var(--s900);outline:none;width:100%;box-sizing:border-box;min-height:96px;white-space:pre-wrap;word-break:break-word;}',
+            '.qida-tpl-editor:focus{border-color:var(--qg);box-shadow:0 0 0 2px rgba(45,106,79,.10);}',
+            '.qida-tpl-editor:empty:before{content:attr(data-placeholder);color:var(--s400);}',
+            '.qida-tpl-var-chip{display:inline-flex;align-items:center;vertical-align:baseline;background:#E8F5EE;border:0.5px solid #A7D7BD;border-radius:999px;padding:1px 7px;margin:0 2px;color:#1F6B45;font-size:12px;font-weight:600;white-space:nowrap;user-select:all;}',
+            '.qida-tpl-toolbar{position:relative;display:flex;align-items:center;gap:8px;margin-top:8px;}',
+            '.qida-tpl-var-button{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:6px 9px;font-size:12px;color:var(--s700);cursor:pointer;display:inline-flex;align-items:center;gap:5px;}',
+            '.qida-tpl-var-button:hover{border-color:var(--qg);color:var(--qg);}',
+            '.qida-tpl-var-menu{position:absolute;top:32px;left:0;background:#fff;border:0.5px solid var(--s200);border-radius:8px;box-shadow:0 12px 30px rgba(28,25,23,.14);padding:5px;z-index:15;min-width:220px;}',
+            '.qida-tpl-var-option{width:100%;background:transparent;border:0;border-radius:6px;padding:7px 8px;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;}',
+            '.qida-tpl-var-option:hover{background:var(--s50);}',
+            '.qida-tpl-var-option-label{font-size:12px;color:var(--s800);font-weight:600;}',
+            '.qida-tpl-var-option-hint{font-size:11px;color:var(--s500);font-family:ui-monospace,Menlo,Consolas,monospace;}',
+            '.qida-agency{margin-top:12px;border-top:0.5px solid var(--s100);padding-top:10px;}',
+            '.qida-agency-head{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--s700);margin-bottom:8px;}',
+            '.qida-agency-head strong{font-size:12px;color:var(--s900);font-weight:700;}',
+            '.qida-agency-range{width:100%;accent-color:#D97706;background:linear-gradient(90deg,#2D6A4F 0%,#D97706 52%,#B91C1C 100%);height:6px;border-radius:999px;appearance:none;}',
+            '.qida-agency-range::-webkit-slider-thumb{appearance:none;width:17px;height:17px;border-radius:50%;background:#fff;border:2px solid var(--s800);box-shadow:0 2px 6px rgba(0,0,0,.18);}',
+            '.qida-agency-scale{display:flex;justify-content:space-between;font-size:10.5px;color:var(--s500);margin-top:5px;}',
+            '.qida-agency-marks{display:grid;grid-template-columns:repeat(10,1fr);font-size:10px;color:var(--s400);margin-top:3px;text-align:center;}',
+            '.qida-agency-marks span.active{color:var(--s900);font-weight:700;}',
             /* Confirm "¿Descartar cambios?" */
             '.qida-ab-confirm-overlay{position:absolute;inset:0;background:rgba(28,25,23,.35);display:flex;align-items:center;justify-content:center;z-index:20;}',
             '.qida-ab-confirm{background:#fff;border-radius:12px;padding:20px;max-width:320px;width:90%;box-shadow:0 16px 40px rgba(0,0,0,.25);}',
@@ -7095,6 +7118,9 @@
         state.templatesCache = {};   // v1.53.0: plantillas Inicio/Cierre son por af_key.
         state.draftVariantsLoaded = false;
         state.tplLoaded = false;     // v1.54.0: el editor recarga las plantillas de la nueva AF.
+        state.tplAgencyDraft = { inicial: 5, cierre: 5 };
+        state.tplAgencySaved = { inicial: 5, cierre: 5 };
+        state.tplVarMenu = null;
         // v1.25 (ISSUE A): cambiar de AF cambia X-AF-Email -> los datos del dashboard son de OTRO AF.
         //   1) Si hay un lead abierto, cerrarlo (no tiene sentido bajo otro AF).
         //   2) Forzar loading (dashRows=null + dashMetrics=null) y re-fetch del view activo:
@@ -7447,6 +7473,8 @@
         var lead = currentLead(leadId) || {};
         body.ia_summary = lead.iaSummary || null;
         body.lead_write_date = lead.writeDate || null;
+        body.lead_stage_name = lead.stage || null;
+        body.planned_start_date = lead.plannedStartDate || null;
         return body;
     }
 
@@ -9787,10 +9815,207 @@
         for (var i = 0; i < (arr || []).length; i++) out.push({ name: arr[i].name, length: arr[i].length, tone_style: arr[i].tone_style });
         return out;
     }
+    var TEMPLATE_VARS = [
+        { token: '{nombre}', label: 'Nombre del contacto', hint: 'Se reemplaza por el nombre del familiar' },
+        { token: '{nombre_af}', label: 'Tu nombre', hint: 'Se reemplaza por tu nombre de AF' },
+        { token: '{telefono_af}', label: 'Tu telefono', hint: 'Se reemplaza por tu telefono' }
+    ];
+    var TEMPLATE_VAR_BY_TOKEN = {};
+    for (var tvi = 0; tvi < TEMPLATE_VARS.length; tvi++) TEMPLATE_VAR_BY_TOKEN[TEMPLATE_VARS[tvi].token] = TEMPLATE_VARS[tvi];
+
+    function normalizeAgencyLevel(value) {
+        var n = parseInt(value, 10);
+        if (!n || isNaN(n)) return 5;
+        return Math.max(1, Math.min(10, n));
+    }
+    function agencyLabel(level) {
+        level = normalizeAgencyLevel(level);
+        if (level <= 3) return 'Fiel';
+        if (level >= 8) return 'Contextual';
+        return 'Equilibrado';
+    }
+    function templateTokenizeText(text) {
+        var src = String(text || '');
+        var tokens = [];
+        var re = /(\{nombre_af\}|\{telefono_af\}|\{nombre\})/g;
+        var last = 0;
+        var m;
+        while ((m = re.exec(src)) !== null) {
+            if (m.index > last) tokens.push({ type: 'text', value: src.slice(last, m.index) });
+            tokens.push({ type: 'var', value: m[0], label: TEMPLATE_VAR_BY_TOKEN[m[0]].label });
+            last = m.index + m[0].length;
+        }
+        if (last < src.length) tokens.push({ type: 'text', value: src.slice(last) });
+        return tokens;
+    }
+    function templateTokensToText(tokens) {
+        var out = '';
+        for (var i = 0; i < (tokens || []).length; i++) out += tokens[i].value || '';
+        return out;
+    }
+    function sanitizeTemplatePasteText(value) {
+        return String(value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    }
+    function templateTextToEditorHtml(text) {
+        var tokens = templateTokenizeText(text);
+        var html = '';
+        for (var i = 0; i < tokens.length; i++) {
+            var tok = tokens[i];
+            if (tok.type === 'var') {
+                html += '<span class="qida-tpl-var-chip" contenteditable="false" data-var="' + esc(tok.value) + '" title="' + esc(tok.value) + '">' + esc(tok.label) + '</span>';
+            } else {
+                html += esc(tok.value).replace(/\n/g, '<br>');
+            }
+        }
+        return html || '<br>';
+    }
+    function templateDeleteTokenBefore(tokens, caretIndex) {
+        var copy = (tokens || []).slice();
+        if (caretIndex <= 0 || caretIndex > copy.length) return { tokens: copy, caretIndex: caretIndex };
+        copy.splice(caretIndex - 1, 1);
+        return { tokens: copy, caretIndex: caretIndex - 1 };
+    }
+    function templateMoveCaretAcrossChip(tokens, caretIndex, direction) {
+        var copy = (tokens || []).slice();
+        var next = caretIndex + (direction === 'left' ? -1 : 1);
+        if (next < 0) next = 0;
+        if (next > copy.length) next = copy.length;
+        return { tokens: copy, caretIndex: next };
+    }
+    function templateDoubleClickChip(tokens, chipIndex) {
+        return { tokens: (tokens || []).slice(), selectedChipIndex: chipIndex };
+    }
+    function serializeTemplateEditor(root) {
+        function walk(node) {
+            if (!node) return '';
+            if (node.nodeType === 3) return node.nodeValue || '';
+            if (node.nodeType !== 1) return '';
+            if (node.getAttribute && node.getAttribute('data-var')) return node.getAttribute('data-var') || '';
+            if (node.tagName && node.tagName.toLowerCase() === 'br') return '\n';
+            var out = '';
+            for (var i = 0; i < node.childNodes.length; i++) out += walk(node.childNodes[i]);
+            return out;
+        }
+        return walk(root).replace(/\u00a0/g, ' ');
+    }
+    function updateTemplateDraftFromEditor(node) {
+        if (!node || !node.getAttribute) return;
+        var which = node.getAttribute('data-which');
+        if (which !== 'inicial' && which !== 'cierre') return;
+        state.tplDraft[which] = serializeTemplateEditor(node);
+        refreshAgentBuilderSaveButton();
+    }
+    function refreshAgentBuilderSaveButton() {
+        var btn = document.querySelector('[data-action="ab-save"]');
+        if (!btn) return;
+        var iniT = (state.tplDraft.inicial || '').replace(/\s/g, '');
+        var cieT = (state.tplDraft.cierre || '').replace(/\s/g, '');
+        btn.disabled = !!state.agentBuilderSaving || !iniT || !cieT || !agentBuilderDirty();
+    }
+    function insertTemplateTextAtSelection(editor, text) {
+        if (!editor) return;
+        editor.focus();
+        text = sanitizeTemplatePasteText(text);
+        var inserted = false;
+        try {
+            if (document.queryCommandSupported && document.queryCommandSupported('insertText')) {
+                inserted = document.execCommand('insertText', false, text);
+            }
+        } catch (e0) { inserted = false; }
+        if (!inserted) {
+            var sel = window.getSelection && window.getSelection();
+            if (sel && sel.rangeCount) {
+                var range = sel.getRangeAt(0);
+                range.deleteContents();
+                range.insertNode(document.createTextNode(text));
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+            } else {
+                editor.appendChild(document.createTextNode(text));
+            }
+        }
+        updateTemplateDraftFromEditor(editor);
+    }
+    function rerenderTemplateEditorSoon() {
+        setTimeout(function () {
+            if (state.view === 'agentBuilder') rerenderContent();
+        }, 0);
+    }
+    function closestTemplateEditor(node) {
+        while (node && node !== document) {
+            if (node.getAttribute && node.getAttribute('data-input') === 'tpl-editor') return node;
+            node = node.parentNode;
+        }
+        return null;
+    }
+    function isTemplateChip(node) {
+        return !!(node && node.nodeType === 1 && node.getAttribute && node.getAttribute('data-var'));
+    }
+    function setCaretAroundNode(root, node, after) {
+        var sel = window.getSelection && window.getSelection();
+        if (!sel || !node || !root) return;
+        var range = document.createRange();
+        range.setStartAfter(node);
+        if (!after) range.setStartBefore(node);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        root.focus();
+    }
+    function chipBeforeRange(root, range) {
+        var container = range.startContainer;
+        var offset = range.startOffset;
+        var prev = null;
+        if (container === root && offset > 0) prev = root.childNodes[offset - 1];
+        else if (container.nodeType === 3 && offset === 0) prev = container.previousSibling;
+        return isTemplateChip(prev) ? prev : null;
+    }
+    function chipAfterRange(root, range) {
+        var container = range.startContainer;
+        var offset = range.startOffset;
+        var next = null;
+        if (container === root && offset < root.childNodes.length) next = root.childNodes[offset];
+        else if (container.nodeType === 3 && offset === (container.nodeValue || '').length) next = container.nextSibling;
+        return isTemplateChip(next) ? next : null;
+    }
+    function handleTemplateEditorKeydown(e, editor) {
+        var sel = window.getSelection && window.getSelection();
+        if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
+        var range = sel.getRangeAt(0);
+        if (e.key === 'Backspace' || e.keyCode === 8) {
+            var prev = chipBeforeRange(editor, range);
+            if (prev) {
+                e.preventDefault();
+                prev.parentNode.removeChild(prev);
+                updateTemplateDraftFromEditor(editor);
+                return true;
+            }
+        }
+        if (e.key === 'ArrowLeft' || e.keyCode === 37) {
+            var left = chipBeforeRange(editor, range);
+            if (left) {
+                e.preventDefault();
+                setCaretAroundNode(editor, left, false);
+                return true;
+            }
+        }
+        if (e.key === 'ArrowRight' || e.keyCode === 39) {
+            var right = chipAfterRange(editor, range);
+            if (right) {
+                e.preventDefault();
+                setCaretAroundNode(editor, right, true);
+                return true;
+            }
+        }
+        return false;
+    }
     function agentBuilderDirty() {
         // v1.54.0: dirty del editor de plantillas (texto Inicio/Cierre vs último guardado).
         return state.tplDraft.inicial !== state.tplSaved.inicial
-            || state.tplDraft.cierre !== state.tplSaved.cierre;
+            || state.tplDraft.cierre !== state.tplSaved.cierre
+            || normalizeAgencyLevel(state.tplAgencyDraft.inicial) !== normalizeAgencyLevel(state.tplAgencySaved.inicial)
+            || normalizeAgencyLevel(state.tplAgencyDraft.cierre) !== normalizeAgencyLevel(state.tplAgencySaved.cierre);
     }
 
     function renderAgentBuilder() {
@@ -9822,8 +10047,8 @@
         return '<div class="qida-ab">'
             + '<div class="qida-ab-inner">'
                 + '<p class="qida-ab-lead">Editá tus plantillas de <strong>Inicio</strong> y <strong>Cierre</strong>. Cuando las uses en un lead, se personalizan solas (nombre del contacto + un guiño a lo hablado) manteniendo tu estructura y tu voz. La IA propone; vos editás y copiás.</p>'
-                + renderTemplateEditorRow('inicial', 'Inicio', iniText, iniEmpty)
-                + renderTemplateEditorRow('cierre', 'Cierre', cieText, cieEmpty)
+                + renderTemplateEditorRow('inicial', 'Inicio', iniText, iniEmpty, normalizeAgencyLevel(state.tplAgencyDraft.inicial))
+                + renderTemplateEditorRow('cierre', 'Cierre', cieText, cieEmpty, normalizeAgencyLevel(state.tplAgencyDraft.cierre))
                 + '<div class="qida-ab-foot">'
                     + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
                     + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + saveLabel + '</button>'
@@ -9834,8 +10059,7 @@
     }
 
     // v1.54.0: una fila del editor de plantillas (textarea + chips de variables + restaurar genérica).
-    var TEMPLATE_VARS = ['{nombre}', '{nombre_af}', '{telefono_af}'];
-    function renderTemplateEditorRow(which, label, text, isEmpty) {
+    function renderTemplateEditorRowLegacy(which, label, text, isEmpty) {
         var chips = '';
         for (var i = 0; i < TEMPLATE_VARS.length; i++) {
             chips += '<code class="qida-tpl-chip">' + esc(TEMPLATE_VARS[i]) + '</code>' + (i < TEMPLATE_VARS.length - 1 ? ' ' : '');
@@ -9848,6 +10072,47 @@
             + '<textarea class="qida-tpl-input" data-input="tpl-text" data-which="' + esc(which) + '" rows="5" placeholder="Escribí tu plantilla de ' + esc(label.toLowerCase()) + '…">' + esc(text) + '</textarea>'
             + '<p class="qida-tpl-vars">Variables: ' + chips + '. {nombre} y el guiño los completa el asistente; el resto los completás vos.</p>'
             + (isEmpty ? '<p class="qida-ab-error">No puede quedar vacía.</p>' : '')
+        + '</div>';
+    }
+
+    function renderTemplateVarMenu(which) {
+        if (state.tplVarMenu !== which) return '';
+        var html = '<div class="qida-tpl-var-menu" role="menu">';
+        for (var i = 0; i < TEMPLATE_VARS.length; i++) {
+            var v = TEMPLATE_VARS[i];
+            html += '<button type="button" class="qida-tpl-var-option" data-action="tpl-var-insert" data-which="' + esc(which) + '" data-token="' + esc(v.token) + '">'
+                + '<span class="qida-tpl-var-option-label">' + esc(v.label) + '</span>'
+                + '<span class="qida-tpl-var-option-hint">' + esc(v.token) + '</span>'
+            + '</button>';
+        }
+        return html + '</div>';
+    }
+    function renderAgencySlider(which, level) {
+        var marks = '';
+        for (var i = 1; i <= 10; i++) marks += '<span' + (i === level ? ' class="active"' : '') + '>' + i + '</span>';
+        return '<div class="qida-agency">'
+            + '<div class="qida-agency-head">'
+                + '<span>Cuanto puede adaptar el asistente</span>'
+                + '<strong>' + level + ' - ' + esc(agencyLabel(level)) + '</strong>'
+            + '</div>'
+            + '<input class="qida-agency-range" type="range" min="1" max="10" step="1" value="' + level + '" data-input="tpl-agency" data-which="' + esc(which) + '" aria-label="Cuanto puede adaptar el asistente" />'
+            + '<div class="qida-agency-scale"><span>Mas fiel a tu plantilla</span><span>Mas contexto del lead</span></div>'
+            + '<div class="qida-agency-marks">' + marks + '</div>'
+        + '</div>';
+    }
+    function renderTemplateEditorRow(which, label, text, isEmpty, agencyLevel) {
+        return '<div class="qida-tpl-row' + (isEmpty ? ' has-error' : '') + '">'
+            + '<div class="qida-tpl-head">'
+                + '<label class="qida-ab-label">' + esc(label) + '</label>'
+                + '<button class="qida-tpl-restore" data-action="tpl-restore" data-which="' + esc(which) + '">' + icon('refresh-cw', 11) + ' Restaurar generica</button>'
+            + '</div>'
+            + '<div class="qida-tpl-editor" data-input="tpl-editor" data-which="' + esc(which) + '" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="true" data-placeholder="Escribi tu plantilla de ' + esc(label.toLowerCase()) + '...">' + templateTextToEditorHtml(text) + '</div>'
+            + '<div class="qida-tpl-toolbar">'
+                + '<button type="button" class="qida-tpl-var-button" data-action="tpl-var-toggle" data-which="' + esc(which) + '">' + icon('plus', 11) + ' Insertar variable</button>'
+                + renderTemplateVarMenu(which)
+            + '</div>'
+            + renderAgencySlider(which, agencyLevel)
+            + (isEmpty ? '<p class="qida-ab-error">No puede quedar vacia.</p>' : '')
         + '</div>';
     }
 
@@ -10425,6 +10690,10 @@
                     state.agentBuilderSaving = false;
                     if (res && res.ok) {
                         state.tplSaved = { inicial: state.tplDraft.inicial, cierre: state.tplDraft.cierre };
+                        state.tplAgencySaved = {
+                            inicial: normalizeAgencyLevel(state.tplAgencyDraft.inicial),
+                            cierre: normalizeAgencyLevel(state.tplAgencyDraft.cierre)
+                        };
                         state.templatesCache = {};  // invalida la cache de lectura de Inicio/Cierre
                         showToast('Plantillas guardadas.');
                     } else {
@@ -10444,7 +10713,26 @@
                 if (rWhich === 'inicial' || rWhich === 'cierre') {
                     var gen = MOCK_AF_TEMPLATES[rWhich];
                     state.tplDraft[rWhich] = (gen && gen.text) ? String(gen.text) : '';
+                    state.tplAgencyDraft[rWhich] = normalizeAgencyLevel(gen && gen.agency_level);
+                    state.tplVarMenu = null;
                     rerenderContent();
+                }
+                return;
+            }
+            case 'tpl-var-toggle': {
+                var menuWhich = target.getAttribute('data-which');
+                state.tplVarMenu = (state.tplVarMenu === menuWhich) ? null : menuWhich;
+                rerenderContent();
+                return;
+            }
+            case 'tpl-var-insert': {
+                var insWhich = target.getAttribute('data-which');
+                var token = target.getAttribute('data-token') || '';
+                var editor = document.querySelector('.qida-tpl-editor[data-which="' + insWhich + '"]');
+                if (editor && TEMPLATE_VAR_BY_TOKEN[token]) {
+                    insertTemplateTextAtSelection(editor, token);
+                    state.tplVarMenu = null;
+                    rerenderTemplateEditorSoon();
                 }
                 return;
             }
@@ -11515,6 +11803,14 @@
             //   global del equipo) pero el rerender la re-mounta con la misma metrica activa.
             state.leaderDash.locFilter = node.value || 'all';
             rerenderContent();
+        } else if (input === 'tpl-editor') {
+            updateTemplateDraftFromEditor(node);
+        } else if (input === 'tpl-agency') {
+            var aWhich = node.getAttribute('data-which');
+            if (aWhich === 'inicial' || aWhich === 'cierre') {
+                state.tplAgencyDraft[aWhich] = normalizeAgencyLevel(node.value);
+                rerenderContent();
+            }
         } else if (input === 'tpl-text') {
             // v1.54.0: textarea de plantilla. Update en cada keystroke SIN rerender (no perder
             //   foco/caret); rerender en 'change' (blur) para refrescar dirty/vacío/Guardar.
@@ -11558,6 +11854,28 @@
     }
 
     // v1.6: chip del chat IA -> respuesta mock + persistencia en aiChatHistory.
+    function handlePaste(e) {
+        var editor = closestTemplateEditor(e.target);
+        if (!editor) return;
+        e.preventDefault();
+        var raw = '';
+        if (e.clipboardData) raw = e.clipboardData.getData('text/plain') || '';
+        insertTemplateTextAtSelection(editor, raw);
+        rerenderTemplateEditorSoon();
+    }
+
+    function handleTemplateDoubleClick(e) {
+        var target = e.target;
+        if (isTemplateChip(target)) {
+            e.preventDefault();
+            var editor = closestTemplateEditor(target);
+            if (editor) {
+                editor.focus();
+                setCaretAroundNode(editor, target, true);
+            }
+        }
+    }
+
     function handleAiChip(promptId) {
         var lead = currentLead();  // v1.29: cache Odoo + fallback mock (antes getLead -> null en leads reales)
         if (!lead) return;
@@ -12052,6 +12370,8 @@
         overlay.addEventListener('click', handleClick);
         overlay.addEventListener('input', handleInput);
         overlay.addEventListener('change', handleInput); // para <select> y <input type=date>
+        overlay.addEventListener('paste', handlePaste);
+        overlay.addEventListener('dblclick', handleTemplateDoubleClick);
         overlay.addEventListener('keydown', handleKeyDownInModal);
         document.body.appendChild(overlay);
         rerenderContent();
@@ -12062,6 +12382,8 @@
     // del asistente). Ambos handlers conviven: el global se dispara solo si este no detuvo
     // la propagacion. Shift+Enter en el textarea agrega salto de linea (default browser).
     function handleKeyDownInModal(e) {
+        var tplEditor = closestTemplateEditor(e.target);
+        if (tplEditor && handleTemplateEditorKeydown(e, tplEditor)) return;
         var isEnter = (e.key === 'Enter' || e.keyCode === 13);
         if (!isEnter) return;
         var node = e.target;
@@ -12189,14 +12511,15 @@
     // Arma el body del PUT preservando la metadata del AfTemplate (variables/lang/flags) y pisando
     //   solo el texto editado.
     function buildTemplatesPayload() {
-        function merge(full, text) {
+        function merge(full, text, agencyLevel) {
             var obj = full ? JSON.parse(JSON.stringify(full)) : {};
             obj.text = text;
+            obj.agency_level = normalizeAgencyLevel(agencyLevel);
             return obj;
         }
         return {
-            inicial: merge(state.tplFull.inicial, state.tplDraft.inicial),
-            cierre: merge(state.tplFull.cierre, state.tplDraft.cierre)
+            inicial: merge(state.tplFull.inicial, state.tplDraft.inicial, state.tplAgencyDraft.inicial),
+            cierre: merge(state.tplFull.cierre, state.tplDraft.cierre, state.tplAgencyDraft.cierre)
         };
     }
 
@@ -12204,8 +12527,8 @@
     //   muestre la edición en index.html). Devuelve { ok }.
     function saveEditorTemplates(templatesPayload) {
         if (!useRealApi()) {
-            if (templatesPayload.inicial) MOCK_AF_TEMPLATES.inicial = { text: templatesPayload.inicial.text };
-            if (templatesPayload.cierre) MOCK_AF_TEMPLATES.cierre = { text: templatesPayload.cierre.text };
+            if (templatesPayload.inicial) MOCK_AF_TEMPLATES.inicial = { text: templatesPayload.inicial.text, agency_level: templatesPayload.inicial.agency_level };
+            if (templatesPayload.cierre) MOCK_AF_TEMPLATES.cierre = { text: templatesPayload.cierre.text, agency_level: templatesPayload.cierre.agency_level };
             return simulateLatency(80, 180).then(function () { return { ok: true }; });
         }
         return apiFetchJson('PUT', '/api/me/templates', { body: { templates: templatesPayload }, noun: 'plantillas' })
@@ -12225,8 +12548,12 @@
             state.tplFull = { inicial: tpls.inicial || null, cierre: tpls.cierre || null };
             var ini = (tpls.inicial && tpls.inicial.text) ? String(tpls.inicial.text) : '';
             var cie = (tpls.cierre && tpls.cierre.text) ? String(tpls.cierre.text) : '';
+            var iniAgency = normalizeAgencyLevel(tpls.inicial && tpls.inicial.agency_level);
+            var cieAgency = normalizeAgencyLevel(tpls.cierre && tpls.cierre.agency_level);
             state.tplSaved = { inicial: ini, cierre: cie };
             state.tplDraft = { inicial: ini, cierre: cie };
+            state.tplAgencySaved = { inicial: iniAgency, cierre: cieAgency };
+            state.tplAgencyDraft = { inicial: iniAgency, cierre: cieAgency };
             state.tplLoaded = true;
             state.agentBuilderLoading = false;
             rerenderContent();
@@ -12252,6 +12579,8 @@
     function abDiscardAndLeave() {
         // v1.54.0: descartar la edición de plantillas -> volver al último snapshot guardado.
         state.tplDraft = { inicial: state.tplSaved.inicial, cierre: state.tplSaved.cierre };
+        state.tplAgencyDraft = { inicial: state.tplAgencySaved.inicial, cierre: state.tplAgencySaved.cierre };
+        state.tplVarMenu = null;
         state.agentBuilderConfirmDiscard = false;
         state.view = 'dashboard';
         rerenderContent();
