@@ -15,7 +15,13 @@
     var WIDGET_URL = 'https://6lrdpudff30zg6ys.public.blob.vercel-storage.com/qida-widget.v1.js';
   
     var WIDGET_CONFIG = {
-      launcherLabel: 'Asistente'
+      launcherLabel: 'Asistente',
+      // QA v1.60.0: poné true para FORZAR el estado "WhatsApp desconectado" y ver los 3 placements
+      //   (banner en el pane del detalle + banner en el header del dashboard + glyph en el badge) y el
+      //   input deshabilitado, SIN tocar las cuentas reales de TimelinesAI ni el backend. Vive solo
+      //   acá (en memoria del loader): NO es query param ni localStorage, así que no se propaga a una
+      //   AF real ni sobrevive al cierre del browser. Dejar en false para uso normal.
+      forceWhatsappDisconnected: false
     };
     // ============ /CONFIG ===========
   
