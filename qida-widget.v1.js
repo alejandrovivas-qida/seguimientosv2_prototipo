@@ -10,6 +10,13 @@
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
  *
+ * Cambios v1.61.1 (2026-06-23 — cerrar el modal al abrir la ficha del lead en Odoo):
+ *   Al clickear el id+nombre del lead en el dashboard (data-action="open-lead-odoo"), además de
+ *   navegar a la ficha en Odoo ahora se CIERRA el modal del widget, para que la AF vea la ficha sin
+ *   el widget tapándola. navigateLeadToOdoo() solo cambia window.location.hash (SPA de Odoo, misma
+ *   página): NO desmonta el widget, así que el modal quedaba abierto encima. Fix = reusar closeModal()
+ *   (el mismo de la cruz / data-action="close-modal") después de navegar. Cambio mínimo, sin tocar nada más.
+ *
  * Cambios v1.60.0 (2026-06-22 — detección de WhatsApp desconectado + CTA de reconexión):
  *   Cuando la sesión de WhatsApp de la AF se cae en TimelinesAI, el widget lo muestra VISIBLE en
  *   3 placements (mismo ícono wifi-off + mismo texto + mismos colores rojos) y ofrece un CTA a
@@ -2048,7 +2055,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.61.0';
+    var VERSION = '1.61.1';
     var CONFIG = null;
 
     // ============================================================
@@ -10820,8 +10827,12 @@
                 return;
 
             // v1.55.0 (#3): id+nombre del header -> abre la ficha del lead en Odoo (same-origin).
+            // v1.61.1: además cerramos el modal para que la AF vea la ficha sin el widget tapándola.
+            //   navigateLeadToOdoo solo cambia window.location.hash (SPA de Odoo, misma página) -> NO
+            //   desmonta el widget; reusamos closeModal() (el mismo de la cruz / data-action="close-modal").
             case 'open-lead-odoo':
                 navigateLeadToOdoo(id);
+                closeModal();
                 return;
 
             // --- v1.10: dashboard de leads enfriandose. v1.43: persistencia en backend ---
