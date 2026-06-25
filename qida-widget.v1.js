@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.58.0
+ * QIDA ASSISTANT v1.62.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -16,6 +16,22 @@
  *   el widget tapándola. navigateLeadToOdoo() solo cambia window.location.hash (SPA de Odoo, misma
  *   página): NO desmonta el widget, así que el modal quedaba abierto encima. Fix = reusar closeModal()
  *   (el mismo de la cruz / data-action="close-modal") después de navegar. Cambio mínimo, sin tocar nada más.
+ * Cambios v1.62.0 (2026-06-23 — "Tu estilo" (memoria de estilo por AF) integrado sobre v1.61.0 + cableo de telemetría):
+ *   Rebase de la rama feat/feedback-loop-af-implementation (era v1.59.0 sobre v1.58.0) sobre la línea
+ *   viva (WhatsApp disconnect v1.60.0 + plantillas con agency_level v1.61.0). v1.59.0/v1.61.0 ya
+ *   estaban tomados -> sube a v1.62.0.
+ *   - "Armá tu asistente" ahora tiene 2 tabs: [Plantillas] (editor contenteditable + sliders de
+ *     agency_level de v1.61.0, INTACTO) y [Tu estilo] (NUEVO). "Tu estilo" = UN textarea libre
+ *     (máx 500, contador) donde la AF describe su estilo en sus palabras; al Guardar, el backend corre
+ *     el distiller y devuelve "Cómo te interpreta el asistente" (read-only: estilo, frases a evitar,
+ *     largo máx, trato). PUT /api/me/style-prefs. Coexiste con agency_level (ejes ortogonales:
+ *     agency=estrategia, estilo=forma).
+ *   - sendAssistantEvent CABLEADO al endpoint real POST /api/leads/{id}/assistant/events (era stub
+ *     TODO[odoo] F2.9). Fire-and-forget, gateado por useRealApi() + lead_id; payload con whitelist
+ *     por evento (el backend rechaza claves extra: draft_copied -> {variant}).
+ *   - Defaults que tomé: (a) "Tu estilo" como TAB del editor existente (no pantalla nueva). (b)
+ *     "Restablecer" vacía el textarea localmente; la AF Guarda para persistir (sin escrituras sorpresa).
+ *     (c) NO publico al Blob (pendiente OK de Alejandro).
  *
  * Cambios v1.60.0 (2026-06-22 — detección de WhatsApp desconectado + CTA de reconexión):
  *   Cuando la sesión de WhatsApp de la AF se cae en TimelinesAI, el widget lo muestra VISIBLE en
@@ -2055,7 +2071,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.61.1';
+    var VERSION = '1.62.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2831,6 +2847,18 @@
         tplVarMenu: null,
         tplFull: { inicial: null, cierre: null },
         tplLoaded: false,
+        // v1.59.0: tab activo del editor ('plantillas' | 'estilo') + "Tu estilo" (memoria de estilo por AF).
+        //   styleDraft: textarea de trabajo. styleSaved: snapshot (dirty-check). styleDerived: lo que el
+        //   distiller interpretó (read-only). styleLoaded: lazy al entrar al tab; se invalida en setViewingAs.
+        agentBuilderTab: 'plantillas',
+        styleDraft: '',
+        styleSaved: '',
+        styleDerived: null,
+        styleUpdatedAt: null,
+        styleLoaded: false,
+        styleLoading: false,
+        styleError: null,
+        styleSaving: false,
         recommendationCache: {},
 
         // v1.50.0: chat agent sprint 2 — planner + draft separados (lazy generation).
@@ -4971,6 +4999,21 @@
             '.qida-agency-scale{display:flex;justify-content:space-between;font-size:10.5px;color:var(--s500);margin-top:5px;}',
             '.qida-agency-marks{display:grid;grid-template-columns:repeat(10,1fr);font-size:10px;color:var(--s400);margin-top:3px;text-align:center;}',
             '.qida-agency-marks span.active{color:var(--s900);font-weight:700;}',
+            /* v1.62.0: tabs del editor + "Tu estilo" (feedback loop) */
+            '.qida-ab-tabs{display:flex;gap:4px;margin:0 0 16px;border-bottom:0.5px solid var(--s200);}',
+            '.qida-ab-tab{background:transparent;border:0;border-bottom:2px solid transparent;padding:8px 12px;font-size:13px;font-weight:600;color:var(--s500);cursor:pointer;font-family:inherit;margin-bottom:-1px;}',
+            '.qida-ab-tab.is-active{color:var(--qg);border-bottom-color:var(--qg);}',
+            '.qida-ab-tab:hover:not(.is-active){color:var(--s700);}',
+            '.qida-style-input{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:9px 11px;font-family:inherit;font-size:13px;line-height:1.5;color:var(--s900);outline:none;width:100%;box-sizing:border-box;resize:vertical;min-height:120px;}',
+            '.qida-style-input:focus{border-color:var(--qg);box-shadow:0 0 0 2px rgba(45,106,79,.10);}',
+            '.qida-style-counter{font-size:11px;color:var(--s500);text-align:right;margin:4px 0 0;}',
+            '.qida-style-counter.over{color:#991B1B;font-weight:600;}',
+            '.qida-style-interp{border:0.5px solid var(--s200);border-radius:10px;padding:12px 14px;background:var(--s50);margin-top:18px;}',
+            '.qida-style-interp-title{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--s500);margin:0 0 8px;}',
+            '.qida-style-interp-row{font-size:12.5px;color:var(--s800);margin:0 0 5px;line-height:1.5;}',
+            '.qida-style-interp-row b{color:var(--s900);}',
+            '.qida-style-interp-empty{font-size:12.5px;color:var(--s500);font-style:italic;margin:0;}',
+            '.qida-style-updated{font-size:11px;color:var(--s400);margin:10px 0 0;}',
             /* Confirm "¿Descartar cambios?" */
             '.qida-ab-confirm-overlay{position:absolute;inset:0;background:rgba(28,25,23,.35);display:flex;align-items:center;justify-content:center;z-index:20;}',
             '.qida-ab-confirm{background:#fff;border-radius:12px;padding:20px;max-width:320px;width:90%;box-shadow:0 16px 40px rgba(0,0,0,.25);}',
@@ -7128,6 +7171,7 @@
         state.tplAgencyDraft = { inicial: 5, cierre: 5 };
         state.tplAgencySaved = { inicial: 5, cierre: 5 };
         state.tplVarMenu = null;
+        state.styleLoaded = false;   // v1.59.0: idem "Tu estilo" — recargar al cambiar de AF.
         // v1.25 (ISSUE A): cambiar de AF cambia X-AF-Email -> los datos del dashboard son de OTRO AF.
         //   1) Si hay un lead abierto, cerrarlo (no tiene sentido bajo otro AF).
         //   2) Forzar loading (dashRows=null + dashMetrics=null) y re-fetch del view activo:
@@ -7178,14 +7222,19 @@
     function sendAssistantEvent(eventType, payload) {
         try {
             var p = payload || {};
-            var body = { event_type: eventType, ts: Date.now() };
-            if (p.lead_id != null) body.lead_id = p.lead_id;
-            if (p.variant_name) body.variant_name = p.variant_name;
-            if (p.length) body.length = p.length;
-            if (p.tone_style) body.tone_style = p.tone_style;
-            // TODO[odoo]: POST /api/leads/{lead_id}/assistant/events (F2.9). Por ahora no-op + log.
-            log('assistant event', body);
-            // thumbs_explicit: el wrapper ya lo acepta; la UI de 👍/👎 queda para cuando exista F2.9.
+            var leadId = p.lead_id;
+            // v1.59.0 (era stub TODO[odoo] F2.9): cableado a POST /api/leads/{id}/assistant/events.
+            //   Fire-and-forget, gateado por useRealApi() + lead_id. Payload con WHITELIST por evento
+            //   (el backend rechaza claves extra): draft_copied -> {variant}; draft_sent ->
+            //   {variant, similarity_to_sent}; thumbs_explicit -> {variant, rating}. NO mandamos
+            //   length/tone_style (no están en la whitelist del backend).
+            if (!useRealApi() || leadId == null) { log('assistant event (noop)', { event_type: eventType }); return; }
+            var ev = { event_type: eventType, payload: {} };
+            if (p.variant_name) ev.payload.variant = p.variant_name;
+            if (p.similarity_to_sent != null) ev.payload.similarity_to_sent = p.similarity_to_sent;
+            if (p.rating != null) ev.payload.rating = p.rating;
+            apiFetchJson('POST', '/api/leads/' + encodeURIComponent(leadId) + '/assistant/events', { body: ev, noun: 'evento' })
+                .catch(function (err) { log('assistant event failed', err && (err.code || err.message)); });
         } catch (e) { /* silencioso a proposito */ }
     }
 
@@ -10041,7 +10090,23 @@
             + '</div></div>';
         }
 
-        // v1.54.0: editor de las 2 plantillas (Inicio/Cierre). Las textareas son requeridas.
+        // v1.59.0: 2 tabs — Plantillas (Inicio/Cierre) y Tu estilo (memoria de estilo por AF).
+        var tab = state.agentBuilderTab || 'plantillas';
+        function tabBtn(key, label) {
+            return '<button class="qida-ab-tab' + (tab === key ? ' is-active' : '') + '" '
+                + 'data-action="ab-tab" data-tab="' + key + '">' + esc(label) + '</button>';
+        }
+        var tabs = '<div class="qida-ab-tabs">' + tabBtn('plantillas', 'Plantillas') + tabBtn('estilo', 'Tu estilo') + '</div>';
+        var body = (tab === 'estilo') ? renderStyleEditor() : renderTemplatesEditor();
+
+        return '<div class="qida-ab">'
+            + '<div class="qida-ab-inner">' + tabs + body + '</div>'
+            + (state.agentBuilderConfirmDiscard ? renderDiscardConfirm() : '')
+        + '</div>';
+    }
+
+    // v1.54.0: editor de las 2 plantillas (Inicio/Cierre). Las textareas son requeridas.
+    function renderTemplatesEditor() {
         var dirty = agentBuilderDirty();
         var saving = !!state.agentBuilderSaving;
         var iniText = state.tplDraft.inicial || '';
@@ -10051,18 +10116,73 @@
         var saveDisabled = (iniEmpty || cieEmpty || !dirty || saving) ? ' disabled' : '';
         var saveLabel = saving ? (icon('refresh-cw', 13) + ' Guardando…') : (icon('check', 13) + ' Guardar');
 
-        return '<div class="qida-ab">'
-            + '<div class="qida-ab-inner">'
-                + '<p class="qida-ab-lead">Editá tus plantillas de <strong>Inicio</strong> y <strong>Cierre</strong>. Cuando las uses en un lead, se personalizan solas (nombre del contacto + un guiño a lo hablado) manteniendo tu estructura y tu voz. La IA propone; vos editás y copiás.</p>'
-                + renderTemplateEditorRow('inicial', 'Inicio', iniText, iniEmpty, normalizeAgencyLevel(state.tplAgencyDraft.inicial))
-                + renderTemplateEditorRow('cierre', 'Cierre', cieText, cieEmpty, normalizeAgencyLevel(state.tplAgencyDraft.cierre))
-                + '<div class="qida-ab-foot">'
-                    + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
-                    + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + saveLabel + '</button>'
-                + '</div>'
+        return '<p class="qida-ab-lead">Editá tus plantillas de <strong>Inicio</strong> y <strong>Cierre</strong>. Cuando las uses en un lead, se personalizan solas (nombre del contacto + un guiño a lo hablado) manteniendo tu estructura y tu voz. La IA propone; vos editás y copiás.</p>'
+            + renderTemplateEditorRow('inicial', 'Inicio', iniText, iniEmpty, normalizeAgencyLevel(state.tplAgencyDraft.inicial))
+            + renderTemplateEditorRow('cierre', 'Cierre', cieText, cieEmpty, normalizeAgencyLevel(state.tplAgencyDraft.cierre))
+            + '<div class="qida-ab-foot">'
+                + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
+                + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + saveLabel + '</button>'
+            + '</div>';
+    }
+
+    // v1.62.0: editor de "Tu estilo" — UN textarea (máx 500) + "Cómo te interpreta el asistente" (read-only).
+    var STYLE_TEXT_MAX = 500;
+    function renderStyleEditor() {
+        if (state.styleLoading) {
+            return '<div class="qida-ab-loading">' + icon('refresh-cw', 14) + ' Cargando tu estilo…</div>';
+        }
+        if (state.styleError) {
+            return '<div class="qida-ab-error-box">'
+                + '<p class="qida-ab-error-msg">' + icon('alert-triangle', 13) + ' ' + esc(state.styleError) + '</p>'
+                + '<button class="qida-btn-ghost" data-action="style-reload">' + icon('refresh-cw', 12) + ' Reintentar</button>'
+            + '</div>';
+        }
+        var text = state.styleDraft || '';
+        var count = text.length;
+        var over = count > STYLE_TEXT_MAX;
+        var dirty = (state.styleDraft !== state.styleSaved);
+        var saving = !!state.styleSaving;
+        var saveDisabled = (!dirty || saving || over) ? ' disabled' : '';
+        var saveLabel = saving ? (icon('refresh-cw', 13) + ' Guardando…') : (icon('check', 13) + ' Guardar');
+        var resetDisabled = (!text || saving) ? ' disabled' : '';
+
+        return '<p class="qida-ab-lead">Escribí en tus palabras cómo te gusta comunicarte. El asistente aprende de esto y de tu feedback en el chat, y lo usa al redactar tus borradores. <strong>No</strong> escribís el mensaje del lead — solo tu estilo.</p>'
+            + '<label class="qida-ab-label">Características de mi estilo</label>'
+            + '<textarea class="qida-style-input" data-input="style-text" maxlength="' + STYLE_TEXT_MAX + '" rows="6" placeholder="Ej.: Soy cercana y breve. No uso \'perdón por molestar\' ni \'estimada familia\'. Cierro con \'un abrazo\'. Trato de tú.">' + esc(text) + '</textarea>'
+            + '<p class="qida-style-counter' + (over ? ' over' : '') + '" id="qida-style-counter">' + count + ' / ' + STYLE_TEXT_MAX + '</p>'
+            + '<div class="qida-ab-foot">'
+                + '<button class="qida-btn-ghost" data-action="style-reset"' + resetDisabled + '>' + icon('refresh-cw', 12) + ' Restablecer</button>'
+                + '<button class="qida-btn-primary" data-action="style-save"' + saveDisabled + '>' + saveLabel + '</button>'
             + '</div>'
-            + (state.agentBuilderConfirmDiscard ? renderDiscardConfirm() : '')
+            + renderStyleInterp(state.styleDerived)
+            + '<p class="qida-style-updated">' + esc(formatStyleUpdated(state.styleUpdatedAt)) + '</p>';
+    }
+
+    // "Cómo te interpreta el asistente" — render read-only de derived_prefs.
+    function renderStyleInterp(d) {
+        var rows = '';
+        if (d) {
+            if (d.preferences_text) rows += '<p class="qida-style-interp-row"><b>Estilo:</b> ' + esc(d.preferences_text) + '</p>';
+            if (d.avoid_phrases && d.avoid_phrases.length) {
+                var quoted = [];
+                for (var i = 0; i < d.avoid_phrases.length; i++) quoted.push('“' + esc(String(d.avoid_phrases[i])) + '”');
+                rows += '<p class="qida-style-interp-row"><b>Evita:</b> ' + quoted.join(', ') + '</p>';
+            }
+            if (d.max_lines) rows += '<p class="qida-style-interp-row"><b>Largo máximo:</b> ' + esc(String(d.max_lines)) + ' líneas</p>';
+            if (d.formality) rows += '<p class="qida-style-interp-row"><b>Trato:</b> ' + (d.formality === 'usted' ? 'usted' : 'tú') + '</p>';
+        }
+        var inner = rows ? rows : '<p class="qida-style-interp-empty">Todavía no hay interpretación. Escribí arriba y guardá, o seguí dándole feedback al asistente en el chat.</p>';
+        return '<div class="qida-style-interp">'
+            + '<p class="qida-style-interp-title">Cómo te interpreta el asistente</p>'
+            + inner
         + '</div>';
+    }
+
+    function formatStyleUpdated(iso) {
+        if (!iso) return 'Última actualización: —';
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return 'Última actualización: —';
+        return 'Última actualización: ' + d.toLocaleString();
     }
 
     // v1.54.0: una fila del editor de plantillas (textarea + chips de variables + restaurar genérica).
@@ -10743,6 +10863,50 @@
                 }
                 return;
             }
+            // v1.62.0: cambiar de tab del editor ("Plantillas" | "Tu estilo"). Lazy-load del estilo.
+            case 'ab-tab': {
+                var tabKey = target.getAttribute('data-tab');
+                if (tabKey !== 'plantillas' && tabKey !== 'estilo') return;
+                state.agentBuilderTab = tabKey;
+                if (tabKey === 'estilo' && !state.styleLoaded && !state.styleLoading) {
+                    loadStylePrefs();
+                } else {
+                    rerenderContent();
+                }
+                return;
+            }
+            // v1.62.0: guarda "Tu estilo" -> PUT /api/me/style-prefs (corre el distiller síncrono).
+            case 'style-save': {
+                if (state.styleSaving) return;
+                var styleText = state.styleDraft || '';
+                if (styleText.length > STYLE_TEXT_MAX) { rerenderContent(); return; }
+                state.styleSaving = true;
+                rerenderContent();
+                saveStylePrefs(styleText).then(function (blob) {
+                    applyStylePrefs(blob);
+                    state.styleSaving = false;
+                    showToast('Tu estilo se guardó.');
+                    rerenderContent();
+                }).catch(function (err) {
+                    state.styleSaving = false;
+                    showToast((err && err.userMessage) || 'No se pudo guardar tu estilo.');
+                    rerenderContent();
+                });
+                return;
+            }
+            // v1.62.0: "Restablecer" vacía el textarea localmente; la AF Guarda para persistir.
+            case 'style-reset': {
+                if (state.styleSaving) return;
+                state.styleDraft = '';
+                rerenderContent();
+                return;
+            }
+            // v1.62.0: reintentar la carga de "Tu estilo" tras error.
+            case 'style-reload':
+                state.styleError = null;
+                state.styleLoaded = false;
+                loadStylePrefs();
+                return;
             // v1.21: reintentar la carga del form tras un error de GET.
             case 'ab-reload':
                 state.agentBuilderError = null;
@@ -11828,6 +11992,17 @@
             var tWhich = node.getAttribute('data-which');
             if (tWhich === 'inicial' || tWhich === 'cierre') state.tplDraft[tWhich] = node.value;
             if (e.type === 'change') rerenderContent();
+        } else if (input === 'style-text') {
+            // v1.59.0: textarea de "Tu estilo". Update sin rerender (no perder caret); el contador se
+            //   refresca en vivo por id; rerender en 'change' (blur) para dirty/Guardar/over.
+            state.styleDraft = node.value;
+            var sc = document.getElementById('qida-style-counter');
+            if (sc) {
+                var sLen = node.value.length;
+                sc.textContent = sLen + ' / ' + STYLE_TEXT_MAX;
+                sc.className = (sLen > STYLE_TEXT_MAX) ? 'qida-style-counter over' : 'qida-style-counter';
+            }
+            if (e.type === 'change') rerenderContent();
         } else if (input === 'ab-name') {
             // v1.15: nombre de variante. Update en cada keystroke SIN rerender (no perder foco);
             //   rerender solo en 'change' (blur) para refrescar validación/errores/Guardar.
@@ -12546,6 +12721,32 @@
             .then(function () { return { ok: true }; });
     }
 
+    // v1.59.0: mock liviano de "Tu estilo" para el flag-off (index.html sin backend real).
+    var MOCK_STYLE_PREFS = {
+        user_style_text: '',
+        derived_prefs: { preferences_text: '', avoid_phrases: [], max_lines: null, formality: null },
+        source_counts: {},
+        updated_at: null
+    };
+    function cloneStylePrefs(p) { return p ? JSON.parse(JSON.stringify(p)) : null; }
+
+    // v1.59.0: GET/PUT de la memoria de estilo por AF (feedback loop). GET devuelve el blob
+    //   {user_style_text, derived_prefs, source_counts, updated_at}; PUT corre el distiller SÍNCRONO
+    //   en el backend y devuelve el blob actualizado (con derived_prefs re-interpretados).
+    function fetchStylePrefs() {
+        if (!useRealApi()) {
+            return simulateLatency(80, 180).then(function () { return cloneStylePrefs(MOCK_STYLE_PREFS); });
+        }
+        return apiFetchJson('GET', '/api/me/style-prefs', { noun: 'tu estilo' });
+    }
+    function saveStylePrefs(userStyleText) {
+        if (!useRealApi()) {
+            MOCK_STYLE_PREFS.user_style_text = userStyleText;
+            return simulateLatency(120, 260).then(function () { return cloneStylePrefs(MOCK_STYLE_PREFS); });
+        }
+        return apiFetchJson('PUT', '/api/me/style-prefs', { body: { user_style_text: userStyleText }, noun: 'tu estilo' });
+    }
+
     // v1.54.0: abre "Armá tu asistente" (editor de plantillas). Carga (lazy) las plantillas crudas
     //   en la copia de trabajo + snapshot. tplLoaded cachea por sesión; setViewingAs lo invalida.
     function openAgentBuilder() {
@@ -12595,6 +12796,33 @@
         state.agentBuilderConfirmDiscard = false;
         state.view = 'dashboard';
         rerenderContent();
+    }
+
+    // v1.59.0: carga (lazy) la memoria de estilo del AF al entrar al tab "Tu estilo".
+    function loadStylePrefs() {
+        state.styleError = null;
+        state.styleLoading = true;
+        rerenderContent();
+        fetchStylePrefs().then(function (blob) {
+            applyStylePrefs(blob);
+            state.styleLoaded = true;
+            state.styleLoading = false;
+            rerenderContent();
+        }).catch(function (err) {
+            state.styleLoading = false;
+            state.styleError = (err && err.userMessage) || 'No se pudo cargar tu estilo.';
+            log('fetchStylePrefs failed', err && (err.code || err.message));
+            rerenderContent();
+        });
+    }
+    // Normaliza el blob del backend en el state (draft/saved/derived/updated).
+    function applyStylePrefs(blob) {
+        blob = blob || {};
+        var txt = (typeof blob.user_style_text === 'string') ? blob.user_style_text : '';
+        state.styleDraft = txt;
+        state.styleSaved = txt;
+        state.styleDerived = blob.derived_prefs || null;
+        state.styleUpdatedAt = blob.updated_at || null;
     }
 
     // Keyboard global: prioridad schedule modal -> main modal.
