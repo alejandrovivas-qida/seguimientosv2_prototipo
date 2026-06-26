@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.62.0
+ * QIDA ASSISTANT v1.63.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,31 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.63.0 (2026-06-26 — "Temperatura": cómo se determina la temperatura de los leads, por AF):
+ *   Nueva (3ª) tab del editor "Armá tu asistente": [Plantillas] [Tu estilo] [Temperatura]. La AF elige
+ *   entre 2 modos (per-AF, opt-in):
+ *     - "Lead scoring de Qida" (DEFAULT): la temperatura la calcula el motor (= comportamiento actual).
+ *       El badge es READ-ONLY (automático).
+ *     - "Interés de Odoo": la temperatura sale del campo `priority` de Odoo (las estrellas "Interés").
+ *       El badge es editable y escribe DIRECTO a Odoo (odooCall crm.lead/write {priority}). Odoo es la
+ *       fuente de verdad.
+ *   - El modo se persiste en el backend (GET/PUT /api/me/lead-temperature-mode, flag per-AF). La
+ *     DERIVACIÓN priority->categoría es 100% CLIENT-SIDE: en modo "Interés de Odoo" el widget lee
+ *     `priority` en vivo de Odoo (1 bulk crm.lead/web_search_read por carga del dashboard) y mapea:
+ *       priority "0"/null -> templado (default seguro)   "1" -> frío   "2" -> templado   "3" -> caliente
+ *     Picker (write): frío -> "1", templado -> "2", caliente -> "3". "pausa" no se usa (sin equivalente Odoo).
+ *   - Loading: durante el bulk a Odoo el badge muestra shimmer (anti-flicker, no salta del motor a Odoo).
+ *     Si el bulk falla / Odoo sin sesión -> degrade a la temperatura del motor (nunca badge vacío).
+ *   - NO toca /api/me/leads ni el motor: el priority_score/sort queda intacto (solo cambia el badge).
+ *   - af_manual DEPRECADO del widget: ya no se llama PATCH /api/leads/{id}/temperature (en scoring el badge
+ *     es read-only; en interés-Odoo se escribe a Odoo). El endpoint/columna quedan en backend (legacy).
+ *   - Filtro de temperatura (cards + chips): OCULTO en modo "Interés de Odoo" (v1; sus conteos vienen del
+ *     motor y serían inconsistentes con el badge derivado). En "Lead scoring de Qida" sigue igual.
+ *   - Defaults que tomé: (a) default = lead_scoring_qida -> OPT-IN, no opt-out: ninguna AF existente cambia
+ *     de comportamiento al publicar. (b) picker = 3 temperaturas (no estrellas); el 0-3 es detalle interno.
+ *     (c) R9 aceptado: click "templado" sobre un lead en priority "0" escribe "2" sin cambio visual.
+ *     (d) NO publico al Blob (lo maneja Alejandro aparte).
  *
  * Cambios v1.61.1 (2026-06-23 — cerrar el modal al abrir la ficha del lead en Odoo):
  *   Al clickear el id+nombre del lead en el dashboard (data-action="open-lead-odoo"), además de
@@ -2071,7 +2096,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.62.0';
+    var VERSION = '1.63.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2859,6 +2884,20 @@
         styleLoading: false,
         styleError: null,
         styleSaving: false,
+        // v1.63.0: tab "Temperatura" (modo de cómo se determina la temperatura, por AF).
+        //   tempMode: 'interes_odoo' | 'lead_scoring_qida' | null (= sin cargar -> tratar como default).
+        //   tempModeDraft: selección del radio en el editor (se persiste con Guardar).
+        //   tempModeLoaded/Loading/Saving/Error: ciclo de vida del GET/PUT (lazy, por AF; se invalida en setViewingAs).
+        //   odooPriorityById: { [lead_id numérico]: priority("0".."3") } cacheado del bulk a Odoo (solo interes_odoo).
+        //   odooPriorityLoading: true mientras corre el bulk web_search_read -> badge en shimmer (anti-flicker).
+        tempMode: null,
+        tempModeDraft: null,
+        tempModeLoaded: false,
+        tempModeLoading: false,
+        tempModeSaving: false,
+        tempModeError: null,
+        odooPriorityById: null,
+        odooPriorityLoading: false,
         recommendationCache: {},
 
         // v1.50.0: chat agent sprint 2 — planner + draft separados (lazy generation).
@@ -3038,6 +3077,10 @@
         return out;
     }
 
+    // v1.63.0: DEPRECADO (flujo af_manual). Ya no se llama desde el widget — el badge en modo
+    //   "Lead scoring de Qida" es read-only y en "Interés de Odoo" la edición optimista usa
+    //   applyOptimisticOdooTemperature (no clobbea las temps del motor). Se conserva por si algún
+    //   punto de entrada lo reusa; el optimismo de Odoo NO pasa por acá.
     function applyLocalTemperature(leadId, temperature, source) {
         source = source || 'AF';
         var numericId = toNumericLeadId(leadId);
@@ -3071,6 +3114,10 @@
         }
     }
 
+    // v1.63.0: DEPRECADO (af_manual). El widget ya NO escribe la temperatura al BFF: en "Interés de
+    //   Odoo" se escribe el priority DIRECTO a Odoo (persistLeadTemperatureToOdoo); en "Lead scoring
+    //   de Qida" el badge es read-only. El endpoint PATCH /api/leads/{id}/temperature queda en backend
+    //   como legacy dormido. Se conserva esta función sin callers (no romper imports externos).
     function persistLeadTemperature(leadId, temperature) {
         var numericId = toNumericLeadId(leadId);
         if (!numericId) return Promise.reject(makeApiError('Lead invalido para guardar temperatura.', 'INVALID_LEAD_ID', 0));
@@ -4753,6 +4800,9 @@
             '.qida-dash-temp-templado .qida-dash-temp-bar{background:#F59E0B;}',
             '.qida-dash-temp-frio .qida-dash-temp-bar{background:#3B82F6;}',
             '.qida-dash-temp-pausa .qida-dash-temp-bar{background:var(--s400);}',
+            /* v1.63.0: badge en shimmer mientras vuelve el bulk de priority a Odoo (modo interés-Odoo). */
+            '.qida-dash-temp-loading .qida-dash-temp-bar{background:var(--s300);}',
+            '.qida-temp-shimmer{display:inline-block;width:44px;height:10px;border-radius:4px;background:linear-gradient(90deg,#eef0ee 0%,#f5f7f5 50%,#eef0ee 100%);background-size:200% 100%;animation:qida-skel-shimmer 1.4s ease-in-out infinite;}',
 
             /* Columna Días: número coloreado por gravedad (texto, no fondo) + fecha corta */
             '.qida-cell-dias .qida-cell-days{font-size:20px;font-weight:500;line-height:1.1;color:var(--s700);}',
@@ -5004,6 +5054,17 @@
             '.qida-ab-tab{background:transparent;border:0;border-bottom:2px solid transparent;padding:8px 12px;font-size:13px;font-weight:600;color:var(--s500);cursor:pointer;font-family:inherit;margin-bottom:-1px;}',
             '.qida-ab-tab.is-active{color:var(--qg);border-bottom-color:var(--qg);}',
             '.qida-ab-tab:hover:not(.is-active){color:var(--s700);}',
+            /* v1.63.0: radios del modo de temperatura (tab "Temperatura"). */
+            '.qida-temp-mode-opts{display:flex;flex-direction:column;gap:10px;margin:0 0 4px;}',
+            '.qida-temp-mode-opt{display:flex;align-items:flex-start;gap:11px;text-align:left;width:100%;background:#fff;border:0.5px solid var(--s300);border-radius:10px;padding:13px 14px;cursor:pointer;font-family:inherit;}',
+            '.qida-temp-mode-opt:hover{border-color:var(--s400);}',
+            '.qida-temp-mode-opt.is-active{border-color:var(--qg);box-shadow:0 0 0 2px rgba(45,106,79,.10);}',
+            '.qida-temp-mode-radio{flex:0 0 auto;width:16px;height:16px;border-radius:50%;border:2px solid var(--s400);margin-top:1px;position:relative;}',
+            '.qida-temp-mode-radio.is-on{border-color:var(--qg);}',
+            '.qida-temp-mode-radio.is-on:after{content:"";position:absolute;top:2px;left:2px;width:8px;height:8px;border-radius:50%;background:var(--qg);}',
+            '.qida-temp-mode-text{display:flex;flex-direction:column;gap:3px;}',
+            '.qida-temp-mode-title{font-size:13px;font-weight:600;color:var(--s900);}',
+            '.qida-temp-mode-desc{font-size:12px;color:var(--s600);line-height:1.45;}',
             '.qida-style-input{background:#fff;border:0.5px solid var(--s300);border-radius:8px;padding:9px 11px;font-family:inherit;font-size:13px;line-height:1.5;color:var(--s900);outline:none;width:100%;box-sizing:border-box;resize:vertical;min-height:120px;}',
             '.qida-style-input:focus{border-color:var(--qg);box-shadow:0 0 0 2px rgba(45,106,79,.10);}',
             '.qida-style-counter{font-size:11px;color:var(--s500);text-align:right;margin:4px 0 0;}',
@@ -5203,6 +5264,10 @@
             state.dashLoading = false;
             state.dashError = null;
             rerenderContent();
+            // v1.63.0: resolvé el modo de temperatura de la AF (1x) y, si es "Interés de Odoo",
+            //   traé el priority en vivo para derivar el badge. Idempotente / no-op fuera de ese modo.
+            if (!state.tempModeLoaded) loadTemperatureMode();
+            else refreshOdooTemperatures();
         }).catch(function (err) {
             if (state.dashView !== view) return;  // race guard
             log('loadDashView failed', err && (err.code || err.message));
@@ -5487,7 +5552,7 @@
         if (pendingBadge) taskHtml += pendingBadge;
 
         // TEMP / SIN CONTACTO: reusa los componentes del tab Sugerencias con el leadData del cruce.
-        var tempCell = leadData ? renderTempCell(leadData.temperature) : emptyDashCell('qida-cell-temp');
+        var tempCell = leadData ? renderTempCell(temperatureForDisplay(act.leadId, leadData.temperature)) : emptyDashCell('qida-cell-temp');
         var diasCell = (leadData && leadData.daysWithoutTouch != null) ? renderDiasCell(leadData) : emptyDashCell('qida-cell-dias');
 
         var deadlineCls = (act.state === 'overdue') ? ' qida-actv-deadline-overdue' : '';
@@ -5826,7 +5891,7 @@
                 + line2
             + '</div>'
             + taskCell
-            + renderTempCell(row.temperature)
+            + renderTempCell(temperatureForDisplay(row.id, row.temperature))
             + renderDiasCell(row)
             + renderEstadoCell(row)
             + renderTipoPill('suggestion')
@@ -5849,7 +5914,7 @@
         var line2 = parentesco
             ? '<div class="qida-cell-line2">cuida a su ' + esc(String(parentesco).toLowerCase()) + '</div>'
             : '';
-        var tempCell = leadData ? renderTempCell(leadData.temperature) : emptyDashCell('qida-cell-temp');
+        var tempCell = leadData ? renderTempCell(temperatureForDisplay(act.leadId, leadData.temperature)) : emptyDashCell('qida-cell-temp');
         var diasCell = (leadData && leadData.daysWithoutTouch != null) ? renderDiasCell(leadData) : emptyDashCell('qida-cell-dias');
         var deadlineCls = (act.state === 'overdue') ? ' qida-actv-deadline-overdue' : '';
         // v1.49.6: columna Tarea -> summary || stripHtml(note). isCall = activity_type "Llamada" ->
@@ -5907,9 +5972,13 @@
                 + '<div class="qida-dash-cardgroup-label">Cartera activa</div>'
                 + '<div class="qida-dash-cardgroup-cards qida-dash-cardgroup-temps">'
                     + renderEnCarteraCard(enCartera)
-                    + renderDashCard('caliente', 'Calientes', calientes)
-                    + renderDashCard('templado', 'Templados', templados)
-                    + renderDashCard('frio',     'Fríos',     frios)
+                    // v1.63.0: en "Interés de Odoo" ocultamos las cards-filtro de temperatura: sus
+                    //   conteos vienen del motor y serían inconsistentes con el badge derivado de Odoo.
+                    + (isInteresOdooMode() ? '' : (
+                        renderDashCard('caliente', 'Calientes', calientes)
+                        + renderDashCard('templado', 'Templados', templados)
+                        + renderDashCard('frio',     'Fríos',     frios)
+                    ))
                 + '</div>'
             + '</div>'
         + '</div>';
@@ -5956,14 +6025,18 @@
     // Chips de segmento (recuperados de 7f052fc). El chip de frio usa el mismo id 'frio' que la
     //   card "Fríos" (un solo estado de frio; el rotulo "reactivar" es solo UX).
     function renderFilterChips() {
-        var chips = [
+        // v1.63.0: en "Interés de Odoo" ocultamos los chips de filtro por temperatura (mismo motivo
+        //   que las cards). Los chips no-temperatura (urgente/histórico) se mantienen.
+        var tempChips = isInteresOdooMode() ? [] : [
             { id: 'caliente',  label: 'Caliente' },
             { id: 'templado',  label: 'Templado' },
             { id: 'frio',      label: 'Frío · reactivar' },
-            { id: 'pausa',     label: 'Pausa' },
+            { id: 'pausa',     label: 'Pausa' }
+        ];
+        var chips = tempChips.concat([
             { id: 'urgente',   label: 'Urgente' },
             { id: 'historico', label: 'Histórico' }
-        ];
+        ]);
         var html = '';
         for (var i = 0; i < chips.length; i++) {
             var active = (state.dashSegment === chips[i].id);
@@ -6020,8 +6093,53 @@
         pausa:    { label: 'Pausa',    cls: 'pausa' }
     };
 
+    // v1.63.0: modo de temperatura por AF + mapping priority(Odoo) <-> categoría (client-side).
+    var TEMP_LOADING = '__temp_loading__';  // sentinel: badge en shimmer mientras vuelve el bulk a Odoo.
+    function normalizeTempMode(mode) {
+        return (mode === 'interes_odoo' || mode === 'lead_scoring_qida') ? mode : 'lead_scoring_qida';
+    }
+    // priority "0".."3" (string, como lo manda Odoo) -> categoría. "0"/null/desconocido -> templado
+    //   (default seguro: leads sin marcar no arrancan azules). Ver mapping del header v1.63.0.
+    function priorityToTemp(priority) {
+        var p = (priority == null) ? '' : String(priority);
+        if (p === '1') return 'frio';
+        if (p === '3') return 'caliente';
+        return 'templado';  // '0' (sin marcar), '2', o cualquier valor inesperado.
+    }
+    // categoría elegida en el picker -> priority a escribir en Odoo. (round-trip con priorityToTemp).
+    function tempToPriority(category) {
+        if (category === 'frio') return '1';
+        if (category === 'caliente') return '3';
+        return '2';  // templado
+    }
+    // ¿La AF está hoy en modo "Interés de Odoo"? (null = sin cargar -> tratar como default = scoring).
+    function isInteresOdooMode() { return state.tempMode === 'interes_odoo'; }
+    // Categoría a MOSTRAR para un lead. En scoring -> la del motor (rawTemp). En interés-Odoo ->
+    //   derivada del priority cacheado; si la edición optimista (EDITS) existe gana; si el bulk sigue
+    //   en vuelo -> TEMP_LOADING (shimmer); si falló/sin dato -> degrade a rawTemp (motor).
+    function temperatureForDisplay(leadId, rawTemp) {
+        if (!isInteresOdooMode()) return rawTemp;
+        var numericId = toNumericLeadId(leadId);
+        var ed = EDITS.temperatures[leadId] || (numericId != null ? EDITS.temperatures[numericId] : null);
+        if (ed) return ed.temperature;  // optimistic write gana.
+        if (numericId != null && state.odooPriorityById
+            && Object.prototype.hasOwnProperty.call(state.odooPriorityById, numericId)) {
+            return priorityToTemp(state.odooPriorityById[numericId]);
+        }
+        if (state.odooPriorityLoading) return TEMP_LOADING;  // bulk en vuelo -> shimmer.
+        return rawTemp;  // degrade a motor (bulk falló o lead fuera del set).
+    }
+
     // Columna Temperatura: barrita sólida monocroma + texto (patrón badge-localidad de admin).
     function renderTempCell(temp) {
+        // v1.63.0: shimmer mientras el bulk de priority a Odoo está en vuelo (modo interés-Odoo).
+        if (temp === TEMP_LOADING) {
+            return '<div class="qida-dash-cell qida-cell-temp">'
+                + '<span class="qida-dash-temp qida-dash-temp-loading" aria-label="Cargando temperatura">'
+                    + '<i class="qida-dash-temp-bar"></i><span class="qida-temp-shimmer"></span>'
+                + '</span>'
+            + '</div>';
+        }
         var meta = TEMP_META[normalizeTemp(temp)];
         if (!meta) return '<div class="qida-dash-cell qida-cell-temp"></div>';
         return '<div class="qida-dash-cell qida-cell-temp">'
@@ -6167,7 +6285,7 @@
             // "Por qué" con ellipsis + tooltip (title) para no romper el ancho del modal AF.
             + '<div class="qida-dash-cell qida-cell-porque" title="' + esc(reason) + '">' + esc(reason) + '</div>'
 
-            + renderTempCell(row.temperature)
+            + renderTempCell(temperatureForDisplay(row.id, row.temperature))
             + renderDiasCell(row)
             + renderEstadoCell(row)
 
@@ -7172,6 +7290,15 @@
         state.tplAgencySaved = { inicial: 5, cierre: 5 };
         state.tplVarMenu = null;
         state.styleLoaded = false;   // v1.59.0: idem "Tu estilo" — recargar al cambiar de AF.
+        // v1.63.0: el modo de temperatura es per-AF -> invalidar y recargarlo (loadDashView de abajo
+        //   lo redispara). Limpiar el cache de priority de Odoo de la AF anterior.
+        state.tempMode = null;
+        state.tempModeDraft = null;
+        state.tempModeLoaded = false;
+        state.tempModeError = null;
+        state.odooPriorityById = null;
+        state.odooPriorityLoading = false;
+        clearAllOptimisticOdooTemperatures();
         // v1.25 (ISSUE A): cambiar de AF cambia X-AF-Email -> los datos del dashboard son de OTRO AF.
         //   1) Si hay un lead abierto, cerrarlo (no tiene sentido bajo otro AF).
         //   2) Forzar loading (dashRows=null + dashMetrics=null) y re-fetch del view activo:
@@ -10090,14 +10217,21 @@
             + '</div></div>';
         }
 
-        // v1.59.0: 2 tabs — Plantillas (Inicio/Cierre) y Tu estilo (memoria de estilo por AF).
+        // v1.63.0: 3 tabs — Plantillas (Inicio/Cierre), Tu estilo (memoria de estilo) y Temperatura
+        //   (cómo se determina la temperatura de los leads, por AF).
         var tab = state.agentBuilderTab || 'plantillas';
         function tabBtn(key, label) {
             return '<button class="qida-ab-tab' + (tab === key ? ' is-active' : '') + '" '
                 + 'data-action="ab-tab" data-tab="' + key + '">' + esc(label) + '</button>';
         }
-        var tabs = '<div class="qida-ab-tabs">' + tabBtn('plantillas', 'Plantillas') + tabBtn('estilo', 'Tu estilo') + '</div>';
-        var body = (tab === 'estilo') ? renderStyleEditor() : renderTemplatesEditor();
+        var tabs = '<div class="qida-ab-tabs">'
+            + tabBtn('plantillas', 'Plantillas')
+            + tabBtn('estilo', 'Tu estilo')
+            + tabBtn('temperatura', 'Temperatura')
+        + '</div>';
+        var body = (tab === 'estilo') ? renderStyleEditor()
+            : (tab === 'temperatura') ? renderTemperatureModeEditor()
+            : renderTemplatesEditor();
 
         return '<div class="qida-ab">'
             + '<div class="qida-ab-inner">' + tabs + body + '</div>'
@@ -10122,6 +10256,49 @@
             + '<div class="qida-ab-foot">'
                 + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
                 + '<button class="qida-btn-primary" data-action="ab-save"' + saveDisabled + '>' + saveLabel + '</button>'
+            + '</div>';
+    }
+
+    // v1.63.0: editor del modo de temperatura (tab "Temperatura"). 2 radios + Guardar.
+    //   Default = lead_scoring_qida (motor). "Interés de Odoo" es opt-in.
+    function renderTemperatureModeEditor() {
+        if (state.tempModeLoading && !state.tempModeLoaded) {
+            return '<div class="qida-ab-loading">' + icon('refresh-cw', 14) + ' Cargando…</div>';
+        }
+        if (state.tempModeError && !state.tempModeLoaded) {
+            return '<div class="qida-ab-error-box">'
+                + '<p class="qida-ab-error-msg">' + icon('alert-triangle', 13) + ' ' + esc(state.tempModeError) + '</p>'
+                + '<button class="qida-btn-ghost" data-action="temp-mode-reload">' + icon('refresh-cw', 12) + ' Reintentar</button>'
+            + '</div>';
+        }
+        var draft = state.tempModeDraft || normalizeTempMode(state.tempMode);
+        var saved = normalizeTempMode(state.tempMode);
+        var dirty = (draft !== saved);
+        var saving = !!state.tempModeSaving;
+        var saveDisabled = (!dirty || saving) ? ' disabled' : '';
+        var saveLabel = saving ? (icon('refresh-cw', 13) + ' Guardando…') : (icon('check', 13) + ' Guardar');
+
+        function radio(value, title, desc) {
+            var checked = (draft === value);
+            return '<button class="qida-temp-mode-opt' + (checked ? ' is-active' : '') + '" data-action="temp-mode-set" data-mode="' + value + '" role="radio" aria-checked="' + (checked ? 'true' : 'false') + '">'
+                + '<span class="qida-temp-mode-radio' + (checked ? ' is-on' : '') + '"></span>'
+                + '<span class="qida-temp-mode-text">'
+                    + '<span class="qida-temp-mode-title">' + esc(title) + '</span>'
+                    + '<span class="qida-temp-mode-desc">' + esc(desc) + '</span>'
+                + '</span>'
+            + '</button>';
+        }
+
+        return '<p class="qida-ab-lead">Elegí cómo se determina la <strong>temperatura</strong> de tus leads. Es tu decisión y la podés cambiar cuando quieras.</p>'
+            + '<div class="qida-temp-mode-opts" role="radiogroup">'
+                + radio('interes_odoo', 'Interés de Odoo',
+                    'Vos marcás el interés en Odoo (o tocando el badge del lead acá) y eso define la temperatura. La plataforma respeta tu decisión.')
+                + radio('lead_scoring_qida', 'Lead scoring de Qida',
+                    'La plataforma calcula la temperatura automáticamente según el comportamiento del lead (respuestas, tiempos, etapa).')
+            + '</div>'
+            + '<div class="qida-ab-foot">'
+                + '<button class="qida-btn-ghost" data-action="ab-back">Cancelar</button>'
+                + '<button class="qida-btn-primary" data-action="temp-mode-save"' + saveDisabled + '>' + saveLabel + '</button>'
             + '</div>';
     }
 
@@ -10451,8 +10628,10 @@
     }
 
     // v1.17: selector compacto de temperatura (dropdown anclado al pill + backdrop click-fuera).
+    // v1.63.0: 3 temperaturas (sin 'pausa': no tiene equivalente en el priority de Odoo). Solo se
+    //   muestra en modo "Interés de Odoo"; al elegir, se escribe el priority mapeado a Odoo.
     function renderTempEditor(current) {
-        var opts = ['caliente', 'templado', 'frio', 'pausa'];
+        var opts = ['caliente', 'templado', 'frio'];
         var items = '';
         for (var i = 0; i < opts.length; i++) {
             var k = opts[i], m = TEMP_META[k];
@@ -10482,14 +10661,34 @@
                 for (var _dri = 0; _dri < _drows.length; _dri++) {
                     if (_drows[_dri].temperature !== undefined && sameLeadId(_drows[_dri].id, state.currentLeadId)) { dashTemp = _drows[_dri].temperature; break; }
                 }
-                var tempKey = normalizeTemp(getLeadTemperature(lead) || dashTemp);
-                var tMeta = TEMP_META[tempKey] || { label: '—', cls: '' };
-                var tempPill = '<span class="qida-dsh-temp-wrap">'
-                    + '<button class="qida-dsh-temp" data-action="open-temp-editor" title="Cambiar temperatura" aria-haspopup="true">'
-                        + '<i class="qida-tbar qida-tbar-' + tMeta.cls + '"></i>' + esc(tMeta.label) + ' ' + icon('edit', 10)
-                    + '</button>'
-                    + (state.tempEditorOpen ? renderTempEditor(tempKey) : '')
-                + '</span>';
+                // v1.63.0: en "Interés de Odoo" la temperatura se deriva del priority de Odoo (client-side)
+                //   y el badge es EDITABLE -> escribe a Odoo. En "Lead scoring de Qida" es READ-ONLY
+                //   (automático). Mientras el bulk a Odoo está en vuelo -> shimmer (anti-flicker).
+                var rawTempKey = normalizeTemp(getLeadTemperature(lead) || dashTemp);
+                var dispTemp = temperatureForDisplay(state.currentLeadId, rawTempKey);
+                var tempEditable = isInteresOdooMode() && state.odooWriteEnabled && dispTemp !== TEMP_LOADING;
+                var tempPill;
+                if (dispTemp === TEMP_LOADING) {
+                    tempPill = '<span class="qida-dsh-temp-wrap"><span class="qida-dsh-temp qida-dash-temp-loading" aria-label="Cargando temperatura">'
+                        + '<i class="qida-tbar"></i><span class="qida-temp-shimmer"></span>'
+                    + '</span></span>';
+                } else {
+                    var tempKey = dispTemp;
+                    var tMeta = TEMP_META[tempKey] || { label: '—', cls: '' };
+                    if (tempEditable) {
+                        tempPill = '<span class="qida-dsh-temp-wrap">'
+                            + '<button class="qida-dsh-temp" data-action="open-temp-editor" title="Cambiar temperatura (se guarda en Odoo)" aria-haspopup="true">'
+                                + '<i class="qida-tbar qida-tbar-' + tMeta.cls + '"></i>' + esc(tMeta.label) + ' ' + icon('edit', 10)
+                            + '</button>'
+                            + (state.tempEditorOpen ? renderTempEditor(tempKey) : '')
+                        + '</span>';
+                    } else {
+                        tempPill = '<span class="qida-dsh-temp-wrap"><span class="qida-dsh-temp" title="'
+                            + (isInteresOdooMode() ? 'Temperatura según el Interés de Odoo' : 'Temperatura automática (Lead scoring de Qida)') + '">'
+                            + '<i class="qida-tbar qida-tbar-' + tMeta.cls + '"></i>' + esc(tMeta.label)
+                        + '</span></span>';
+                    }
+                }
                 // v1.31 (FIX C): no mostrar "null null, null años". Armar la línea persona SOLO con
                 //   lo disponible (lead Odoo no trae relation/age; el nombre del cuidado puede venir de
                 //   cached.caredPerson). Si no hay nada, se omite el item (sin separador colgante).
@@ -10863,18 +11062,63 @@
                 }
                 return;
             }
-            // v1.62.0: cambiar de tab del editor ("Plantillas" | "Tu estilo"). Lazy-load del estilo.
+            // v1.63.0: cambiar de tab del editor ("Plantillas" | "Tu estilo" | "Temperatura"). Lazy-load.
             case 'ab-tab': {
                 var tabKey = target.getAttribute('data-tab');
-                if (tabKey !== 'plantillas' && tabKey !== 'estilo') return;
+                if (tabKey !== 'plantillas' && tabKey !== 'estilo' && tabKey !== 'temperatura') return;
                 state.agentBuilderTab = tabKey;
                 if (tabKey === 'estilo' && !state.styleLoaded && !state.styleLoading) {
                     loadStylePrefs();
+                } else if (tabKey === 'temperatura' && !state.tempModeLoaded && !state.tempModeLoading) {
+                    loadTemperatureMode();
                 } else {
                     rerenderContent();
                 }
                 return;
             }
+            // v1.63.0: seleccionar un modo de temperatura (radio). Solo dirty-marca el draft.
+            case 'temp-mode-set': {
+                var pickedMode = target.getAttribute('data-mode');
+                if (pickedMode !== 'interes_odoo' && pickedMode !== 'lead_scoring_qida') return;
+                state.tempModeDraft = pickedMode;
+                rerenderContent();
+                return;
+            }
+            // v1.63.0: guardar el modo de temperatura -> PUT /api/me/lead-temperature-mode (per-AF).
+            case 'temp-mode-save': {
+                if (state.tempModeSaving) return;
+                var newMode = normalizeTempMode(state.tempModeDraft);
+                if (newMode === normalizeTempMode(state.tempMode)) return;  // nada que guardar.
+                state.tempModeSaving = true;
+                rerenderContent();
+                saveTemperatureMode(newMode).then(function (res) {
+                    state.tempMode = normalizeTempMode(res && res.mode ? res.mode : newMode);
+                    state.tempModeDraft = state.tempMode;
+                    state.tempModeSaving = false;
+                    // El modo cambió -> el badge del dashboard se re-deriva. Limpiamos el cache de
+                    //   priority, los overrides optimistas de Odoo (no filtrar a "scoring") y el filtro
+                    //   de temp (las pills se ocultan en interés-Odoo); luego refrescamos.
+                    state.odooPriorityById = null;
+                    clearAllOptimisticOdooTemperatures();
+                    if (isInteresOdooMode()) state.dashSegment = null;
+                    refreshOdooTemperatures();
+                    rerenderContent();
+                    showToast(isInteresOdooMode()
+                        ? 'Listo. La temperatura ahora refleja el Interés que marcás en Odoo.'
+                        : 'Listo. La temperatura ahora la calcula Qida automáticamente.');
+                }).catch(function (err) {
+                    state.tempModeSaving = false;
+                    rerenderContent();
+                    showToast((err && err.userMessage) || 'No se pudo guardar el modo de temperatura.');
+                });
+                return;
+            }
+            // v1.63.0: reintentar la carga del modo tras error.
+            case 'temp-mode-reload':
+                state.tempModeError = null;
+                state.tempModeLoaded = false;
+                loadTemperatureMode();
+                return;
             // v1.62.0: guarda "Tu estilo" -> PUT /api/me/style-prefs (corre el distiller síncrono).
             case 'style-save': {
                 if (state.styleSaving) return;
@@ -11299,23 +11543,28 @@
                 return;
             case 'set-temp':
                 if (id) {
-                    // v1.48.2: optimistic local update + PATCH persistente al BFF.
+                    // v1.63.0: af_manual DEPRECADO. El picker solo aparece en modo "Interés de Odoo"
+                    //   (en scoring el badge es read-only) -> al elegir, se escribe el priority mapeado
+                    //   DIRECTO a Odoo (Odoo = fuente de verdad). Optimistic + revert en error.
                     var tempLeadId = state.currentLeadId;
-                    applyLocalTemperature(tempLeadId, id, 'AF');
                     state.tempEditorOpen = false;
+                    if (!isInteresOdooMode()) { rerenderContent(); return; }  // defensivo: nada que escribir.
+                    var numId = toNumericLeadId(tempLeadId);
+                    var prevPriority = (numId != null && state.odooPriorityById) ? state.odooPriorityById[numId] : null;
+                    applyOptimisticOdooTemperature(tempLeadId, id);
                     rerenderContent();
                     if (!useRealApi()) {
                         showToast('Temperatura actualizada');
                         return;
                     }
-                    persistLeadTemperature(tempLeadId, id).then(function (res) {
-                        if (res && res.temperature) {
-                            applyLocalTemperature(tempLeadId, res.temperature, res.temperature_source || res.temperatureSource || 'AF');
-                            rerenderContent();
-                        }
-                        showToast('Temperatura actualizada');
+                    persistLeadTemperatureToOdoo(tempLeadId, id).then(function () {
+                        clearOptimisticOdooTemperature(tempLeadId);  // odooPriorityById ya tiene el valor nuevo.
+                        rerenderContent();
+                        showToast('Temperatura actualizada en Odoo');
                     }).catch(function (err) {
-                        showToast((err && err.userMessage) || 'No se pudo guardar la temperatura. Reintentá.');
+                        revertOptimisticOdooTemperature(tempLeadId, prevPriority);
+                        rerenderContent();
+                        showToast((err && err.message) || 'No se pudo guardar la temperatura en Odoo. Reintentá.');
                     });
                 }
                 return;
@@ -12745,6 +12994,144 @@
             return simulateLatency(120, 260).then(function () { return cloneStylePrefs(MOCK_STYLE_PREFS); });
         }
         return apiFetchJson('PUT', '/api/me/style-prefs', { body: { user_style_text: userStyleText }, noun: 'tu estilo' });
+    }
+
+    // ============================================================
+    // v1.63.0: modo de temperatura por AF (tab "Temperatura") + derivación client-side desde Odoo
+    // ============================================================
+
+    // GET/PUT del modo (per-AF, X-AF-Email vía apiFetchJson). En mock devolvemos el default (motor).
+    function fetchTemperatureMode() {
+        if (!useRealApi()) {
+            return simulateLatency(60, 140).then(function () { return { mode: state.tempMode || 'lead_scoring_qida' }; });
+        }
+        return apiFetchJson('GET', '/api/me/lead-temperature-mode', { noun: 'el modo de temperatura' });
+    }
+    function saveTemperatureMode(mode) {
+        if (!useRealApi()) {
+            return simulateLatency(80, 180).then(function () { return { mode: mode, saved: true }; });
+        }
+        return apiFetchJson('PUT', '/api/me/lead-temperature-mode', { body: { mode: mode }, noun: 'el modo de temperatura' });
+    }
+
+    // Carga (lazy, 1x por AF) el modo de la AF. Default seguro = lead_scoring_qida (motor). Al
+    //   resolver, si quedó en "Interés de Odoo" dispara el bulk de priority (refreshOdooTemperatures).
+    function loadTemperatureMode() {
+        if (state.tempModeLoaded || state.tempModeLoading) return;
+        state.tempModeLoading = true;
+        state.tempModeError = null;
+        rerenderContent();
+        fetchTemperatureMode().then(function (blob) {
+            state.tempMode = normalizeTempMode(blob && blob.mode);
+            state.tempModeDraft = state.tempMode;
+            state.tempModeLoaded = true;
+            state.tempModeLoading = false;
+            rerenderContent();
+            refreshOdooTemperatures();  // no-op si no es interés-Odoo.
+        }).catch(function (err) {
+            state.tempModeLoading = false;
+            state.tempModeError = (err && err.userMessage) || 'No se pudo cargar el modo de temperatura.';
+            if (!state.tempMode) state.tempMode = 'lead_scoring_qida';  // default seguro: motor.
+            log('fetchTemperatureMode failed (default lead_scoring_qida)', err && (err.code || err.message));
+            rerenderContent();
+        });
+    }
+
+    // Junta los lead_ids numéricos cargados (cartera del cruce + filas del dashboard) para el bulk.
+    function collectLoadedLeadIds() {
+        var seen = {}, ids = [], n, k;
+        function add(v) { n = toNumericLeadId(v); if (n != null && !seen[n]) { seen[n] = 1; ids.push(n); } }
+        if (state.leadById) { for (k in state.leadById) if (Object.prototype.hasOwnProperty.call(state.leadById, k)) add(k); }
+        var rows = state.dashRows || [];
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i]; if (!r) continue;
+            if (r.id != null) add(r.id);          // filas lead-centric (suggestions/leads/today-sug).
+            if (r.leadId != null) add(r.leadId);  // filas activity-centric (activities/today-act).
+        }
+        return ids;
+    }
+
+    // Bulk read del priority de Odoo para un set de leads (1 sola llamada). -> { id: priority("0".."3") }.
+    function fetchOdooPriorities(leadIds) {
+        if (!leadIds || !leadIds.length) return Promise.resolve({});
+        return odooCall('crm.lead', 'web_search_read', [], {
+            domain: [['id', 'in', leadIds]],
+            fields: ['id', 'priority'],
+            limit: leadIds.length
+        }).then(function (res) {
+            var recs = (res && res.records) || [];
+            var map = {};
+            for (var i = 0; i < recs.length; i++) {
+                if (recs[i] && recs[i].id != null) map[recs[i].id] = recs[i].priority;
+            }
+            return map;
+        });
+    }
+
+    // En modo "Interés de Odoo": lee el priority en vivo de Odoo y lo cachea -> el badge se deriva.
+    //   Shimmer mientras está en vuelo; si falla (Odoo sin sesión, etc.) -> degrade a la temp del motor.
+    //   No-op si no estamos en interés-Odoo / sin Odoo / mock.
+    function refreshOdooTemperatures() {
+        if (!isInteresOdooMode() || !useRealApi() || !IS_ODOO_MODE) { state.odooPriorityLoading = false; return; }
+        var ids = collectLoadedLeadIds();
+        if (!ids.length) { state.odooPriorityLoading = false; return; }
+        state.odooPriorityLoading = true;
+        rerenderContent();
+        fetchOdooPriorities(ids).then(function (map) {
+            state.odooPriorityById = state.odooPriorityById || {};
+            for (var k in map) if (Object.prototype.hasOwnProperty.call(map, k)) state.odooPriorityById[k] = map[k];
+            state.odooPriorityLoading = false;
+            rerenderContent();
+            log('odoo priorities loaded', ids.length);
+        }).catch(function (err) {
+            state.odooPriorityLoading = false;  // degrade: el badge cae a la temp del motor.
+            log('fetchOdooPriorities failed (degrade a motor)', err && (err.message));
+            rerenderContent();
+        });
+    }
+
+    // Escribe la temperatura elegida DIRECTO a Odoo (priority mapeado). odooCall inyecta el context
+    //   (lang/tz/uid/allowed_company_ids) desde la sesión -> el uid NUNCA se hardcodea.
+    function persistLeadTemperatureToOdoo(leadId, category) {
+        var numericId = toNumericLeadId(leadId);
+        if (!numericId) return Promise.reject(new Error('Lead inválido para guardar temperatura en Odoo.'));
+        return odooCall('crm.lead', 'write', [[numericId], { priority: tempToPriority(category) }], {});
+    }
+
+    // Optimistic update en modo Odoo: SOLO toca EDITS + odooPriorityById (no clobbea las temps del
+    //   motor en leadById/dashRows/cache -> volver a "scoring" sigue mostrando el motor intacto).
+    function applyOptimisticOdooTemperature(leadId, category) {
+        var numId = toNumericLeadId(leadId);
+        EDITS.temperatures[leadId] = { temperature: category, source: 'odoo' };
+        if (numId != null) {
+            EDITS.temperatures[numId] = { temperature: category, source: 'odoo' };
+            state.odooPriorityById = state.odooPriorityById || {};
+            state.odooPriorityById[numId] = tempToPriority(category);
+        }
+    }
+    function clearOptimisticOdooTemperature(leadId) {
+        var numId = toNumericLeadId(leadId);
+        delete EDITS.temperatures[leadId];
+        if (numId != null) delete EDITS.temperatures[numId];  // odooPriorityById ya tiene el valor nuevo.
+    }
+    function revertOptimisticOdooTemperature(leadId, prevPriority) {
+        var numId = toNumericLeadId(leadId);
+        delete EDITS.temperatures[leadId];
+        if (numId != null) {
+            delete EDITS.temperatures[numId];
+            if (state.odooPriorityById) {
+                if (prevPriority == null) delete state.odooPriorityById[numId];
+                else state.odooPriorityById[numId] = prevPriority;
+            }
+        }
+    }
+    // Limpia los overrides optimistas con source 'odoo' (al cambiar de modo): evita que un edit de
+    //   "Interés de Odoo" se filtre vía getLeadTemperature al badge del detalle en modo "scoring".
+    function clearAllOptimisticOdooTemperatures() {
+        var t = EDITS.temperatures, k;
+        for (k in t) {
+            if (Object.prototype.hasOwnProperty.call(t, k) && t[k] && t[k].source === 'odoo') delete t[k];
+        }
     }
 
     // v1.54.0: abre "Armá tu asistente" (editor de plantillas). Carga (lazy) las plantillas crudas
