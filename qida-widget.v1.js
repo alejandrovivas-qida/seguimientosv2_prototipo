@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.63.0
+ * QIDA ASSISTANT v1.63.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,23 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.63.1 (2026-06-29 — BUGFIX: estado stale del editor al cambiar de AF ("Ver como")):
+ *   Síntoma: al usar "Ver como"/impersonación para cambiar de AF, la pestaña "Tu estilo" (y, por la
+ *   misma mecánica, "Plantillas" y "Temperatura") mostraba los datos de la AF cargada ANTES. Confirmado
+ *   con SELECT a prod que NO es un bug de datos (cada AF tiene su user_style_text propio, md5 distintos);
+ *   era puro display: estado cacheado en `state` de la AF anterior.
+ *   Causa raíz: `setViewingAs` invalidaba los flags "loaded" (styleLoaded/tplLoaded/tempModeLoaded) pero
+ *   NO limpiaba el draft/saved cacheado (styleDraft/styleSaved/styleDerived, tplDraft/tplSaved/tplFull).
+ *   Los render* del editor pintan esos drafts DIRECTO, y el re-fetch solo se disparaba al re-clickear la
+ *   pestaña (handler 'ab-tab') — si la AF se cambiaba estando ya parado en una pestaña, no había re-fetch
+ *   y quedaba el texto anterior pegado. ("Temperatura" se auto-curaba por el hook de loadDashView, pero
+ *   igual mostraba el default hasta el re-fetch.)
+ *   Fix (solo display, per-AF, sin tocar backend): en `setViewingAs` (a) limpiar el estado per-AF de las
+ *   3 pestañas (draft/saved/derived/full + flags), y (b) si el editor está abierto, re-fetchear EN EL ACTO
+ *   la pestaña activa (loadStylePrefs / loadTemperatureMode / openAgentBuilder) en vez de esperar un
+ *   re-click. Spinner mientras carga; cada AF ve lo suyo. Bugfix dentro de v1.63.x — NO se renombra el
+ *   filename (sigue qida-widget.v1.js); solo sube el VERSION interno a 1.63.1.
  *
  * Cambios v1.63.0 (2026-06-26 — "Temperatura": cómo se determina la temperatura de los leads, por AF):
  *   Nueva (3ª) tab del editor "Armá tu asistente": [Plantillas] [Tu estilo] [Temperatura]. La AF elige
@@ -2096,7 +2113,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.63.0';
+    var VERSION = '1.63.1';
     var CONFIG = null;
 
     // ============================================================
@@ -7289,7 +7306,19 @@
         state.tplAgencyDraft = { inicial: 5, cierre: 5 };
         state.tplAgencySaved = { inicial: 5, cierre: 5 };
         state.tplVarMenu = null;
+        // v1.63.1 (BUGFIX): NO alcanza con invalidar los flags "loaded" — hay que LIMPIAR el estado
+        //   per-AF cacheado de las 3 pestañas del editor. Los render* pintan el draft/saved DIRECTO, y
+        //   el re-fetch solo se dispara al re-clickear la pestaña; si la AF se cambia estando ya parado
+        //   en una pestaña, sin esto quedaba pegado el texto/plantillas de la AF anterior.
         state.styleLoaded = false;   // v1.59.0: idem "Tu estilo" — recargar al cambiar de AF.
+        state.styleDraft = '';
+        state.styleSaved = '';
+        state.styleDerived = null;
+        state.styleUpdatedAt = null;
+        state.styleError = null;
+        state.tplDraft = { inicial: '', cierre: '' };
+        state.tplSaved = { inicial: '', cierre: '' };
+        state.tplFull = { inicial: null, cierre: null };
         // v1.63.0: el modo de temperatura es per-AF -> invalidar y recargarlo (loadDashView de abajo
         //   lo redispara). Limpiar el cache de priority de Odoo de la AF anterior.
         state.tempMode = null;
@@ -7311,6 +7340,15 @@
         state.dashMetrics = null;
         state.dashError = null;
         syncAfSwitcher();
+        // v1.63.1 (BUGFIX): si el editor está abierto al cambiar de AF, re-fetcheá la pestaña activa
+        //   EN EL ACTO (no esperar a un re-click de tab). El estado per-AF ya quedó limpio arriba, así
+        //   que cada loader trae los datos de la AF nueva (spinner mientras carga, sin flash stale).
+        if (state.view === 'agentBuilder') {
+            var abTab = state.agentBuilderTab || 'plantillas';
+            if (abTab === 'estilo') loadStylePrefs();
+            else if (abTab === 'temperatura') loadTemperatureMode();
+            else openAgentBuilder();  // 'plantillas'
+        }
         loadDashView(state.dashView, false);  // rerenderiza (incl. syncAfSwitcher) + re-fetch
     }
 
