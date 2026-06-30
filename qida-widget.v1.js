@@ -33,9 +33,10 @@
  *     y el state lostConfirm). loadLostReasons + _odooLostReasons se CONSERVAN (los reusa el catálogo de baja).
  *   - Defaults / pendientes que tomé: (a) caso A (motivo+submotivo); Nivel-3 "Precio elevado"
  *     (lost_subreason_reason_id) = 2da fase aditiva (el detailField del modal ya existe, gateado por
- *     priceElevated). (b) Taxonomía: queda la actual; reconciliarla (agregar "Interés Informativo" +
- *     sacar motivos automáticos) contra el Excel/screenshot es follow-up — al resolver name->id vivo,
- *     un motivo que no matchee simplemente no resuelve (no rompe). (c) NO publico al Blob.
+ *     priceElevated). (b) Taxonomía RECONCILIADA: 9 motivos manuales (orden de Odoo) — agregado
+ *     "Interés Informativo" (+3 submotivos) y removidos los automáticos Duplicado / Faltan datos de
+ *     contacto / No familia (no están en el wizard manual). Submotivos de los otros 8 sin cambios.
+ *     (c) NO publico al Blob.
  *
  * Cambios v1.63.2 (2026-06-29 — BUGFIX de RAÍZ: el scroll de los panes del detalle saltaba al tope en cada rerender):
  *   Síntoma: clickear el botón de recomendación (SEGUIMIENTO sugerido, data-action="ai-type-btn")
@@ -2748,6 +2749,11 @@
     //   modelado como lista para ser extensible). Motivos sin submotivos -> subreasons:[] (el campo
     //   Submotivo se oculta). El submit HOY sigue siendo stub submitDismissal(); el write real va en PASO B.
     var DISMISSAL_TAXONOMY = {
+        'Interés Informativo': { subreasons: [
+            { name: 'Manifiesta no haber pedido información' },
+            { name: 'No quiere info - Ha consultado precios web' },
+            { name: 'Orientación de precios en llamada (sin presupuesto formal)' }
+        ] },
         'Alternativa no At. Dom.': { subreasons: [
             { name: 'Ingreso en centro de día', priceElevated: true },
             { name: 'Ingreso en residencia privada', priceElevated: true },
@@ -2780,15 +2786,7 @@
             { name: 'Discrepancias familiares' },
             { name: 'Usuario no acepta el servicio' }
         ] },
-        'Duplicado': { subreasons: [
-            { name: 'Doble contacto misma familia' }
-        ] },
         'Error operativo': { subreasons: [] },
-        'Faltan datos de contacto': { subreasons: [] },
-        'No familia': { subreasons: [
-            { name: 'Cuidador' },
-            { name: 'Otro' }
-        ] },
         'No localizable': { subreasons: [
             { name: 'Comunicación aún no establecida' },
             { name: 'Comunicación establecida' },
@@ -2802,18 +2800,18 @@
         ] }
     };
     // Orden explícito de motivos para el dropdown (no dependemos del iteration order del objeto).
+    // v1.64.0: 9 motivos MANUALES (orden de Odoo). +Interés Informativo; -Duplicado/-Faltan datos de
+    //   contacto/-No familia (automáticos, NO están en el wizard manual de Odoo).
     var DISMISSAL_REASON_ORDER = [
-        'Alternativa no At. Dom.',
-        'Cambio del estado del usuario',
-        'Cobertura Qida',
-        'Competencia At. Dom.',
-        'Desacuerdo familiar',
-        'Duplicado',
-        'Error operativo',
-        'Faltan datos de contacto',
-        'No familia',
+        'Interés Informativo',
         'No localizable',
-        'Requisitos no éticos'
+        'Cambio del estado del usuario',
+        'Desacuerdo familiar',
+        'Cobertura Qida',
+        'Alternativa no At. Dom.',
+        'Competencia At. Dom.',
+        'Requisitos no éticos',
+        'Error operativo'
     ];
     // Valores del Nivel 3 hoy (único). Lista para que agregar más sea trivial (no es checkbox).
     var DISMISSAL_DETAIL_VALUES = ['Precio elevado'];
