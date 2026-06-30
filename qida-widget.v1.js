@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.64.0
+ * QIDA ASSISTANT v1.64.1
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,19 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.64.1 (2026-06-30 — "Marcar hecho" del header cierra además la actividad de Odoo (action_feedback)):
+ *   El "Marcar hecho" del HEADER del detalle (qida-dsh-markdone, data-action="mark-done-detail") ahora,
+ *   además del followup_done (backend Postgres, nivel lead), CIERRA la mail.activity pendiente del lead en
+ *   Odoo vía action_feedback (a pedido del PO). SIN confirmación nueva: el cierre se DIFIERE hasta que
+ *   expira la ventana de "Deshacer" (4s) y undoFollowupDone lo cancela -> esa es la red de seguridad (la
+ *   acción es IRREVERSIBLE). Si se marcan varios leads rápido, el cierre del anterior se dispara al ser
+ *   superseder (no se pierde). Cuál actividad: la pendiente VENCIDA o de HOY más próxima (date_deadline<=hoy),
+ *   UNA sola; futura o ninguna -> no cierra nada (no cierra tareas futuras). Gates iguales a activity-complete
+ *   (odooWriteEnabled + lead numérico real + !impersonando). El "Marcar hecho" de las FILAS del dashboard
+ *   (data-action="mark-done") NO cambia: sigue siendo solo followup_done. followup_done y cierre de Odoo son
+ *   independientes: si action_feedback falla, toast suave y el followup_done queda igual.
+ *   PENDIENTE de validación en lead real (irreversible, no testeable sin Odoo). NO publicado al Blob.
  *
  * Cambios v1.64.0 (2026-06-30 — "Dar de baja" ACTIVADO: write real a Odoo same-origin con motivo + submotivo):
  *   Se prende DISMISSAL_UI_ENABLED (estaba dormido desde v1.58.0) y se reemplaza el viejo "Dar por perdido"
@@ -2157,7 +2170,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.64.0';
+    var VERSION = '1.64.1';
     var CONFIG = null;
 
     // ============================================================
@@ -2847,6 +2860,7 @@
         leadsLeidosEnSesion: new Set(),
         undoToast: null,                // { leadId, expiresAt } | null
         undoTimeoutId: null,            // ID del setTimeout activo (o null)
+        __pendingActivityClose: null,   // v1.64.1: leadKey con cierre de actividad Odoo pendiente (tras el undo de 4s)
 
         // v1.13: dashboard AF reconstruido (3 vistas + filtros + señales WhatsApp/urgencia).
         //   dashView: 'suggestions' | 'activities' | 'leads' (cada una = un endpoint).
@@ -6423,7 +6437,7 @@
                 + esc(leadId) + '" title="Marcado hecho hoy — clic para deshacer">'
                 + icon('check', 13) + ' Hecho hoy</button>';
         }
-        return '<button class="qida-dsh-markdone" data-action="mark-done" data-id="'
+        return '<button class="qida-dsh-markdone" data-action="mark-done-detail" data-id="'
             + esc(leadId) + '">' + icon('check', 13) + ' Marcar hecho</button>';
     }
 
@@ -8095,7 +8109,7 @@
     //   (4xx/5xx/red), revierte: re-muestra la fila, cierra el toast undo y avisa con un toast de
     //   error. Si OK (204), mantiene el optimistic + el toast undo. En modo mock no pega al backend
     //   (solo estado local de sesión, como siempre).
-    function markFollowupDone(id) {
+    function markFollowupDone(id, closeActivity) {
         if (!id) return;
         // v1.55.0 (#5): clave CANONICA numérica. El botón de fila pasa display_id ("L#####") y el
         //   del header pasa state.currentLeadId (numérico si entró por Actividades/deep-link). Sin
@@ -8103,12 +8117,27 @@
         //   124260 -> nunca matcheaba -> "no hacía nada". toNumericLeadId colapsa ambos a "124260".
         var key = toNumericLeadId(id) || String(id);
         // (1) optimistic local + toast Deshacer 4s (sobreescribe un undo previo de otra fila).
+        // v1.64.1: si había un cierre de actividad pendiente de un mark-done anterior, su ventana de
+        //   Deshacer se corta acá -> dispararlo ahora (ese lead ya no se puede deshacer).
+        if (state.undoTimeoutId) {
+            clearTimeout(state.undoTimeoutId);
+            if (state.__pendingActivityClose) {
+                closeMostDueActivityForLead(state.__pendingActivityClose);
+                state.__pendingActivityClose = null;
+            }
+        }
         state.completedTodayIds.add(key);
         state.undoToast = { leadId: key, expiresAt: Date.now() + 4000 };
-        if (state.undoTimeoutId) clearTimeout(state.undoTimeoutId);
+        // v1.64.1: solo el header (closeActivity=true) cierra además la actividad de Odoo. Se difiere
+        //   a que expire la ventana de Deshacer para que el undo pueda cancelarlo (sin confirmación).
+        state.__pendingActivityClose = closeActivity ? key : null;
         state.undoTimeoutId = setTimeout(function () {
             state.undoToast = null;
             state.undoTimeoutId = null;
+            if (state.__pendingActivityClose) {
+                closeMostDueActivityForLead(state.__pendingActivityClose);
+                state.__pendingActivityClose = null;
+            }
             rerenderContent();
         }, 4000);
         // (2) persistir (solo real); revert en fallo. Pasa la clave normalizada -> el revert toca
@@ -8129,10 +8158,37 @@
         if (state.undoToast && String(state.undoToast.leadId) === String(id)) {
             state.undoToast = null;
             if (state.undoTimeoutId) { clearTimeout(state.undoTimeoutId); state.undoTimeoutId = null; }
+            state.__pendingActivityClose = null;  // v1.64.1: cancelar el cierre de actividad pendiente
         }
         // (2) borrar la marca en backend (solo real); re-aplica en fallo.
         persistFollowupUndone(id);
         rerenderContent();
+    }
+
+    // v1.64.1: cierra en Odoo la mail.activity pendiente (vencida o de hoy) más próxima del lead, vía
+    //   action_feedback. Parte del "Marcar hecho" del HEADER (la AF hizo el seguimiento -> cierra su
+    //   tarea en Odoo). Se dispara DESPUÉS de la ventana de Deshacer (4s); undoFollowupDone la cancela.
+    //   Conservador: UNA sola actividad, solo vencida o de hoy (date_deadline <= hoy); si no hay -> no
+    //   hace nada (no cierra tareas futuras). Gates iguales a activity-complete (write enabled + lead
+    //   numérico real + !impersonando). action_feedback es IRREVERSIBLE. Falla -> toast suave; NO toca
+    //   el followup_done (acciones independientes).
+    function closeMostDueActivityForLead(leadKey) {
+        if (!state.odooWriteEnabled || isImpersonating()) return;
+        var numericId = parseInt(toNumericLeadId(leadKey), 10);
+        if (!numericId || isNaN(numericId)) return;
+        var todayStr = new Date().toISOString().slice(0, 10);  // YYYY-MM-DD (comparación de fecha)
+        odooCall('mail.activity', 'search_read', [
+            [['res_model', '=', 'crm.lead'], ['res_id', '=', numericId], ['date_deadline', '<=', todayStr]],
+            ['id', 'date_deadline']
+        ], { order: 'date_deadline asc', limit: 1 }).then(function (rows) {
+            if (!rows || !rows.length) return;  // sin actividad vencida/de hoy -> nada que cerrar
+            return completeOdooActivity(rows[0].id).then(function () {
+                showToast('Actividad cerrada en Odoo.');
+            });
+        }).catch(function (err) {
+            log('closeMostDueActivityForLead failed', err && err.message);
+            showToast('Seguimiento marcado; no pude cerrar la actividad en Odoo: ' + odooErrMsg(err), 'error');
+        });
     }
 
     // POST /api/leads/{id}/followup-actions { action:'done_today' }. Revert optimista en fallo.
@@ -11385,9 +11441,13 @@
 
             // --- v1.10: dashboard de leads enfriandose. v1.43: persistencia en backend ---
             case 'mark-done':
-                // Botón "✓ Marcar hecho" de la tabla y del header del detalle (mismo handler).
-                //   Optimistic + POST /api/leads/{id}/followup-actions, revert si falla.
+                // Botón "✓ Marcar hecho" de la tabla (dashboard). Optimistic + POST followup-actions.
                 markFollowupDone(id);
+                return;
+            // v1.64.1: "Marcar hecho" del HEADER del detalle (qida-dsh-markdone). Además del
+            //   followup_done, cierra la actividad de Odoo del lead (action_feedback) tras el undo de 4s.
+            case 'mark-done-detail':
+                markFollowupDone(id, true);
                 return;
             case 'undo-mark-done':
                 // "Deshacer" del toast (sin data-id -> usa el lead del toast) o "Hecho hoy" del
