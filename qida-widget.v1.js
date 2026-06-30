@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.63.1
+ * QIDA ASSISTANT v1.63.2
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,22 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.63.2 (2026-06-29 — BUGFIX de RAÍZ: el scroll de los panes del detalle saltaba al tope en cada rerender):
+ *   Síntoma: clickear el botón de recomendación (SEGUIMIENTO sugerido, data-action="ai-type-btn")
+ *   hacía que la conversación de WhatsApp (qida-pane-wa-body / id qida-wa-body) y el pane central
+ *   (qida-pane-center) saltaran al tope.
+ *   Causa: el re-render es innerHTML COMPLETO (sin diffing) y resetea el scroll de TODOS los panes.
+ *   El anti-scroll era opt-in por handler (flags __waNeedsScroll/__aiNeedsScroll) y cubría solo 2 de
+ *   3 panes. handleAiTypeClick seteaba __aiNeedsScroll pero NO __waNeedsScroll (mismo bug que v1.57.0
+ *   #3 arregló para Inicio/Cierre, pero en OTRO handler), y el pane central NUNCA tuvo restore. Por
+ *   eso "se abordó pero seguía pasando": era whack-a-mole, un parche por handler.
+ *   Fix (de raíz, en rerenderContent — NO por handler): se captura el scrollTop de los 3 panes ANTES
+ *   del innerHTML swap (captureScrollPositions) y se restaura DESPUÉS (restoreScrollPositions). Los
+ *   flags __waNeedsScroll/__aiNeedsScroll siguen GANANDO (anclan al fondo en mensaje nuevo); sin flag
+ *   se PRESERVA la posición; al cambiar de lead arranca arriba (snapshot keyed por state.__scrollLeadId).
+ *   Cubre los 3 panes y todos los handlers presentes y futuros. Se agregó id="qida-pane-center" al
+ *   pane central (no tenía). Bugfix dentro de v1.63.x -> mismo filename (qida-widget.v1.js).
  *
  * Cambios v1.63.1 (2026-06-29 — BUGFIX: estado stale del editor al cambiar de AF ("Ver como")):
  *   Síntoma: al usar "Ver como"/impersonación para cambiar de AF, la pestaña "Tu estilo" (y, por la
@@ -2113,7 +2129,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.63.1';
+    var VERSION = '1.63.2';
     var CONFIG = null;
 
     // ============================================================
@@ -2864,6 +2880,7 @@
         leadDetailCache: {},
         __waNeedsScroll: false,         // flag para auto-scroll al fondo del pane WhatsApp post-rerender
         __aiNeedsScroll: false,         // v1.9.1: flag para auto-scroll al fondo del pane Chat IA post-rerender
+        __scrollLeadId: null,           // v1.63.2: lead que el DOM muestra; preserva scroll solo intra-lead
 
         // v1.15: pantalla "Armá tu asistente" (state.view==='agentBuilder') + drafts dinámicos.
         //   draftVariants: copia de trabajo en edición. draftVariantsSaved: último snapshot guardado
@@ -9331,7 +9348,7 @@
         //   true  -> WA | IA   | Info
         // v1.11: renderWhatsAppPane y renderAiChat reciben lead pero NO cached (no se
         //   tocan en Fase A - Fase B y Fase E respectivamente).
-        var centerHtml = '<div class="qida-pane-center">' + renderCenterPane(lead, cached, leadId) + '</div>';
+        var centerHtml = '<div class="qida-pane-center" id="qida-pane-center">' + renderCenterPane(lead, cached, leadId) + '</div>';
         var aiHtml = '<div class="qida-pane-ai">' + renderAiChat(lead) + '</div>';
         var middleAndRight = state.detailLayoutSwapped ? (aiHtml + centerHtml) : (centerHtml + aiHtml);
 
@@ -10566,6 +10583,11 @@
         if (state.leaderDash && state.leaderDash.__charts) {
             destroyLeaderCharts();
         }
+        // v1.63.2: capturar el scrollTop de los panes del detalle ANTES del innerHTML swap
+        //   (el swap completo los resetea al tope). prevScrollLeadId = lead que el DOM muestra
+        //   AHORA (antes del swap), para distinguir rerender intra-lead de cambio de lead.
+        var prevScrollLeadId = state.__scrollLeadId;
+        var scrollSnap = captureScrollPositions();
         safeSetContentHtml(content, renderContent());
         syncShellSizing();
         syncShellHeader();
@@ -10582,24 +10604,13 @@
                 setTimeout(mountLeaderCharts, 16);
             }
         }
-        // v1.6: auto-scroll del pane WhatsApp post-rerender si el flag esta seteado.
-        if (state.__waNeedsScroll) {
-            state.__waNeedsScroll = false;
-            if (typeof window.requestAnimationFrame === 'function') {
-                window.requestAnimationFrame(scrollWaToBottom);
-            } else {
-                setTimeout(scrollWaToBottom, 16);
-            }
-        }
-        // v1.9.1: idem para el pane Chat IA. Se setea en pushAiChat y al entrar al detalle.
-        if (state.__aiNeedsScroll) {
-            state.__aiNeedsScroll = false;
-            if (typeof window.requestAnimationFrame === 'function') {
-                window.requestAnimationFrame(scrollAiToBottom);
-            } else {
-                setTimeout(scrollAiToBottom, 16);
-            }
-        }
+        // v1.63.2: restaurar el scroll de los 3 panes tras el swap. Reemplaza los 2 bloques
+        //   opt-in __waNeedsScroll/__aiNeedsScroll (que cubrían 2 de 3 panes y había que setear a
+        //   mano en cada handler — por eso "se abordó pero seguía pasando"). Ahora es de raíz:
+        //   mismo lead -> preservar posición; los flags ganan y anclan al fondo (mensaje nuevo);
+        //   lead distinto -> arranca arriba. restoreScrollPositions consume los flags.
+        restoreScrollPositions(scrollSnap, prevScrollLeadId === state.currentLeadId);
+        state.__scrollLeadId = state.currentLeadId;
     }
 
     function scrollWaToBottom() {
@@ -10610,6 +10621,53 @@
     function scrollAiToBottom() {
         var body = document.getElementById('qida-pane-ai-body');
         if (body) body.scrollTop = body.scrollHeight;
+    }
+
+    // v1.63.2: preservación de scroll de los panes scrollables del detalle a través del
+    //   innerHTML swap (que los resetea al tope). Antes era opt-in por handler vía flags y solo
+    //   cubría 2 de 3 panes; esto lo hace de raíz en rerenderContent, para TODOS los handlers
+    //   (presentes y futuros) y los 3 panes: WhatsApp (qida-wa-body), central (qida-pane-center)
+    //   y Chat IA (qida-pane-ai-body).
+    function captureScrollPositions() {
+        var ids = ['qida-wa-body', 'qida-pane-center', 'qida-pane-ai-body'];
+        var snap = {};
+        for (var i = 0; i < ids.length; i++) {
+            var el = document.getElementById(ids[i]);
+            if (el) snap[ids[i]] = el.scrollTop;
+        }
+        return snap;
+    }
+
+    // Reglas de restore: los flags __waNeedsScroll/__aiNeedsScroll (mensaje nuevo) GANAN y anclan
+    //   al fondo. Sin flag y mismo lead -> se PRESERVA la posición previa. Lead distinto (o sin
+    //   posición previa) -> arriba (0). El pane central nunca ancla al fondo (es contexto): se
+    //   preserva intra-lead y arranca arriba al cambiar de lead.
+    function restoreScrollPositions(snap, sameLead) {
+        var wantWaBottom = !!state.__waNeedsScroll;
+        var wantAiBottom = !!state.__aiNeedsScroll;
+        state.__waNeedsScroll = false;
+        state.__aiNeedsScroll = false;
+        var apply = function () {
+            if (wantWaBottom) {
+                scrollWaToBottom();
+            } else {
+                var wa = document.getElementById('qida-wa-body');
+                if (wa) wa.scrollTop = (sameLead && snap['qida-wa-body'] != null) ? snap['qida-wa-body'] : 0;
+            }
+            if (wantAiBottom) {
+                scrollAiToBottom();
+            } else {
+                var ai = document.getElementById('qida-pane-ai-body');
+                if (ai) ai.scrollTop = (sameLead && snap['qida-pane-ai-body'] != null) ? snap['qida-pane-ai-body'] : 0;
+            }
+            var ce = document.getElementById('qida-pane-center');
+            if (ce) ce.scrollTop = (sameLead && snap['qida-pane-center'] != null) ? snap['qida-pane-center'] : 0;
+        };
+        if (typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(apply);
+        } else {
+            setTimeout(apply, 16);
+        }
     }
 
     // v1.6: helper de nivel para colores degradados por "dias sin contacto".
