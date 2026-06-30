@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.63.2
+ * QIDA ASSISTANT v1.64.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,33 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.64.0 (2026-06-30 — "Dar de baja" ACTIVADO: write real a Odoo same-origin con motivo + submotivo):
+ *   Se prende DISMISSAL_UI_ENABLED (estaba dormido desde v1.58.0) y se reemplaza el viejo "Dar por perdido"
+ *   por "Dar de baja" (motivo + submotivo, taxonomía en cascada). Principio rector intacto: dar de baja es
+ *   CLASIFICACIÓN INTERNA del lead (motivo de pérdida) — NO genera ningún mensaje al lead.
+ *   - Catálogo VIVO (no hardcodeado): loadDismissalCatalog() fetchea crm.lost.reason + crm.lost.subreason
+ *     (con reason_id). DISMISSAL_TAXONOMY se usa SOLO como whitelist + orden + metadata (igual que
+ *     ACTIVITY_TYPE_WHITELIST); los IDs se resuelven por nombre en vivo al confirmar -> nunca quedan stale.
+ *     El submotivo se resuelve SCOPEADO por reason_id (hay 'Otro' repetido entre motivos).
+ *   - Submit (PASO B): submitDismissal hace SOLO el `create` del wizard crm.lead.lost
+ *     (lost_reason_id + lost_subreason_id + wizard_type:'select_reasons' + force_lost:false +
+ *     not_wish_be_contacted:false) con context {active_id, active_ids:[leadId], active_model:'crm.lead',
+ *     default_type:'opportunity', default_wizard_type:'select_reasons'}. NO se invoca un 2do "apply":
+ *     queda a validación si el create-solo deja el lead Perdido; si NO, se captura el 2do paso (no se
+ *     inventa). leadId = id numérico real de Odoo (toNumericLeadId), nunca el display_id "L#####".
+ *   - Gating: botón visible SOLO con DISMISSAL_UI_ENABLED + odooWriteEnabled + lead numérico real +
+ *     !isImpersonating() (en "Ver como", odooCall escribiría con la cookie del usuario real -> prohibido).
+ *     Confirm en el modal (irreversible). Optimistic-remove del lead (lostLeadIds) + revert si el create
+ *     rechaza (toast con odooErrMsg, sin volcar JSON).
+ *   - Cleanup: se removió el botón "Dar por perdido" (lead-lost-open) y sus huérfanos (openLostConfirm,
+ *     handleLeadLost, setLeadLost, renderLostConfirm, los handlers lost-confirm-X, el input lost-reason,
+ *     y el state lostConfirm). loadLostReasons + _odooLostReasons se CONSERVAN (los reusa el catálogo de baja).
+ *   - Defaults / pendientes que tomé: (a) caso A (motivo+submotivo); Nivel-3 "Precio elevado"
+ *     (lost_subreason_reason_id) = 2da fase aditiva (el detailField del modal ya existe, gateado por
+ *     priceElevated). (b) Taxonomía: queda la actual; reconciliarla (agregar "Interés Informativo" +
+ *     sacar motivos automáticos) contra el Excel/screenshot es follow-up — al resolver name->id vivo,
+ *     un motivo que no matchee simplemente no resuelve (no rompe). (c) NO publico al Blob.
  *
  * Cambios v1.63.2 (2026-06-29 — BUGFIX de RAÍZ: el scroll de los panes del detalle saltaba al tope en cada rerender):
  *   Síntoma: clickear el botón de recomendación (SEGUIMIENTO sugerido, data-action="ai-type-btn")
@@ -2129,7 +2156,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.63.2';
+    var VERSION = '1.64.0';
     var CONFIG = null;
 
     // ============================================================
@@ -2173,6 +2200,10 @@
     //   _odooActivityTypes: null hasta que loadLostReasons() resuelve; array (incl. []) tras la
     //   primera carga. Las opciones del dropdown del confirm de "Dar por perdido" salen de acá.
     var _odooLostReasons = null;
+    // v1.64.0: cache de crm.lost.subreason (submotivos de "Dar de baja"). Cada record trae
+    //   { id, name, reason_id:[id,name] }. Se scopea por reason_id porque hay submotivos con el
+    //   MISMO nombre bajo motivos distintos (p.e. "Otro"). null hasta loadLostSubreasons().
+    var _odooLostSubreasons = null;
     var _crmLeadModelId = null;
     // v1.12: whitelist de emails con acceso al panel de lideres. _isLeader se setea en
     //   init() comparando sess.username (modo Odoo) contra LEADER_EMAILS. En modo dev
@@ -2693,17 +2724,15 @@
     //   console.log) — si se mostrara, "aparentaría funcionar" sin escribir a Odoo. Hasta entonces el
     //   caso lo cubre "Dar por perdido" (flow viejo, intacto). NO borrar este código: se prende en v1.59.0.
     //
-    // TAREAS v1.59.0 (cuando se prenda — NO implementadas todavía):
-    //   1. Capturar 2 payloads del Network tab de Odoo dando de baja a mano: caso A (motivo+submotivo) y
-    //      caso B (motivo+submotivo+Nivel-3 "Precio elevado") -> fijan el método RPC y el campo del Nivel-3.
-    //   2. Cablear submitDismissal al write real same-origin (mirror de handleLeadLost): resolución name->id
-    //      via search_read, submotivo SCOPEADO por reason_id (hay 'Otro' repetido entre motivos). Gating
-    //      odooWriteEnabled + oculto en impersonación. Optimistic-remove + revert (reusar lostLeadIds).
-    //   3. Reemplazar "Dar por perdido" por "Dar de baja": sacar el botón viejo (lead-lost-open) + sus
-    //      handlers (openLostConfirm/handleLeadLost/setLeadLost/loadLostReasons/render de lostConfirm).
-    //   4. Validar con Tampermonkey sobre un lead de TEST (los 3 escenarios + que no rompe nada).
-    //   5. Poner DISMISSAL_UI_ENABLED = true.
-    var DISMISSAL_UI_ENABLED = false;
+    // v1.64.0 (PASO B — ON): submitDismissal escribe de verdad a Odoo (crm.lead.lost/create con
+    //   active_ids en context). Resolución name->id VIVA (crm.lost.reason + crm.lost.subreason scopeado
+    //   por reason_id). Gating odooWriteEnabled + !isImpersonating; optimistic-remove + revert (lostLeadIds).
+    //   "Dar por perdido" (flujo viejo) fue REEMPLAZADO por "Dar de baja" (botón + handlers viejos removidos;
+    //   loadLostReasons se conserva, lo reusa el catálogo de baja).
+    //   PENDIENTE de validación en lead de TEST: si el create-solo NO deja el lead Perdido, falta el 2do
+    //   paso del wizard (apply) — NO inventado a propósito; se captura y se agrega. Nivel-3 ("Precio
+    //   elevado", lost_subreason_reason_id) = 2da fase aditiva (hoy caso A: motivo+submotivo).
+    var DISMISSAL_UI_ENABLED = true;
 
     // ============================================================
     // v1.58.0 (ex-FIX 4): TAXONOMIA "DAR DE BAJA" un lead
@@ -2992,14 +3021,10 @@
         activityModal: null,
         activityConfirm: null,
         rescheduleModal: null,
-        // v1.49.8: "Dar por perdido" un lead desde el detalle.
-        //   lostConfirm: null | { leadId, leadName, resId, lostReasonId, submitting } -> modal de confirm
-        //     con dropdown obligatorio de motivos. El submit (lost-confirm-yes) llama setLeadLost.
-        //   lostLeadIds: Set<id numérico>. Leads marcados como perdidos en esta sesión (optimistic remove
-        //     del dashboard via liveDashRows). Persiste durante toda la sesión del page load; un reload
-        //     trae el estado real desde el backend. NO reusamos completedTodayIds porque "hecho hoy" es
-        //     reversible (Deshacer) y "perdido" NO lo es desde el widget -> conceptos distintos.
-        lostConfirm: null,
+        // v1.64.0: lostLeadIds: Set<id numérico>. Leads dados de baja en esta sesión (optimistic remove
+        //   del dashboard via liveDashRows). Persiste durante toda la sesión del page load; un reload trae
+        //   el estado real desde el backend. NO reusamos completedTodayIds porque "hecho hoy" es reversible
+        //   (Deshacer) y "dar de baja" NO lo es desde el widget -> conceptos distintos.
         lostLeadIds: new Set(),
         // v1.54.0 (FIX 4): "Dar de baja" un lead (modal con taxonomía). SOLO FRONTEND.
         //   dismissModal: null | { leadId, leadName, reason, subreason, detail } -> dropdowns en cascada.
@@ -3538,6 +3563,42 @@
             .catch(function (err) { log('loadLostReasons failed', err && err.message); return []; });
     }
 
+    // v1.64.0: search_read de crm.lost.subreason -> cache (_odooLostSubreasons). Idempotente. Trae
+    //   reason_id (Many2one -> [id, name]) para SCOPEAR submotivos por motivo (hay 'Otro' repetido).
+    //   Catch silencioso -> [] (no rompe la apertura del modal; el submit valida que resuelva).
+    function loadLostSubreasons() {
+        if (_odooLostSubreasons) return Promise.resolve(_odooLostSubreasons);
+        return odooCall('crm.lost.subreason', 'search_read', [[], ['id', 'name', 'reason_id']], {})
+            .then(function (rows) { _odooLostSubreasons = rows || []; return _odooLostSubreasons; })
+            .catch(function (err) { log('loadLostSubreasons failed', err && err.message); return []; });
+    }
+
+    // v1.64.0: precarga del catálogo "Dar de baja" (motivos + submotivos vivos de Odoo). Reusa
+    //   loadLostReasons (crm.lost.reason). Idempotente; se dispara al abrir el modal.
+    function loadDismissalCatalog() {
+        return Promise.all([loadLostReasons(), loadLostSubreasons()]);
+    }
+
+    // Resuelve el id VIVO de un motivo por nombre exacto (es_ES de DISMISSAL_TAXONOMY == name en Odoo).
+    //   Igual que ACTIVITY_TYPE_WHITELIST: el nombre es la whitelist; el id sale de Odoo (nunca stale).
+    function resolveLostReasonId(reasonName) {
+        var rs = _odooLostReasons || [];
+        for (var i = 0; i < rs.length; i++) {
+            if (String(rs[i].name) === String(reasonName)) return rs[i].id;
+        }
+        return null;
+    }
+    // Resuelve el id VIVO de un submotivo por nombre, SCOPEADO al motivo (reason_id) — porque hay
+    //   submotivos homónimos bajo motivos distintos ('Otro'). reasonId = id ya resuelto del motivo.
+    function resolveLostSubreasonId(reasonId, subName) {
+        var ss = _odooLostSubreasons || [];
+        for (var i = 0; i < ss.length; i++) {
+            var rid = ss[i].reason_id && ss[i].reason_id.length ? ss[i].reason_id[0] : null;
+            if (String(ss[i].name) === String(subName) && rid === reasonId) return ss[i].id;
+        }
+        return null;
+    }
+
     // Resuelve la whitelist -> [{ id, label, key }] usando los tipos cacheados (solo los que matchean).
     function resolvedActivityTypes() {
         var types = _odooActivityTypes || [];
@@ -3593,17 +3654,6 @@
     //   NO es reversible -> el caller exige un confirm previo. feedback:'' (sin comentario).
     function completeOdooActivity(activityId) {
         return odooCall('mail.activity', 'action_feedback', [[activityId]], { feedback: '' });
-    }
-
-    // v1.49.8: action_set_lost de crm.lead. Mueve el lead al stage "Perdido" y graba el motivo
-    //   (lost_reason_id es OBLIGATORIO según el contrato confirmado con el PO via Network tab).
-    //   NO es reversible desde el widget -> el caller exige confirm + dropdown de motivo. odooId debe
-    //   ser un entero (res_id Odoo); lostReasonId también entero (id de crm.lost.reason).
-    function setLeadLost(odooId, lostReasonId) {
-        if (!odooId || !lostReasonId) {
-            return Promise.reject(new Error('odooId y lostReasonId requeridos'));
-        }
-        return odooCall('crm.lead', 'action_set_lost', [[odooId]], { lost_reason_id: lostReasonId });
     }
 
     // v1.48.5: WRITE de date_deadline de una mail.activity existente (reagendar). NO borra ni cierra
@@ -9575,53 +9625,6 @@
         + '</div>';
     }
 
-    // v1.49.8: confirm de "Dar por perdido". Clon de renderActivityConfirm con dropdown OBLIGATORIO de
-    //   motivos (crm.lost.reason). El submit (lost-confirm-yes) queda disabled hasta que lostReasonId
-    //   esté seteado. Si _odooLostReasons todavía no llegó, mostramos un placeholder "Cargando motivos…"
-    //   (el dropdown sigue disabled efectivamente porque no hay opciones válidas que elegir). NO pedimos
-    //   typing del nombre del lead — la doble fricción del dropdown obligatorio ya es suficiente contra
-    //   el click accidental, y mantener el modal a 1-click es lo que pidió el PO.
-    function renderLostConfirm() {
-        var c = state.lostConfirm;
-        if (!c) return '';
-        var reasons = _odooLostReasons || [];
-        var reasonOpts;
-        if (!reasons.length) {
-            reasonOpts = '<option value="">(cargando motivos…)</option>';
-        } else {
-            reasonOpts = '<option value="">Seleccionar motivo…</option>';
-            for (var i = 0; i < reasons.length; i++) {
-                var sel = (c.lostReasonId && reasons[i].id === c.lostReasonId) ? ' selected' : '';
-                reasonOpts += '<option value="' + esc(reasons[i].id) + '"' + sel + '>' + esc(reasons[i].name) + '</option>';
-            }
-        }
-        var yesLabel = c.submitting ? 'Marcando…' : 'Sí, dar por perdido';
-        // Disabled si: submitting, lista aún no cargada, motivo no elegido.
-        var yesDisabled = (c.submitting || !reasons.length || !c.lostReasonId) ? ' disabled' : '';
-        var preview = c.leadName ? '<p class="qida-actv-confirm-preview">&ldquo;' + esc(c.leadName) + '&rdquo;</p>' : '';
-        return '<div class="qida-schedule-bg" data-action="lost-confirm-bg">'
-            + '<div class="qida-schedule qida-actv-confirm">'
-                + '<div class="qida-schedule-head">'
-                    + '<h3 class="qida-schedule-title">¿Dar por perdido este lead?</h3>'
-                    + '<p class="qida-schedule-sub">Se marca como Perdido en Odoo con el motivo elegido (queda en el historial). <strong>No se puede deshacer desde el widget.</strong></p>'
-                + '</div>'
-                + '<div class="qida-schedule-body">'
-                    + preview
-                    + '<div class="qida-sb-section">'
-                        + '<div class="qida-sb-label">Motivo *</div>'
-                        + '<select class="qida-leader-select qida-actv-input" data-input="lost-reason">' + reasonOpts + '</select>'
-                    + '</div>'
-                + '</div>'
-                + '<div class="qida-schedule-foot">'
-                    + '<div class="qida-sb-actions">'
-                        + '<button class="qida-sb-cancel" data-action="lost-confirm-cancel">Cancelar</button>'
-                        + '<button class="qida-btn-primary" data-action="lost-confirm-yes"' + yesDisabled + '>' + icon('x-circle', 13) + ' ' + esc(yesLabel) + '</button>'
-                    + '</div>'
-                + '</div>'
-            + '</div>'
-        + '</div>';
-    }
-
     // ============================================================
     // v1.54.0 (FIX 4): MODAL "DAR DE BAJA" un lead (taxonomía en cascada)
     // ============================================================
@@ -9715,8 +9718,16 @@
     }
 
     function openDismissModal() {
+        // Gate defensivo (el botón ya está oculto sin esto). Escribe con la cookie del browser real ->
+        //   prohibido en impersonación (quedaría atribuido al admin, no a la AF).
+        if (!state.odooWriteEnabled) { showToast('Función no disponible en este modo.', 'error'); return; }
+        if (isImpersonating()) { showToast('No disponible en modo "ver como AF".', 'error'); return; }
         var leadId = state.currentLeadId;
         var lead = currentLead(leadId);
+        // Precargar el catálogo vivo (motivos + submotivos) para resolver name->id al confirmar.
+        //   Idempotente; fire-and-forget. Si todavía no llegó al submit, el resolver devuelve null
+        //   y handleDismissSubmit muestra "reintentá" (sin optimistic).
+        loadDismissalCatalog();
         setState({ dismissModal: {
             leadId: leadId,
             leadName: (lead && lead.name) || ('Lead ' + leadId),
@@ -9726,27 +9737,78 @@
         } });
     }
 
-    // v1.54.0 (FIX 4): STUB. NO persiste al backend (eso va en una task aparte). Solo loguea el payload
-    //   + feedback visual. El cierre del modal + toast los maneja handleDismissSubmit.
-    function submitDismissal(payload) {
-        console.log('[QidaAssistant] submitDismissal (stub, sin persistencia):', payload);
+    // v1.64.0 (PASO B): write real same-origin. SOLO el `create` del wizard crm.lead.lost (con
+    //   active_ids en context), tal como lo pidió Alejandro. NO se invoca un 2do "apply": la validación
+    //   en el lead de TEST decide si el create-solo ya deja el lead Perdido. Si NO -> PARAR y capturar
+    //   el 2do paso (no inventar el apply). odooId/reasonId enteros; subreasonId entero o null.
+    //   odooCall mergea este context sobre _baseContext (uid/lang/tz de la sesión -> uid NUNCA hardcodeado).
+    //   Clasificación interna (motivo de baja); NO genera mensaje al lead -> respeta el principio rector.
+    function submitDismissal(odooId, lostReasonId, lostSubreasonId) {
+        if (!odooId || !lostReasonId) {
+            return Promise.reject(new Error('odooId y lostReasonId requeridos'));
+        }
+        var values = {
+            lost_reason_id: lostReasonId,
+            lost_subreason_id: lostSubreasonId || false,
+            wizard_type: 'select_reasons',
+            force_lost: false,
+            not_wish_be_contacted: false
+        };
+        return odooCall('crm.lead.lost', 'create', [values], {
+            context: {
+                active_id: odooId,
+                active_ids: [odooId],
+                active_model: 'crm.lead',
+                default_type: 'opportunity',
+                default_wizard_type: 'select_reasons'
+            }
+        });
     }
 
+    // v1.64.0: orquesta "Dar de baja". Resuelve motivo+submotivo a IDs VIVOS (submotivo scopeado por
+    //   reason_id), optimistic-remove del lead (reusa lostLeadIds, igual que handleLeadLost), submit
+    //   create-only, revert + toast(odooErrMsg) si rechaza. Nivel-3 (detail/priceElevated) NO se envía
+    //   en esta fase (caso A: motivo+submotivo) — queda para una 2da fase aditiva.
     function handleDismissSubmit() {
         var d = state.dismissModal;
         if (!d) return;
         if (!d.reason) { showToast('Elegí un motivo para continuar.', 'error'); return; }
         if (reasonHasSubreasons(d.reason) && !d.subreason) { showToast('Elegí un submotivo para continuar.', 'error'); return; }
-        var payload = {
-            leadId: d.leadId,
-            dismissal_reason_name: d.reason,
-            dismissal_subreason_name: reasonHasSubreasons(d.reason) ? (d.subreason || null) : null,
-            dismissal_detail_name: (dismissShowsDetail(d.reason, d.subreason) && d.detail) ? d.detail : null
-        };
-        submitDismissal(payload);
+        // Gate defensivo (el botón ya está oculto sin esto, pero un click directo por consola no debe escribir).
+        if (!state.odooWriteEnabled) { showToast('Función no disponible en este modo.', 'error'); return; }
+        if (isImpersonating()) { showToast('No disponible en modo "ver como AF".', 'error'); return; }
+        var resId = parseInt(toNumericLeadId(d.leadId), 10);
+        if (!resId || isNaN(resId)) { showToast('No pude identificar el lead.', 'error'); return; }
+        // Resolución name->id VIVA. Si no resuelve (taxonomía vs Odoo desalineados) -> error, sin optimistic.
+        var reasonId = resolveLostReasonId(d.reason);
+        if (!reasonId) { showToast('No pude resolver el motivo en Odoo. Reintentá.', 'error'); return; }
+        var subreasonId = null;
+        if (reasonHasSubreasons(d.reason) && d.subreason) {
+            subreasonId = resolveLostSubreasonId(reasonId, d.subreason);
+            if (!subreasonId) { showToast('No pude resolver el submotivo en Odoo. Reintentá.', 'error'); return; }
+        }
+        // Optimistic-remove (clon de handleLeadLost): id original + numérico + resId, para matchear liveDashRows.
+        var leadId = d.leadId;
+        var addedKeys = [];
+        if (state.lostLeadIds) {
+            if (leadId != null && !state.lostLeadIds.has(leadId)) { state.lostLeadIds.add(leadId); addedKeys.push(leadId); }
+            var numericId = toNumericLeadId(leadId);
+            if (numericId && !state.lostLeadIds.has(numericId)) { state.lostLeadIds.add(numericId); addedKeys.push(numericId); }
+            if (resId && !state.lostLeadIds.has(resId)) { state.lostLeadIds.add(resId); addedKeys.push(resId); }
+        }
         state.dismissModal = null;
+        state.view = 'dashboard';
+        state.currentLeadId = null;
         rerenderContent();
-        showToast('Lead dado de baja');
+        submitDismissal(resId, reasonId, subreasonId).then(function () {
+            showToast('Lead dado de baja');
+        }).catch(function (err) {
+            if (state.lostLeadIds) {
+                for (var i = 0; i < addedKeys.length; i++) state.lostLeadIds["delete"](addedKeys[i]);
+            }
+            rerenderContent();
+            showToast('No se pudo dar de baja: ' + odooErrMsg(err), 'error');
+        });
     }
 
     // ============================================================
@@ -10813,22 +10875,16 @@
                 var headerNewActBtn = (state.odooWriteEnabled && isRealActivityId(toNumericLeadId(state.currentLeadId)))
                     ? '<button class="qida-dsh-newact" data-action="activity-new" title="Crear actividad para este lead">' + icon('plus', 12) + ' Crear actividad</button>'
                     : '';
-                // v1.49.8: "Dar por perdido". Gate triple: write enabled + lead numérico real + !impersonando.
-                //   Justificación del !isImpersonating(): odooCall escribe con la cookie del browser real
-                //   (no con el odoo_user_id impersonado) -> el set_lost quedaría atribuido al admin, no a
-                //   la AF. Ocultar el botón en modo viewing-as evita el cross-write incorrecto. La reactivación
-                //   NO es posible desde el widget (va por Odoo nativo, action_set_won o cambio de stage).
-                var headerLostBtn = (state.odooWriteEnabled
+                // v1.64.0: "Dar de baja" (reemplaza al viejo "Dar por perdido"). Gate cuádruple: feature
+                //   flag + write enabled + lead numérico real + !impersonando. Justificación del
+                //   !isImpersonating(): odooCall escribe con la cookie del browser real (no con el
+                //   odoo_user_id impersonado) -> la baja quedaría atribuida al admin, no a la AF. Ocultar el
+                //   botón en viewing-as evita el cross-write. Irreversible desde el widget -> el modal
+                //   mantiene el confirm (motivo+submotivo obligatorios).
+                var headerDismissBtn = (DISMISSAL_UI_ENABLED
+                    && state.odooWriteEnabled
                     && isRealActivityId(toNumericLeadId(state.currentLeadId))
                     && !isImpersonating())
-                    ? '<button class="qida-dsh-lost" data-action="lead-lost-open" title="Dar por perdido este lead (irreversible)">' + icon('x-circle', 12) + ' Dar por perdido</button>'
-                    : '';
-                // v1.58.0: "Dar de baja" — abre el modal con la taxonomía. GATED OFF detrás de
-                //   DISMISSAL_UI_ENABLED (=false hoy): el modal/taxonomía/catálogo quedan en el archivo pero
-                //   NINGÚN usuario llega al modal desde la UI, porque el submit todavía es STUB (no persiste a
-                //   Odoo). Se prende en v1.59.0 cuando esté el write real. Ver el bloque de tareas v1.59.0 y
-                //   el flag arriba de DISMISSAL_TAXONOMY. Mientras tanto "Dar por perdido" cubre el caso.
-                var headerDismissBtn = DISMISSAL_UI_ENABLED
                     ? '<button class="qida-dsh-dismiss" data-action="lead-dismiss-open" title="Dar de baja este lead (registrar motivo)">' + icon('archive', 12) + ' Dar de baja</button>'
                     : '';
                 titleHtml = '<div class="qida-detail-shell-head">'
@@ -10855,8 +10911,7 @@
                     // v1.49.8: botón "Dar por perdido" entre días-sin-contacto y el separador antes del pill
                     //   de temperatura (ubicación acordada con el PO). Si el gate falla -> string vacío
                     //   (sin separador colgante porque el separador siguiente sigue presente para tempPill).
-                    + headerLostBtn
-                    // v1.54.0 (FIX 4): "Dar de baja" junto a "Dar por perdido" (ambas acciones de cierre del lead).
+                    // v1.64.0: "Dar de baja" (reemplaza al viejo "Dar por perdido").
                     + headerDismissBtn
                     + '<span class="qida-dsh-sep">&middot;</span>'
                     // v1.17: pill de temperatura como hijo directo del head (NO dentro de .qida-dsh-meta,
@@ -10979,15 +11034,6 @@
             divr.id = 'qida-reschedule-root';
             divr.innerHTML = renderRescheduleModal();
             shell.appendChild(divr);
-        }
-        // v1.49.8: confirm de "Dar por perdido". Mismo patrón que activityConfirm (espejo total).
-        var existingL = document.getElementById('qida-lost-confirm-root');
-        if (existingL) existingL.parentNode.removeChild(existingL);
-        if (state.lostConfirm) {
-            var divl = document.createElement('div');
-            divl.id = 'qida-lost-confirm-root';
-            divl.innerHTML = renderLostConfirm();
-            shell.appendChild(divl);
         }
         // v1.54.0 (FIX 4): modal "Dar de baja" (taxonomía en cascada). Mismo patrón de mount.
         var existingD = document.getElementById('qida-dismiss-root');
@@ -11739,21 +11785,7 @@
                 handleRescheduleSave();
                 return;
 
-            // --- v1.49.8: "Dar por perdido" un lead desde el detalle ---
-            case 'lead-lost-open':
-                openLostConfirm();
-                return;
-            case 'lost-confirm-cancel':
-                setState({ lostConfirm: null });
-                return;
-            case 'lost-confirm-bg':
-                if (e.target === target) setState({ lostConfirm: null });
-                return;
-            case 'lost-confirm-yes':
-                handleLeadLost();
-                return;
-
-            // --- v1.54.0 (FIX 4): "Dar de baja" un lead (modal con taxonomía; submit = stub) ---
+            // --- v1.64.0: "Dar de baja" un lead (modal con taxonomía; write real same-origin) ---
             case 'lead-dismiss-open':
                 openDismissModal();
                 return;
@@ -12004,75 +12036,6 @@
         }
     }
 
-    // v1.49.8: abre el confirm de "Dar por perdido" para el lead del detalle actual. Gate triple
-    //   (write enabled + lead numérico real + !impersonando). En modo impersonación NO debería ser
-    //   alcanzable (el botón no se pinta), pero el guard defensivo asegura que un click directo del
-    //   data-action vía consola tampoco escriba con la cookie incorrecta.
-    function openLostConfirm() {
-        if (!state.odooWriteEnabled) { showToast('Función no disponible en este modo.', 'error'); return; }
-        if (isImpersonating()) { showToast('No disponible en modo "ver como AF".', 'error'); return; }
-        var leadId = state.currentLeadId;
-        var resId = parseInt(toNumericLeadId(leadId), 10);
-        if (!resId || isNaN(resId)) { showToast('No pude identificar el lead.', 'error'); return; }
-        var lead = currentLead(leadId);
-        // Disparo el fetch de motivos si todavía no llegaron; cuando resuelve, re-renderizamos el
-        //   modal para reemplazar "(cargando motivos…)" por la lista real. NO bloqueo la apertura
-        //   del confirm — el dropdown muestra el placeholder y el submit queda disabled hasta elegir.
-        if (!_odooLostReasons) { loadLostReasons().then(function () { if (state.lostConfirm) rerenderContent(); }); }
-        setState({ lostConfirm: {
-            leadId: leadId,
-            resId: resId,
-            leadName: (lead && lead.name) || ('Lead ' + leadId),
-            lostReasonId: null,
-            submitting: false
-        } });
-    }
-
-    // v1.49.8: confirma "Dar por perdido". Optimistic: agregar a lostLeadIds (saca del dashboard), cerrar
-    //   modal, volver al dashboard + toast. Después llamar setLeadLost; si falla, revert (sacar del Set),
-    //   re-render del dashboard (el lead reaparece) + toast de error con odooErrMsg.
-    function handleLeadLost() {
-        var c = state.lostConfirm;
-        if (!c || c.submitting) return;
-        if (!c.lostReasonId) { showToast('Elegí un motivo para continuar.', 'error'); return; }
-        if (!c.resId) { showToast('No pude identificar el lead.', 'error'); return; }
-        // Snapshot para revert. Usamos el id ORIGINAL del lead (puede ser 'L#####' o numérico) para
-        //   matchear el filtro de liveDashRows; igual lo agregamos también como numérico por las dudas
-        //   (algunas filas del dashboard llegan con id numérico crudo).
-        var addedKeys = [];
-        if (state.lostLeadIds) {
-            if (c.leadId != null && !state.lostLeadIds.has(c.leadId)) {
-                state.lostLeadIds.add(c.leadId);
-                addedKeys.push(c.leadId);
-            }
-            var numericId = toNumericLeadId(c.leadId);
-            if (numericId && !state.lostLeadIds.has(numericId)) {
-                state.lostLeadIds.add(numericId);
-                addedKeys.push(numericId);
-            }
-            // El resId numérico (entero) también, por simetría con otros surfaces.
-            if (c.resId && !state.lostLeadIds.has(c.resId)) {
-                state.lostLeadIds.add(c.resId);
-                addedKeys.push(c.resId);
-            }
-        }
-        // Cerrar modal + volver al dashboard (el lead desaparece de la tabla por el filtro de liveDashRows).
-        state.lostConfirm = null;
-        state.view = 'dashboard';
-        state.currentLeadId = null;
-        rerenderContent();
-        setLeadLost(c.resId, c.lostReasonId).then(function () {
-            showToast('Lead dado por perdido');
-        }).catch(function (err) {
-            // Revert: sacar todas las keys que agregamos (no las que ya estaban antes).
-            if (state.lostLeadIds) {
-                for (var i = 0; i < addedKeys.length; i++) state.lostLeadIds["delete"](addedKeys[i]);
-            }
-            rerenderContent();
-            showToast('No se pudo dar por perdido: ' + odooErrMsg(err), 'error');
-        });
-    }
-
     // [C] v1.48.5: Reagendar. Abre el mini-modal con la fecha límite actual (o hoy si no tiene).
     function openRescheduleModal(activityId, leadId, currentDate) {
         if (!state.odooWriteEnabled) return;
@@ -12226,17 +12189,6 @@
         } else if (input === 'reschedule-date') {
             // v1.48.5: store sin rerender (el date picker nativo mantiene su valor); el submit lee state.
             if (state.rescheduleModal) state.rescheduleModal.date = node.value || null;
-        } else if (input === 'lost-reason') {
-            // v1.49.8: select de motivo. Store sin rerender (el DOM nativo mantiene la selección).
-            //   Re-toggle inline del botón "Sí, dar por perdido": habilita cuando hay motivo válido.
-            if (state.lostConfirm) {
-                state.lostConfirm.lostReasonId = parseInt(node.value, 10) || null;
-                var yesBtn = document.querySelector('[data-action="lost-confirm-yes"]');
-                if (yesBtn) {
-                    if (state.lostConfirm.lostReasonId) yesBtn.removeAttribute('disabled');
-                    else yesBtn.setAttribute('disabled', '');
-                }
-            }
         } else if (input === 'dismiss-reason') {
             // v1.54.0 (FIX 4): cambia el Motivo -> resetea Submotivo + Detalle y re-renderiza (la cascada
             //   cambia qué campos se muestran y habilita/deshabilita "Confirmar baja").
@@ -13319,9 +13271,6 @@
 
         if (isEsc) {
             // v1.44: el confirm de cerrar actividad y el modal de nueva actividad tienen prioridad.
-            // v1.49.8: el confirm de "Dar por perdido" sigue la misma política (Esc cierra el modal,
-            //   no el widget). NO usa setState para preservar la posible carga async de motivos.
-            if (state.lostConfirm) { setState({ lostConfirm: null }); return; }
             // v1.54.0 (FIX 4): Esc cierra el modal "Dar de baja" (no el widget).
             if (state.dismissModal) { setState({ dismissModal: null }); return; }
             if (state.activityConfirm) { setState({ activityConfirm: null }); return; }
@@ -13393,10 +13342,9 @@
         state.activityModal = null;
         state.activityConfirm = null;
         state.rescheduleModal = null;   // v1.48.5
-        // v1.49.8: cerrar el confirm de "Dar por perdido". lostLeadIds PERSISTE durante la sesión
-        //   del page load (igual política que completedTodayIds): los leads marcados perdidos no
-        //   reaparecen al cerrar/reabrir el modal; sólo al hacer reload (que trae estado real del backend).
-        state.lostConfirm = null;
+        // v1.64.0: lostLeadIds PERSISTE durante la sesión del page load (igual política que
+        //   completedTodayIds): los leads dados de baja no reaparecen al cerrar/reabrir el modal; sólo
+        //   al hacer reload (que trae estado real del backend).
         // v1.54.0 (FIX 4): cerrar el modal "Dar de baja" al cerrar el widget.
         state.dismissModal = null;
         // v1.15: reset transitorio del agent builder. draftVariants/Saved/Loaded y
