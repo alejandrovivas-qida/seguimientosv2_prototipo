@@ -58,6 +58,22 @@
  *     contacto / No familia (no están en el wizard manual). Submotivos de los otros 8 sin cambios.
  *     (c) NO publico al Blob.
  *
+ * Cambios v1.63.3 (2026-06-30 — BUGFIX de RAÍZ: loader infinito "Generando seguimiento…" aunque el backend respondió 200 con drafts):
+ *   Síntoma (AI-971): al clickear SEGUIMIENTO, POST /api/leads/{id}/recommendation/draft devuelve 200
+ *   con `drafts: [{name,text,...}]` (visible en Network), pero la burbuja IA se queda en "Generando
+ *   seguimiento…" para siempre y nunca pinta los borradores.
+ *   Causa raíz: el race-guard de handleAiTypeClick comparaba `state.currentLeadId !== leadId` con `!==`
+ *   ESTRICTO. `leadId = currentLead().id` es el id NUMÉRICO del crm.lead de Odoo (122581), pero cuando la
+ *   AF abre el lead desde la TABLA del widget, `state.currentLeadId` queda como el display_id STRING
+ *   ("L122581") — select-lead solo lo convierte a número si matchea /^\d+$/. Así "L122581" !== 122581
+ *   es true -> early return -> el draft SÍ se cachea en state.recommendationDraft pero bubble.payload
+ *   nunca se reemplaza ni se re-renderiza -> loader infinito. (Misma clase de bug que el #667 de
+ *   markLeadRead: "L124260" === "124260" fallaba.) No se reproducía por deep-link de Odoo porque ahí
+ *   currentLeadId es numérico y matchea. El handler de la respuesta (draftPayloadFromResp) ya era
+ *   correcto; el bug estaba en el guard previo. El flujo de Material no tenía guard y por eso nunca falló.
+ *   Fix (quirúrgico, 1 línea): usar el helper canónico sameLeadId(state.currentLeadId, leadId) (normaliza
+ *   ambos lados con toNumericLeadId) en vez del `!==`. Bugfix dentro de v1.63.x -> mismo filename.
+ *
  * Cambios v1.63.2 (2026-06-29 — BUGFIX de RAÍZ: el scroll de los panes del detalle saltaba al tope en cada rerender):
  *   Síntoma: clickear el botón de recomendación (SEGUIMIENTO sugerido, data-action="ai-type-btn")
  *   hacía que la conversación de WhatsApp (qida-pane-wa-body / id qida-wa-body) y el pane central
@@ -12619,7 +12635,9 @@
                 state.recommendationDraft[leadId][normType] = resp;
             }
             // Si la AF ya cambió de lead, no re-render sobre el nuevo (mantenemos el draft cacheado).
-            if (state.currentLeadId !== leadId) return;
+            // v1.63.3: sameLeadId (no `!==`): leadId = lead.id es NUMÉRICO, currentLeadId puede ser el
+            //   display_id STRING ("L122581") -> el `!==` estricto daba siempre true -> loader infinito.
+            if (!sameLeadId(state.currentLeadId, leadId)) return;
             bubble.payload = draftPayloadFromResp(resp, meta);
             state.__aiNeedsScroll = true;
             rerenderContent();
@@ -12628,7 +12646,7 @@
             if (state.recommendationDraft && state.recommendationDraft[leadId]) {
                 state.recommendationDraft[leadId][normType] = { _error: (err && err.userMessage) || 'No se pudo generar el mensaje.' };
             }
-            if (state.currentLeadId !== leadId) return;
+            if (!sameLeadId(state.currentLeadId, leadId)) return;  // v1.63.3: ver nota en el .then
             bubble.payload = { kind: 'error', text: suggestErrorCopy(err), retry: 'type', _type: normType };
             state.__aiNeedsScroll = true;
             rerenderContent();
@@ -12782,7 +12800,7 @@
 
         fetchTemplateDraft(leadId, which).then(function (resp) {
             if (state.templateBusy[leadId]) state.templateBusy[leadId][which] = false;
-            if (state.currentLeadId !== leadId) return;
+            if (!sameLeadId(state.currentLeadId, leadId)) return;  // v1.63.3: mismo fix que Seguimiento (id numérico vs display_id string)
             bubble.payload = templateDraftPayload(resp, meta);
             state.__aiNeedsScroll = true;
             state.__waNeedsScroll = true;  // v1.57.0 (#3)
@@ -12790,7 +12808,7 @@
         }).catch(function (err) {
             log('fetchTemplateDraft failed', err && (err.code || err.message));
             if (state.templateBusy[leadId]) state.templateBusy[leadId][which] = false;
-            if (state.currentLeadId !== leadId) return;
+            if (!sameLeadId(state.currentLeadId, leadId)) return;  // v1.63.3: mismo fix que Seguimiento
             bubble.payload = { kind: 'error', text: suggestErrorCopy(err), retry: 'template', _which: which };
             state.__aiNeedsScroll = true;
             state.__waNeedsScroll = true;  // v1.57.0 (#3)
