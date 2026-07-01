@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.64.1
+ * QIDA ASSISTANT v1.64.2
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,13 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.64.2 (2026-06-30 — límite de "Tu estilo" 500 -> 700 chars):
+ *   STYLE_TEXT_MAX 500 -> 700 (maxlength del textarea + el contador "N/700"). ⚠️ Requiere el cambio
+ *   backend correspondiente en qida-followup-api (StylePrefsPutRequest / AssistantStylePrefs /
+ *   DistillerOutput max_length=700 + el truncado [:700] en style_prefs + el prompt del distiller
+ *   "MÁXIMO 700"). SIN eso: guardar >500 da 422 y el distiller re-comprime a 500. DEPLOYAR el backend
+ *   ANTES de publicar este widget.
  *
  * Cambios v1.64.1 (2026-06-30 — "Marcar hecho" del header cierra además la actividad de Odoo (action_feedback)):
  *   El "Marcar hecho" del HEADER del detalle (qida-dsh-markdone, data-action="mark-done-detail") ahora,
@@ -2170,7 +2177,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.64.1';
+    var VERSION = '1.64.2';
     var CONFIG = null;
 
     // ============================================================
@@ -10474,7 +10481,7 @@
     }
 
     // v1.62.0: editor de "Tu estilo" — UN textarea (máx 500) + "Cómo te interpreta el asistente" (read-only).
-    var STYLE_TEXT_MAX = 500;
+    var STYLE_TEXT_MAX = 700;
     function renderStyleEditor() {
         if (state.styleLoading) {
             return '<div class="qida-ab-loading">' + icon('refresh-cw', 14) + ' Cargando tu estilo…</div>';
