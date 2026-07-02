@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.64.3
+ * QIDA ASSISTANT v1.64.4
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,24 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.64.4 (2026-07-02 — AI-987: fix del timeout del chat del asistente):
+ *   El chat libre del asistente (handleAiChatSend -> driveChatBubble -> fetchAssistantChat -> POST
+ *   /api/leads/{id}/assistant/chat) tiraba "La petición tardó demasiado. Reintentá". Causa raíz: el
+ *   primer turno corre el camino caro del backend (5-10 LLM calls secuenciales, 11-25s) pero apiFetchJson
+ *   abortaba a los 10s (API_FETCH_TIMEOUT_MS global) -> nunca llegaba la respuesta -> nunca se guardaba el
+ *   session_id (state.assistantSessions[leadId]) -> cada reintento y cada mensaje siguiente volvía a
+ *   session_id=null (camino new-session caro). Círculo vicioso. Fix (SOLO el chat, no global):
+ *   - apiFetchJson acepta overrides por-llamada opts.timeoutMs y opts.maxRetries (default = globales
+ *     10s/2-retries; el resto de endpoints NO cambia).
+ *   - fetchAssistantChat pasa timeoutMs=30000 (tolera el primer turno caro) y maxRetries=0 (reintentar un
+ *     LLM de ~15s que el server igual completa solo triplica la carga; la AF ya tiene "Reintentar" manual).
+ *   - Persistencia del session_id: driveChatBubble ya guardaba state.assistantSessions[leadId]=resp.session_id
+ *     apenas llega la respuesta (turno-1 completa) y el turno siguiente lo manda (camino barato de
+ *     continuación, rápido). Con el timeout viejo esa persistencia nunca se alcanzaba; ahora sí.
+ *   Efecto: el primer turno completa aunque tarde ~20-30s; los siguientes son rápidos. Se acabó el timeout.
+ *   MISMO filename/URL (no se tocó gtm-loader ni tempermonkey). (La latencia real del backend — que el
+ *   primer turno tarde 20s — se ataca aparte en qida-followup-api, Fase 2 de AI-987.)
  *
  * Cambios v1.64.3 (2026-07-02 — alta AF Maylan Almeida en los 2 hardcodes de identidad):
  *   Alta de la AF Maylan Almeida (af_key=maylan_almeida, email=maylan.almeida@qida.es, odoo_user_id=685)
@@ -2205,7 +2223,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.64.3';
+    var VERSION = '1.64.4';
     var CONFIG = null;
 
     // ============================================================
@@ -8036,6 +8054,13 @@
         if (opts.body != null) { headers['Content-Type'] = 'application/json'; bodyStr = JSON.stringify(opts.body); }
         var url = apiBaseUrl() + path;
 
+        // v1.64.4 (AI-987): overrides por-llamada de timeout y reintentos. El default global (10s / 2
+        //   retries) sirve a los endpoints rapidos, pero el chat del asistente corre 5-10 LLM calls
+        //   secuenciales (11-25s) y necesita ~30s + 0 retries. Los callers que no pasan estos opts
+        //   mantienen exactamente el comportamiento previo.
+        var timeoutMs = (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) ? opts.timeoutMs : API_FETCH_TIMEOUT_MS;
+        var maxRetries = (typeof opts.maxRetries === 'number' && opts.maxRetries >= 0) ? opts.maxRetries : API_FETCH_MAX_RETRIES;
+
         // Un solo intento: arma AbortController + timer + fetch. Resuelve con la data normalizada,
         //   o rechaza con un Error tipado. Distingue "retryable" (red/timeout/5xx) de "fatal" (4xx)
         //   via err._retryable para que el orquestador decida.
@@ -8046,7 +8071,7 @@
             var timer = setTimeout(function () {
                 aborted = true;
                 if (ac) { try { ac.abort(); } catch (e) { /* noop */ } }
-            }, API_FETCH_TIMEOUT_MS);
+            }, timeoutMs);
             var init = { method: method, headers: headers, body: bodyStr };
             if (ac) init.signal = ac.signal;
             return fetch(url, init).then(function (res) {
@@ -8098,7 +8123,7 @@
                 log('api retry', {
                     method: method, path: path,
                     attempt: attemptIdx + 1,
-                    of: API_FETCH_MAX_RETRIES,
+                    of: maxRetries,
                     backoffMs: backoff,
                     reason: (err.code || err.status || 'unknown')
                 });
@@ -8107,7 +8132,7 @@
             });
         }
 
-        return runWithRetries(API_FETCH_MAX_RETRIES, 0);
+        return runWithRetries(maxRetries, 0);
     }
 
     // v1.43.2: marca un lead como leído al abrir su detalle. Se llama desde select-lead, que es el
@@ -8426,11 +8451,24 @@
     // ---- ENDPOINT 3: chat conversacional con el asistente (POST) ----
     // Body { message, session_id|null }. Resp { session_id, assistant_message, materials,
     //   updated_drafts, turn_count, rate_limit_reached }.
+    // v1.64.4 (AI-987): timeout/retries propios (30s / 0) via los overrides de apiFetchJson. El primer
+    //   turno (session_id=null) corre el camino caro del backend (5-10 LLM calls, 11-25s); con el default
+    //   de 10s el fetch abortaba ANTES de recibir la respuesta -> nunca se guardaba el session_id ->
+    //   cada mensaje volvia al new-session caro (circulo vicioso) y la AF veia "La petición tardó
+    //   demasiado". 30s tolera ese primer turno. maxRetries=0: reintentar un LLM de ~15s que el server
+    //   igual completa solo triplica la carga y no ayuda; si falla de verdad, la AF tiene el boton
+    //   "Reintentar" (ai-retry-chat). Los turnos siguientes mandan session_id -> camino barato de
+    //   continuacion, rapido. El resto de endpoints mantienen su 10s/2-retries (no es global).
     function fetchAssistantChat(leadId, message, sessionId) {
         var numericId = toNumericLeadId(leadId);
         if (!numericId) return Promise.reject(makeApiError('No pude resolver el ID numérico del lead.', 'BAD_LEAD_ID', 0));
         return apiFetchJson('POST', '/api/leads/' + numericId + '/assistant/chat',
-            { body: withLeadIaSummary(leadId, { message: message, session_id: sessionId || null }), noun: 'el asistente de este lead' }
+            {
+                body: withLeadIaSummary(leadId, { message: message, session_id: sessionId || null }),
+                noun: 'el asistente de este lead',
+                timeoutMs: 30000,
+                maxRetries: 0
+            }
         );
     }
 
