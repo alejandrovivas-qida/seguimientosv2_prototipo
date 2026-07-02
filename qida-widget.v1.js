@@ -1,6 +1,6 @@
 /**
  * ========================================
- * QIDA ASSISTANT v1.64.2
+ * QIDA ASSISTANT v1.65.0
  * ========================================
  * Workspace operativo de Seguimientos para AFs sobre Odoo.
  * Vanilla ES5, sin deps. Single IIFE.
@@ -9,6 +9,35 @@
  *   El widget NO genera mensajes para el lead.
  *   Solo consolida contexto y agiliza el flujo operativo de la AF.
  *   (El clip de v1.37 adjunta archivos que LA AF elige; no genera contenido para el lead.)
+ *
+ * Cambios v1.65.0 (2026-07-02 — "Marcar hecho" abre además "Nueva actividad" (patrón Odoo "hecho y planificar la siguiente"), AI-968):
+ *   "Marcar hecho" —tanto en la FILA del dashboard (mark-done) como en el HEADER del detalle
+ *   (mark-done-detail)— además de lo que hace hoy, ahora abre el modal "Nueva actividad" anclado a ese
+ *   lead, como si la AF hubiera clickeado "+ Crear actividad". Crear una mail.activity es trabajo INTERNO
+ *   de la AF -> respeta el principio rector (no genera ningún mensaje al lead; mismo criterio que v1.44).
+ *   - ADDITIVE: NO se toca markFollowupDone / closeMostDueActivityForLead / undoFollowupDone. El header
+ *     sigue cerrando la actividad de Odoo tras el undo de 4s (v1.64.1); la fila sigue siendo solo
+ *     followup_done. Se REUSA el modal existente (openActivityModal / renderActivityModal /
+ *     handleActivitySubmit); no se creó ninguno nuevo.
+ *   - openActivityModal ahora toma `leadId` (fallback a state.currentLeadId); `case 'activity-new'` lo
+ *     sigue llamando sin arg. Se normaliza a res_id con toNumericLeadId (sirve para el display_id "L#####"
+ *     de la fila y el id numérico del header).
+ *   - Se abre vía maybePlanNextActivity(id) en el dispatch, GATEADO en el call site:
+ *     state.odooWriteEnabled && !isImpersonating() && isRealActivityId(toNumericLeadId(id)). Con gates off
+ *     (mock read-only / "Ver como"), "Marcar hecho" sigue standalone SIN modal ni toast de error.
+ *   - FIX de raíz (gap del review): syncActivityModal recrea #qida-activity-root en cada rerenderContent;
+ *     un rerender de fondo (el undo de 4s, loadActivityTypes, polling WA) le sacaba el foco+cursor a la AF
+ *     mientras escribía. Ahora captura data-input + selectionStart/End del activeElement ANTES del
+ *     removeChild y lo restaura (focus + setSelectionRange, en try/catch) DESPUÉS del appendChild —
+ *     mismo patrón que el capture/restore de scroll de v1.63.2, scoped al modal. El texto ya se conservaba
+ *     (renderActivityModal re-inyecta los value); esto conserva además el foco.
+ *   - Defaults que tomé: (a) ADDITIVE (no reemplaza el "hecho"). (b) Gate en el call site (no en el toast
+ *     interno del modal) para no spamear "Función no disponible" en cada marcado read-only. (c) leadName
+ *     del modal: para la FILA (detalle no cacheado) cae a leadDashboardDataFor(leadId) (state.leadById /
+ *     dashRows) -> muestra el familyName en vez de "Lead <id>". (d) Si la AF hace "Deshacer" con el modal
+ *     abierto: acciones INDEPENDIENTES (undoFollowupDone no toca el modal; crear la próxima no depende de
+ *     deshacer el "hecho"). (e) El "Hecho" a nivel ACTIVIDAD (activity-complete) queda FUERA de scope: ya
+ *     pasa por su confirm modal y su data-id es el id de la mail.activity, no del lead. (f) NO publicado al Blob.
  *
  * Cambios v1.64.2 (2026-06-30 — límite de "Tu estilo" 500 -> 700 chars):
  *   STYLE_TEXT_MAX 500 -> 700 (maxlength del textarea + el contador "N/700"). ⚠️ Requiere el cambio
@@ -2193,7 +2222,7 @@
     }
     window.__QIDA_ASSISTANT_LOADED__ = true;
 
-    var VERSION = '1.64.2';
+    var VERSION = '1.65.0';
     var CONFIG = null;
 
     // ============================================================
@@ -8169,6 +8198,19 @@
         rerenderContent();
     }
 
+    // v1.65.0 (AI-968): patrón Odoo "Marcar hecho y planificar la siguiente". Tras marcar hecho (fila
+    //   del dashboard o header del detalle), abre el modal "Nueva actividad" anclado al MISMO lead —
+    //   SOLO si se puede crear en Odoo (write real, sin impersonar, lead numérico real). Silencioso si
+    //   no: "Marcar hecho" sigue standalone como hoy, SIN modal ni toast de error. Acción INDEPENDIENTE
+    //   del followup_done y su cierre diferido: no toca state.undoToast ni state.__pendingActivityClose
+    //   (setState mergea solo activityModal), y undoFollowupDone no toca el modal. Crear mail.activity es
+    //   trabajo interno de la AF (principio rector: no genera mensaje al lead).
+    function maybePlanNextActivity(leadId) {
+        if (!state.odooWriteEnabled || isImpersonating()) return;
+        if (!isRealActivityId(toNumericLeadId(leadId))) return;   // mismo gate que el botón "+ Crear actividad"
+        openActivityModal(leadId);
+    }
+
     // Deshacer "Marcar hecho". explicitId = el data-id del botón "Hecho hoy" del detalle (deshace
     //   ese lead aunque el toast ya expiró); sin explicitId usa el lead del toast (botón Deshacer).
     function undoFollowupDone(explicitId) {
@@ -11087,13 +11129,38 @@
     function syncActivityModal() {
         var shell = document.getElementById('qida-shell');
         if (!shell) return;
+        // v1.65.0 (AI-968): el modal se recrea (removeChild + innerHTML nuevo) en CADA rerenderContent.
+        //   El tipeo NO rerenderiza a propósito (handleInput 'activity-summary'/'activity-note'), pero un
+        //   rerender de FONDO —el que programa el undo de 4s de "Marcar hecho" al expirar, o
+        //   loadActivityTypes().then(rerender), o polling de WhatsApp— recrearía los inputs y la AF
+        //   perdería foco+cursor mientras escribe. Capturar antes de recrear y restaurar después. Mismo
+        //   patrón que el capture/restore de scroll de v1.63.2, scoped a #qida-activity-root.
         var existing = document.getElementById('qida-activity-root');
-        if (existing) existing.parentNode.removeChild(existing);
+        var focusSnap = null;
+        if (existing) {
+            var ae = document.activeElement;
+            if (ae && existing.contains(ae) && ae.getAttribute && ae.getAttribute('data-input')) {
+                focusSnap = { input: ae.getAttribute('data-input'), start: null, end: null };
+                // selectionStart/End tiran en <input type=date> y <select> -> try/catch (quedan null).
+                try { focusSnap.start = ae.selectionStart; focusSnap.end = ae.selectionEnd; } catch (eSel) {}
+            }
+            existing.parentNode.removeChild(existing);
+        }
         if (state.activityModal) {
             var div = document.createElement('div');
             div.id = 'qida-activity-root';
             div.innerHTML = renderActivityModal();
             shell.appendChild(div);
+            // Restaurar foco+caret (best-effort; date/select no soportan setSelectionRange -> se ignora).
+            if (focusSnap) {
+                try {
+                    var restored = div.querySelector('[data-input="' + focusSnap.input + '"]');
+                    if (restored) {
+                        try { restored.focus({ preventScroll: true }); } catch (eF) { try { restored.focus(); } catch (eF2) {} }
+                        if (focusSnap.start != null) { try { restored.setSelectionRange(focusSnap.start, focusSnap.end); } catch (eR) {} }
+                    }
+                } catch (eQ) {}
+            }
         }
         var existingC = document.getElementById('qida-activity-confirm-root');
         if (existingC) existingC.parentNode.removeChild(existingC);
@@ -11466,11 +11533,13 @@
             case 'mark-done':
                 // Botón "✓ Marcar hecho" de la tabla (dashboard). Optimistic + POST followup-actions.
                 markFollowupDone(id);
+                maybePlanNextActivity(id);   // v1.65.0 (AI-968): además, abre "Nueva actividad" (gateado)
                 return;
             // v1.64.1: "Marcar hecho" del HEADER del detalle (qida-dsh-markdone). Además del
             //   followup_done, cierra la actividad de Odoo del lead (action_feedback) tras el undo de 4s.
             case 'mark-done-detail':
                 markFollowupDone(id, true);
+                maybePlanNextActivity(id);   // v1.65.0 (AI-968): además, abre "Nueva actividad" (gateado)
                 return;
             case 'undo-mark-done':
                 // "Deshacer" del toast (sin data-id -> usa el lead del toast) o "Hecho hoy" del
@@ -11952,19 +12021,24 @@
     // v1.44: handlers de crear actividad ([A]) + cerrar actividad ([B])
     // ============================================================
     // [A] Abre el modal "Nueva actividad" anclado al lead del detalle (res_id = id numérico Odoo).
-    function openActivityModal() {
+    // v1.65.0 (AI-968): parametrizado con `leadId` (fallback a state.currentLeadId) para poder anclarlo
+    //   a la FILA del dashboard y no solo al detalle. `case 'activity-new'` lo sigue llamando sin arg.
+    function openActivityModal(leadId) {
         if (!state.odooWriteEnabled) { showToast('Función no disponible en este modo.', 'error'); return; }
-        var leadId = state.currentLeadId;
+        leadId = (leadId != null ? leadId : state.currentLeadId);
         var resId = parseInt(toNumericLeadId(leadId), 10);
         if (!resId || isNaN(resId)) { showToast('No pude identificar el lead.', 'error'); return; }
         var lead = currentLead(leadId);
+        // v1.65.0 (AI-968): desde la FILA del dashboard el detalle no está cacheado (currentLead falla) ->
+        //   caer al resolver del dashboard (state.leadById / state.dashRows) para no mostrar "Lead <id>".
+        var ld = (typeof leadDashboardDataFor === 'function') ? leadDashboardDataFor(leadId) : null;
         // Si los tipos aún no se cargaron, dispararlos y re-renderizar el modal cuando lleguen.
         if (!_odooActivityTypes) { loadActivityTypes().then(function () { if (state.activityModal) rerenderContent(); }); }
         var types = resolvedActivityTypes();
         setState({ activityModal: {
             leadId: leadId,
             resId: resId,
-            leadName: (lead && lead.name) || ('Lead ' + leadId),
+            leadName: (lead && lead.name) || (ld && (ld.name || ld.familyName)) || ('Lead ' + leadId),
             typeId: types.length ? types[0].id : null,   // default = "Por hacer" (primer match de la whitelist)
             summary: '',
             note: '',
